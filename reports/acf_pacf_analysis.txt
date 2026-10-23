@@ -1,0 +1,20 @@
+Sample ACF and PACF analysis for first-order differences
+Significance level: 5%
+Maximum displayed lag: 36
+Bars outside the 95% confidence interval indicate significant autocorrelation.
+Use significant ACF/PACF lag patterns as model-identification guidance, not an automatic order selection.
+
+fed_total_assets_T (observations: 278)
+  Significant ACF lags: [1, 2, 5, 6]
+  Significant PACF lags: [1, 2, 5]
+  ACF values, lags 1-36: [0.5737, 0.1652, 0.0332, 0.0652, 0.1715, 0.1838, 0.1187, 0.0751, 0.0665, 0.0698, 0.0765, 0.0652, 0.0625, 0.0719, 0.0665, 0.0469, 0.026, 0.0302, 0.0146, 0.0038, 0.0098, -0.0183, -0.0506, -0.0451, -0.0477, -0.0635, -0.0571, -0.073, -0.081, -0.0798, -0.1101, -0.1161, -0.0925, -0.084, -0.0227, -0.0489]
+  PACF values, lags 1-36: [0.5737, -0.2444, 0.088, 0.0655, 0.1433, 0.0015, 0.0134, 0.0347, 0.0207, 0.0049, 0.0207, 0.0013, 0.0287, 0.0232, 0.0027, -0.0047, -0.006, 0.0199, -0.0433, 0.0015, 0.0043, -0.0546, -0.0352, 0.0037, -0.043, -0.0415, 0.0027, -0.0518, -0.0174, -0.0264, -0.0671, -0.0157, -0.0045, -0.0301, 0.0848, -0.0941]
+
+monetary_base_T (observations: 278)
+  Significant ACF lags: [1, 4, 21, 25]
+  Significant PACF lags: [1, 2, 3, 13, 21]
+  ACF values, lags 1-36: [0.4284, -0.0347, 0.016, 0.1479, 0.1253, 0.0439, 0.0371, 0.0051, -0.0139, 0.0305, 0.1202, 0.1134, -0.075, -0.1406, -0.0022, 0.0321, -0.0445, -0.0726, -0.0163, -0.0708, -0.1861, -0.1065, -0.0198, -0.0706, -0.1751, -0.0605, 0.0409, 0.0213, -0.0451, -0.07, 0.0206, 0.0153, -0.0327, -0.06, 0.0071, 0.0559]
+  PACF values, lags 1-36: [0.4284, -0.2673, 0.1971, 0.0561, 0.036, 0.0096, 0.0373, -0.0611, 0.008, 0.0332, 0.102, 0.0194, -0.1448, -0.0255, 0.0375, -0.0618, -0.0141, -0.0114, 0.0204, -0.1111, -0.1249, 0.03, -0.0456, -0.0409, -0.0721, 0.1064, -0.0384, 0.0517, -0.0339, -0.0299, 0.0772, -0.0265, 0.0132, -0.0891, 0.0699, 0.0442]
+
+ACF/PACF figure saved to: reports/figures/fed_balance_sheet_acf_pacf.png
+Interpret the ACF and PACF shapes together when considering candidate ARMA orders.

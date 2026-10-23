@@ -1,0 +1,19 @@
+SARIMA information criteria model selection
+Input: first-order-differenced balance-sheet data.
+Therefore all candidates use d=0 (equivalent to d=1 from original levels).
+Monthly seasonal period: 12; all candidates use D=0.
+Candidate orders: p=0..2, q=0..2, P in (0, 1), Q in (0, 1).
+Lower AIC, AICc, and BIC indicate a preferred fit/complexity tradeoff.
+AICc applies the finite-sample correction to AIC.
+
+fed_total_assets_T: 35 of 36 candidates converged.
+  Best by AIC: SARIMA(1,0,1)x(0,0,0,12), AIC=-450.1756
+  Best by AICc: SARIMA(1,0,1)x(0,0,0,12), AICc=-450.0291
+  Best by BIC: SARIMA(1,0,1)x(0,0,0,12), BIC=-435.6651
+
+monetary_base_T: 36 of 36 candidates converged.
+  Best by AIC: SARIMA(0,0,1)x(1,0,0,12), AIC=-543.1081
+  Best by AICc: SARIMA(0,0,1)x(1,0,0,12), AICc=-542.9616
+  Best by BIC: SARIMA(0,0,1)x(0,0,0,12), BIC=-530.5461
+
+Full candidate table: reports/information_criteria_candidates.csv

@@ -1,0 +1,19 @@
+ADF and KPSS stationarity checks on first-order differences
+Significance level: 5%
+ADF null hypothesis: the series has a unit root (non-stationary).
+KPSS null hypothesis: the series is stationary.
+Both tests use a constant term; ADF lag selection uses AIC.
+
+fed_total_assets_T (observations: 278)
+  ADF: statistic=-5.206376, p-value=8.53237e-06, selected lags=4
+  ADF critical values: {'1%': np.float64(-3.45453261164607), '5%': np.float64(-2.8721859575020017), '10%': np.float64(-2.572442854861866)}
+  KPSS: statistic=0.112643, p-value=0.1, lags=6
+  KPSS critical values: {'10%': 0.347, '5%': 0.463, '2.5%': 0.574, '1%': 0.739}
+  Assessment: Evidence supports stationarity (tests agree).
+
+monetary_base_T (observations: 278)
+  ADF: statistic=-7.755870, p-value=9.7416e-12, selected lags=2
+  ADF critical values: {'1%': np.float64(-3.454355055831705), '5%': np.float64(-2.8721080938842976), '10%': np.float64(-2.572401325619835)}
+  KPSS: statistic=0.081811, p-value=0.1, lags=4
+  KPSS critical values: {'10%': 0.347, '5%': 0.463, '2.5%': 0.574, '1%': 0.739}
+  Assessment: Evidence supports stationarity (tests agree).

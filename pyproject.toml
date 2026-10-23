@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autoregressive_experiments"
+version = "0.0.1"
+description = "Experiments on autoregressive approaches, from traditional econometrics to neural networks, benchmarked on the same dataset."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Christoforos Antoniadis" }]
+requires-python = ">=3.12"
+# Runtime dependencies; requirements.txt pins the exact versions used for the results.
+dependencies = [
+    "numpy==2.5.4",
+    "pandas==3.0.6",
+    "matplotlib==3.11.2",
+    "statsmodels==0.15.0",
+    "kagglehub==1.0.3",
+    "loguru==0.7.3",
+    "typer==0.27.3",
+    "tqdm==4.70.1",
+]
+
+[project.optional-dependencies]
+# Development tools: install with  pip install -e ".[dev]"  (or  make requirements).
+dev = [
+    "pytest>=8",
+    "ruff==0.17.2",
+    "jupyter==1.1.1",
+]
+
+[tool.setuptools.packages.find]
+include = ["autoregressive_experiments*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 99
+src = ["autoregressive_experiments"]
+include = ["pyproject.toml", "autoregressive_experiments/**/*.py", "tests/**/*.py", "tools/**/*.py"]
+
+[tool.ruff.lint]
+# Ruff's default rules (pyflakes and pycodestyle errors) plus import sorting,
+# as in the Cookiecutter Data Science template.
+extend-select = ["I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["autoregressive_experiments"]
+force-sort-within-sections = true
