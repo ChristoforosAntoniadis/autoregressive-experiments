@@ -217,8 +217,8 @@ def format_p(p_value: float) -> str:
     return "n/a" if not np.isfinite(p_value) else f"{p_value:.4f}"
 
 
-def residual_figure(results: list[dict], dates: pd.Series) -> plt.Figure:
-    """One row per model: residuals over time, residual ACF, and Ljung-Box p-value by lag."""
+def apply_chart_style() -> None:
+    """Recessive hairline grid and axes in the reference palette's chrome colors."""
     plt.rcParams.update(
         {
             "axes.edgecolor": BASELINE,
@@ -233,6 +233,15 @@ def residual_figure(results: list[dict], dates: pd.Series) -> plt.Figure:
             "axes.spines.right": False,
         }
     )
+
+
+def model_name(result: dict) -> str:
+    return result["series"].removesuffix("_T").replace("_", " ")
+
+
+def residual_figure(results: list[dict], dates: pd.Series) -> plt.Figure:
+    """One row per model: residuals over time, residual ACF, and Ljung-Box p-value by lag."""
+    apply_chart_style()
     figure, axes = plt.subplots(
         len(results), 3, figsize=(15, 3.1 * len(results)), squeeze=False, facecolor=SURFACE
     )
@@ -240,7 +249,7 @@ def residual_figure(results: list[dict], dates: pd.Series) -> plt.Figure:
         residuals = result["residuals"]
         residual_dates = dates.iloc[residuals.index]
         verdict = "PASS" if result["passed"] else "FAIL"
-        name = result["series"].removesuffix("_T").replace("_", " ")
+        name = model_name(result)
         time_axis, acf_axis, p_axis = axes[row]
         for axis in axes[row]:
             axis.set_facecolor(SURFACE)
@@ -292,12 +301,10 @@ def residual_figure(results: list[dict], dates: pd.Series) -> plt.Figure:
     return figure
 
 
-@app.command()
-def main(
-    levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv",
-    differences_path: Path = PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv",
-    candidates_path: Path = CANDIDATES_PATH,
-) -> None:
+def checked_models(
+    levels_path: Path, differences_path: Path, candidates_path: Path
+) -> tuple[list[dict], pd.DataFrame]:
+    """Fit and check the recommended models on the training split; also returns that split."""
     required = {
         levels_path: "features",
         differences_path: "features",
@@ -317,6 +324,16 @@ def main(
     for column in VALUE_COLUMNS:
         series_models = [model for model in models if model["series"] == column]
         results.extend(check_series(series(train, column), column, candidates, series_models))
+    return results, train
+
+
+@app.command()
+def main(
+    levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv",
+    differences_path: Path = PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv",
+    candidates_path: Path = CANDIDATES_PATH,
+) -> None:
+    results, train = checked_models(levels_path, differences_path, candidates_path)
 
     report = residual_report(results, train)
     REPORT_PATH.write_text(report, encoding="utf-8")

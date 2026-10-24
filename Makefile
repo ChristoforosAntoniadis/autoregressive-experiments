@@ -58,9 +58,21 @@ residuals: export MPLBACKEND = Agg
 residuals:
 	$(PYTHON_INTERPRETER) -m $(PACKAGE).residual_checks
 
-## Run the whole pipeline: features, plots, diagnostics, then residual checks
+## Test the passing models' residuals for changing volatility (needs make diagnostics; no plot windows)
+.PHONY: volatility
+volatility: export MPLBACKEND = Agg
+volatility:
+	$(PYTHON_INTERPRETER) -m $(PACKAGE).volatility_checks
+
+## Fit GARCH(1,1) on the passing models' residuals and check it (needs make diagnostics; no plot windows)
+.PHONY: garch
+garch: export MPLBACKEND = Agg
+garch:
+	$(PYTHON_INTERPRETER) -m $(PACKAGE).volatility_models
+
+## Run the whole pipeline: features, plots, diagnostics, residual, volatility and GARCH checks
 .PHONY: all
-all: features plots diagnostics residuals
+all: features plots diagnostics residuals volatility garch
 
 ## Run the test suite
 .PHONY: test

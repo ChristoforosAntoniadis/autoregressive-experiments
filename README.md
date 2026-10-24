@@ -9,7 +9,7 @@ Experiments on autoregressive approaches, from traditional econometrics (SARIMA,
 
 ## Plan
 
-- **Univariate (SARIMA, then ARCH / GARCH):** stationarity tests (ADF / KPSS on levels and first differences), ACF / PACF, and SARIMA order selection by AIC / AICc / BIC, and residual checks of the selected models (Ljung-Box, Breusch-Godfrey) are done on the training split; see [`reports/`](reports/). Next come Engle's ARCH-LM test and rolling-origin evaluation against naive baselines (MASE, Diebold-Mariano).
+- **Univariate (SARIMA, then ARCH / GARCH):** stationarity tests (ADF / KPSS on levels and first differences), ACF / PACF, and SARIMA order selection by AIC / AICc / BIC, residual checks of the selected models (Ljung-Box, Breusch-Godfrey), volatility checks (Engle's ARCH-LM, with and without a variance break), and GARCH(1,1) on the residuals are done on the training split; see [`reports/`](reports/). Next comes rolling-origin evaluation against naive baselines (MASE, Diebold-Mariano).
 - **Multivariate (VAR / VECM):** lag selection, Johansen cointegration, stability, residual checks, Granger causality, impulse responses and variance decomposition.
 - **Machine learning and neural networks:** models on lag features (gradient boosting, regularized regression), on lookback windows (MLP, N-BEATS, DLinear), and recurrent networks (LSTM, GRU), evaluated on the same chronological 60 / 20 / 20 split.
 
@@ -26,7 +26,9 @@ make features                     # clean -> data/interim/, first-difference -> 
 make plots                        # the cleaned series -> reports/figures/fed_balance_sheet.png
 make diagnostics                  # ADF / KPSS, ACF / PACF and SARIMA information criteria -> reports/
 make residuals                    # Ljung-Box / Breusch-Godfrey on the selected models -> reports/
-make all                          # features, plots, diagnostics and residuals in one go
+make volatility                   # ARCH-LM and a variance-break check on those models -> reports/
+make garch                        # GARCH(1,1) vs constant variance on those models -> reports/
+make all                          # every step above, in order
 
 make test                         # unit tests
 make lint                         # check style and lint with ruff (changes nothing)
@@ -46,6 +48,8 @@ python -m autoregressive_experiments.features
 python -m autoregressive_experiments.plots
 python -m autoregressive_experiments.diagnostics
 python -m autoregressive_experiments.residual_checks
+python -m autoregressive_experiments.volatility_checks
+python -m autoregressive_experiments.volatility_models
 python -m pytest
 ```
 
@@ -76,13 +80,15 @@ autoregressive-experiments/
 │   ├── plots.py                 # figure of the cleaned series
 │   ├── diagnostics.py           # ADF / KPSS, ACF / PACF, SARIMA information criteria
 │   ├── residual_checks.py       # Ljung-Box and Breusch-Godfrey on the selected models' residuals
+│   ├── volatility_checks.py     # ARCH-LM, with and without an estimated variance break
+│   ├── volatility_models.py     # GARCH(1,1) (normal and Student-t) vs constant variance, by BIC
 │   └── modeling/
 │       └── train.py             # (template stub) model training
-├── tests/                       # pytest: differencing, the split, stationarity, lags, AICc, residual checks
+├── tests/                       # pytest: the split, stationarity, lags, AICc, residual, volatility and GARCH checks
 └── tools/                       # make help
 ```
 
-The empty folders hold a `.gitkeep` file so they exist for future use, as in the template. `diagnostics.py`, `residual_checks.py` and `tools/` are this project's additions to the template.
+The empty folders hold a `.gitkeep` file so they exist for future use, as in the template. `diagnostics.py`, `residual_checks.py`, `volatility_checks.py`, `volatility_models.py` and `tools/` are this project's additions to the template.
 
 ## Datasets & attribution
 
