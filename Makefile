@@ -52,9 +52,15 @@ diagnostics: export MPLBACKEND = Agg
 diagnostics:
 	$(PYTHON_INTERPRETER) -m $(PACKAGE).diagnostics
 
-## Run the whole pipeline: features, then plots, then diagnostics
+## Check the residuals of the recommended SARIMA models (needs make diagnostics; no plot windows)
+.PHONY: residuals
+residuals: export MPLBACKEND = Agg
+residuals:
+	$(PYTHON_INTERPRETER) -m $(PACKAGE).residual_checks
+
+## Run the whole pipeline: features, plots, diagnostics, then residual checks
 .PHONY: all
-all: features plots diagnostics
+all: features plots diagnostics residuals
 
 ## Run the test suite
 .PHONY: test

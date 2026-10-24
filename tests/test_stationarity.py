@@ -34,11 +34,26 @@ def test_stationarity_report_separates_white_noise_from_random_walk():
     noise = np.random.default_rng(0).normal(size=300)
     dataframe = pd.DataFrame({VALUE_COLUMNS[0]: noise, VALUE_COLUMNS[1]: noise.cumsum()})
 
-    assessments = [
-        line for line in stationarity_report(dataframe).splitlines() if "Assessment" in line
-    ]
-
-    assert assessments == [
+    assert assessments(stationarity_report(dataframe, "test data", regression="c")) == [
         "  Assessment: Evidence supports stationarity (tests agree).",
         "  Assessment: Evidence supports non-stationarity (tests agree).",
     ]
+
+
+def test_trend_regression_treats_a_noisy_linear_trend_as_trend_stationary():
+    """A trend plus noise has no unit root: with "ct" it is stationary around its trend."""
+    noise = np.random.default_rng(0).normal(size=300)
+    trend = 0.05 * np.arange(300) + noise
+    dataframe = pd.DataFrame({VALUE_COLUMNS[0]: trend, VALUE_COLUMNS[1]: noise.cumsum()})
+
+    report = stationarity_report(dataframe, "test data", regression="ct")
+
+    assert "Both tests use a constant and a linear trend" in report
+    assert assessments(report) == [
+        "  Assessment: Evidence supports stationarity (tests agree).",
+        "  Assessment: Evidence supports non-stationarity (tests agree).",
+    ]
+
+
+def assessments(report: str) -> list[str]:
+    return [line for line in report.splitlines() if "Assessment" in line]

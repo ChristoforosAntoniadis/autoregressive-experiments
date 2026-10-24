@@ -9,7 +9,7 @@ Experiments on autoregressive approaches, from traditional econometrics (SARIMA,
 
 ## Plan
 
-- **Univariate (SARIMA, then ARCH / GARCH):** stationarity tests (ADF / KPSS), ACF / PACF, and SARIMA order selection by AIC / AICc / BIC are done; see [`reports/`](reports/). Next come residual checks (Ljung-Box, Breusch-Godfrey), Engle's ARCH-LM test, and rolling-origin evaluation against naive baselines (MASE, Diebold-Mariano).
+- **Univariate (SARIMA, then ARCH / GARCH):** stationarity tests (ADF / KPSS on levels and first differences), ACF / PACF, and SARIMA order selection by AIC / AICc / BIC, and residual checks of the selected models (Ljung-Box, Breusch-Godfrey) are done on the training split; see [`reports/`](reports/). Next come Engle's ARCH-LM test and rolling-origin evaluation against naive baselines (MASE, Diebold-Mariano).
 - **Multivariate (VAR / VECM):** lag selection, Johansen cointegration, stability, residual checks, Granger causality, impulse responses and variance decomposition.
 - **Machine learning and neural networks:** models on lag features (gradient boosting, regularized regression), on lookback windows (MLP, N-BEATS, DLinear), and recurrent networks (LSTM, GRU), evaluated on the same chronological 60 / 20 / 20 split.
 
@@ -25,7 +25,8 @@ make data                         # download the Kaggle dataset into data/raw/ (
 make features                     # clean -> data/interim/, first-difference -> data/processed/
 make plots                        # the cleaned series -> reports/figures/fed_balance_sheet.png
 make diagnostics                  # ADF / KPSS, ACF / PACF and SARIMA information criteria -> reports/
-make all                          # features, plots and diagnostics in one go
+make residuals                    # Ljung-Box / Breusch-Godfrey on the selected models -> reports/
+make all                          # features, plots, diagnostics and residuals in one go
 
 make test                         # unit tests
 make lint                         # check style and lint with ruff (changes nothing)
@@ -44,6 +45,7 @@ pip install -e ".[dev]"
 python -m autoregressive_experiments.features
 python -m autoregressive_experiments.plots
 python -m autoregressive_experiments.diagnostics
+python -m autoregressive_experiments.residual_checks
 python -m pytest
 ```
 
@@ -70,16 +72,17 @@ autoregressive-experiments/
 ├── autoregressive_experiments/  # the source package
 │   ├── config.py                # project paths
 │   ├── dataset.py               # downloads the raw dataset
-│   ├── features.py              # cleaning and first-differencing
+│   ├── features.py              # cleaning, first-differencing, chronological 60 / 20 / 20 split
 │   ├── plots.py                 # figure of the cleaned series
 │   ├── diagnostics.py           # ADF / KPSS, ACF / PACF, SARIMA information criteria
+│   ├── residual_checks.py       # Ljung-Box and Breusch-Godfrey on the selected models' residuals
 │   └── modeling/
 │       └── train.py             # (template stub) model training
-├── tests/                       # pytest: differencing, stationarity verdict, significant lags, AICc
+├── tests/                       # pytest: differencing, the split, stationarity, lags, AICc, residual checks
 └── tools/                       # make help
 ```
 
-The empty folders hold a `.gitkeep` file so they exist for future use, as in the template. `diagnostics.py` and `tools/` are this project's additions to the template.
+The empty folders hold a `.gitkeep` file so they exist for future use, as in the template. `diagnostics.py`, `residual_checks.py` and `tools/` are this project's additions to the template.
 
 ## Datasets & attribution
 

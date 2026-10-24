@@ -1,11 +1,78 @@
 """
-Tests for first-differencing in autoregressive_experiments.features.
+Tests for first-differencing and the chronological 60 / 20 / 20 split in
+autoregressive_experiments.features.
 """
 
 import pandas as pd
 import pytest
 
-from autoregressive_experiments.features import first_difference
+from autoregressive_experiments.features import (
+    first_difference,
+    split_boundaries,
+    split_by_time,
+)
+
+
+def monthly_levels(month_count: int) -> pd.DataFrame:
+    """Month-end levels 1, 2, 3, ... from January 2020, given in reverse date order."""
+    dates = pd.date_range("2020-01-31", periods=month_count, freq="ME")
+    values = [float(i + 1) for i in range(month_count)]
+    frame = pd.DataFrame({"date": dates, "fed_total_assets_T": values, "monetary_base_T": values})
+    return frame.iloc[::-1].reset_index(drop=True)
+
+
+def months(frame: pd.DataFrame) -> list[str]:
+    return frame["date"].dt.strftime("%Y-%m").tolist()
+
+
+def test_split_boundaries_take_the_first_60_and_next_20_percent_of_months():
+    """10 months: train ends at month 6 (June), validation at month 8 (August)."""
+    train_end, validation_end = split_boundaries(monthly_levels(10))
+
+    assert (train_end.strftime("%Y-%m"), validation_end.strftime("%Y-%m")) == (
+        "2020-06",
+        "2020-08",
+    )
+
+
+def test_split_boundaries_round_down_for_this_dataset_size():
+    """279 months (the real dataset): 279 * 60 // 100 = 167 and 279 * 80 // 100 = 223."""
+    dates = pd.date_range("2020-01-31", periods=279, freq="ME")
+    train_end, validation_end = split_boundaries(monthly_levels(279))
+
+    assert (train_end, validation_end) == (dates[166], dates[222])
+
+
+def test_split_by_time_cuts_levels_in_date_order_without_overlap():
+    """10 levels given in reverse order become 6 / 2 / 2 months, each block sorted."""
+    levels = monthly_levels(10)
+
+    splits = split_by_time(levels, split_boundaries(levels))
+
+    assert months(splits["train"]) == [f"2020-0{m}" for m in range(1, 7)]
+    assert months(splits["validation"]) == ["2020-07", "2020-08"]
+    assert months(splits["test"]) == ["2020-09", "2020-10"]
+    assert splits["train"]["fed_total_assets_T"].tolist() == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+
+
+def test_split_by_time_cuts_differences_at_the_same_months_as_levels():
+    """The 9 differences (February to October) split 5 / 2 / 2, at the level boundaries."""
+    levels = monthly_levels(10)
+    differences = first_difference(levels)
+
+    splits = split_by_time(differences, split_boundaries(levels))
+
+    assert months(splits["train"]) == [f"2020-0{m}" for m in range(2, 7)]
+    assert months(splits["validation"]) == ["2020-07", "2020-08"]
+    assert months(splits["test"]) == ["2020-09", "2020-10"]
+    # Each level rises by 1 a month, so every difference is 1.
+    assert splits["train"]["fed_total_assets_T"].tolist() == [1.0] * 5
+
+
+def test_split_boundaries_reject_too_few_months():
+    """2 months give 1 training month and no validation month, which can't be split."""
+    with pytest.raises(ValueError, match="too few"):
+        split_boundaries(monthly_levels(2))
 
 
 def test_first_difference_sorts_by_date_and_drops_the_first_row():

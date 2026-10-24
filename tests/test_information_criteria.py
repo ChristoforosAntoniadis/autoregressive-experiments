@@ -1,11 +1,25 @@
 """
-Tests for the AICc finite-sample correction in autoregressive_experiments.diagnostics.
+Tests for the SARIMA candidate grid and the AICc finite-sample correction in
+autoregressive_experiments.diagnostics.
 """
 
 import numpy as np
 import pytest
 
-from autoregressive_experiments.diagnostics import aicc
+from autoregressive_experiments.diagnostics import aicc, nonseasonal_orders
+
+
+def test_nonseasonal_orders_keep_every_p_q_with_p_plus_d_plus_q_at_most_5():
+    """With d = 1, p + q <= 4: the 15 pairs below, from (0, 0) up to (4, 0) and (0, 4)."""
+    expected = [
+        (0, 0), (0, 1), (0, 2), (0, 3), (0, 4),
+        (1, 0), (1, 1), (1, 2), (1, 3),
+        (2, 0), (2, 1), (2, 2),
+        (3, 0), (3, 1),
+        (4, 0),
+    ]  # fmt: skip
+
+    assert nonseasonal_orders() == expected
 
 
 def test_aicc_adds_the_small_sample_penalty():

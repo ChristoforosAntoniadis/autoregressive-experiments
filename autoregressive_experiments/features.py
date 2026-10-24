@@ -6,6 +6,10 @@ Input: ``data/raw/fed_balance_sheet.csv``.
 Output: ``data/interim/fed_balance_sheet_cleaned.csv`` (complete, de-duplicated
 rows) and ``data/processed/fed_balance_sheet_first_difference.csv`` (month-over-month
 changes of both series).
+
+Also provides the chronological 60 / 20 / 20 train / validation / test split that every
+analysis and model uses. Its boundaries are dates taken from the cleaned levels, so the
+levels and the first differences are always cut at the same months.
 """
 
 from pathlib import Path
@@ -24,6 +28,8 @@ app = typer.Typer()
 
 DATE_COLUMN = "date"
 VALUE_COLUMNS = ["fed_total_assets_T", "monetary_base_T"]
+TRAIN_PERCENT = 60
+VALIDATION_PERCENT = 20
 
 
 def read_dataset(input_path: Path = RAW_DATA_DIR) -> pd.DataFrame:
@@ -72,6 +78,33 @@ def first_difference(dataframe: pd.DataFrame) -> pd.DataFrame:
         dataframe[VALUE_COLUMNS].apply(pd.to_numeric, errors="raise").diff()
     )
     return differences.dropna(subset=VALUE_COLUMNS).reset_index(drop=True)
+
+
+def split_boundaries(levels: pd.DataFrame) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Last training date and last validation date: the first 60% of months, then the next 20%."""
+    dates = pd.to_datetime(levels[DATE_COLUMN]).sort_values().reset_index(drop=True)
+    # Integer arithmetic, so a float product such as 5 * 0.6 can't truncate a month away.
+    train_count = len(dates) * TRAIN_PERCENT // 100
+    validation_end = len(dates) * (TRAIN_PERCENT + VALIDATION_PERCENT) // 100
+    if train_count < 1 or validation_end <= train_count or validation_end >= len(dates):
+        raise ValueError(f"{len(dates)} months are too few for a 60 / 20 / 20 split.")
+    return dates[train_count - 1], dates[validation_end - 1]
+
+
+def split_by_time(
+    dataframe: pd.DataFrame, boundaries: tuple[pd.Timestamp, pd.Timestamp]
+) -> dict[str, pd.DataFrame]:
+    """Cut a dated frame into train / validation / test at the given boundaries, in date order."""
+    train_end, validation_end = boundaries
+    dataframe = dataframe.assign(**{DATE_COLUMN: pd.to_datetime(dataframe[DATE_COLUMN])})
+    dataframe = dataframe.sort_values(DATE_COLUMN).reset_index(drop=True)
+    dates = dataframe[DATE_COLUMN]
+    masks = {
+        "train": dates <= train_end,
+        "validation": (dates > train_end) & (dates <= validation_end),
+        "test": dates > validation_end,
+    }
+    return {name: dataframe[mask].reset_index(drop=True) for name, mask in masks.items()}
 
 
 @app.command()

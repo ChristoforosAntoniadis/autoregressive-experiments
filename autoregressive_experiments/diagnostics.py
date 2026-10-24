@@ -1,11 +1,13 @@
 """
 Pre-estimation diagnostics for SARIMA: stationarity, model identification and order selection.
 
-Input: ``data/processed/fed_balance_sheet_first_difference.csv``.
+Input: ``data/interim/fed_balance_sheet_cleaned.csv`` (levels) and
+``data/processed/fed_balance_sheet_first_difference.csv``. Only the training split
+(the first 60% of months) is used, so validation and test stay unseen until evaluation.
 
 Output, in ``reports/``:
 
-- ``stationarity_tests.txt``: ADF and KPSS on each differenced series
+- ``stationarity_tests.txt``: ADF and KPSS on each series, in levels and in first differences
 - ``acf_pacf_analysis.txt`` and ``figures/fed_balance_sheet_acf_pacf.png``:
   sample ACF / PACF and their significant lags
 - ``information_criteria_candidates.csv`` and ``information_criteria_summary.txt``:
@@ -27,18 +29,22 @@ import typer
 
 from autoregressive_experiments.config import (
     FIGURES_DIR,
+    INTERIM_DATA_DIR,
     PROCESSED_DATA_DIR,
     PROJ_ROOT,
     REPORTS_DIR,
 )
+from autoregressive_experiments.features import DATE_COLUMN, split_boundaries, split_by_time
 
 app = typer.Typer()
 
 VALUE_COLUMNS = ("fed_total_assets_T", "monetary_base_T")
 SIGNIFICANCE_LEVEL = 0.05
 MAX_LAGS = 36
-MAX_AR_ORDER = 2
-MAX_MA_ORDER = 2
+# Every non-seasonal order with p + d + q <= MAX_ORDER_SUM. d = 1 comes from the stationarity
+# tests (both series are I(1)) and is applied by fitting on the first differences.
+MAX_ORDER_SUM = 5
+DIFFERENCING_ORDER = 1
 SEASONAL_AR_ORDERS = (0, 1)
 SEASONAL_MA_ORDERS = (0, 1)
 SEASONAL_PERIOD = 12
@@ -84,20 +90,31 @@ def aicc(aic: float, parameter_count: int, observation_count: int) -> float:
     return aic + (2 * parameter_count * (parameter_count + 1)) / denominator
 
 
-def stationarity_report(dataframe: pd.DataFrame) -> str:
+def split_header(train: pd.DataFrame, what: str) -> str:
+    dates = train[DATE_COLUMN]
+    return (
+        f"Training split only (first 60% of months), {what}: "
+        f"{dates.min():%Y-%m} to {dates.max():%Y-%m}, {len(train)} observations.\n"
+        "Validation and test months are held out for model evaluation.\n\n"
+    )
+
+
+def stationarity_report(dataframe: pd.DataFrame, description: str, regression: str) -> str:
+    """ADF and KPSS on each series; regression is "c" (constant) or "ct" (constant and trend)."""
+    deterministic_terms = {"c": "a constant", "ct": "a constant and a linear trend"}[regression]
     report_lines = [
-        "ADF and KPSS stationarity checks on first-order differences",
+        f"ADF and KPSS stationarity checks on {description}",
         f"Significance level: {SIGNIFICANCE_LEVEL:.0%}",
         "ADF null hypothesis: the series has a unit root (non-stationary).",
         "KPSS null hypothesis: the series is stationary.",
-        "Both tests use a constant term; ADF lag selection uses AIC.",
+        f"Both tests use {deterministic_terms}; ADF lag selection uses AIC.",
         "",
     ]
 
     for column in VALUE_COLUMNS:
         values = series(dataframe, column)
-        adf_result = adfuller(values, regression="c", autolag="AIC")
-        kpss_result = kpss(values, regression="c", nlags="auto")
+        adf_result = adfuller(values, regression=regression, autolag="AIC")
+        kpss_result = kpss(values, regression=regression, nlags="auto")
         report_lines.extend(
             [
                 f"{column} (observations: {len(values)})",
@@ -191,15 +208,31 @@ def acf_pacf_report(dataframe: pd.DataFrame) -> tuple[str, Figure]:
     return "\n".join(report_lines), figure
 
 
+def nonseasonal_orders() -> list[tuple[int, int]]:
+    """Every (p, q) with p + d + q <= MAX_ORDER_SUM, for the fixed d = DIFFERENCING_ORDER."""
+    budget = MAX_ORDER_SUM - DIFFERENCING_ORDER
+    return [(p, q) for p in range(budget + 1) for q in range(budget + 1 - p)]
+
+
+def fit_sarima(values: pd.Series, p: int, q: int, seasonal_p: int, seasonal_q: int):
+    """ARMA(p, q)x(P, 0, Q, 12) with a constant, fitted on the first differences (so d = 1)."""
+    return SARIMAX(
+        values,
+        order=(p, 0, q),
+        seasonal_order=(seasonal_p, 0, seasonal_q, SEASONAL_PERIOD),
+        trend="c",
+        enforce_stationarity=True,
+        enforce_invertibility=True,
+    ).fit(disp=False, maxiter=MAX_ITERATIONS)
+
+
 def information_criteria(dataframe: pd.DataFrame) -> tuple[pd.DataFrame, str]:
-    candidate_orders = list(
-        product(
-            range(MAX_AR_ORDER + 1),
-            range(MAX_MA_ORDER + 1),
-            SEASONAL_AR_ORDERS,
-            SEASONAL_MA_ORDERS,
+    candidate_orders = [
+        (p, q, seasonal_p, seasonal_q)
+        for (p, q), seasonal_p, seasonal_q in product(
+            nonseasonal_orders(), SEASONAL_AR_ORDERS, SEASONAL_MA_ORDERS
         )
-    )
+    ]
     results: list[dict[str, object]] = []
 
     for column in VALUE_COLUMNS:
@@ -211,14 +244,7 @@ def information_criteria(dataframe: pd.DataFrame) -> tuple[pd.DataFrame, str]:
             )
 
         for p, q, seasonal_p, seasonal_q in candidate_orders:
-            fitted_model = SARIMAX(
-                values,
-                order=(p, 0, q),
-                seasonal_order=(seasonal_p, 0, seasonal_q, SEASONAL_PERIOD),
-                trend="c",
-                enforce_stationarity=True,
-                enforce_invertibility=True,
-            ).fit(disp=False, maxiter=MAX_ITERATIONS)
+            fitted_model = fit_sarima(values, p, q, seasonal_p, seasonal_q)
 
             parameter_count = len(fitted_model.params)
             observation_count = int(fitted_model.nobs)
@@ -227,7 +253,7 @@ def information_criteria(dataframe: pd.DataFrame) -> tuple[pd.DataFrame, str]:
                 {
                     "series": column,
                     "p": p,
-                    "d": 0,
+                    "d": DIFFERENCING_ORDER,
                     "q": q,
                     "P": seasonal_p,
                     "D": 0,
@@ -246,11 +272,16 @@ def information_criteria(dataframe: pd.DataFrame) -> tuple[pd.DataFrame, str]:
     report_lines = [
         "SARIMA information criteria model selection",
         "Input: first-order-differenced balance-sheet data.",
-        "Therefore all candidates use d=0 (equivalent to d=1 from original levels).",
+        (
+            f"d={DIFFERENCING_ORDER} is applied by the differencing: each candidate is an "
+            f"ARMA(p, q) with a constant on the differences, i.e. ARIMA(p, {DIFFERENCING_ORDER}, q) "
+            "with drift on the levels."
+        ),
         f"Monthly seasonal period: {SEASONAL_PERIOD}; all candidates use D=0.",
         (
-            f"Candidate orders: p=0..{MAX_AR_ORDER}, q=0..{MAX_MA_ORDER}, "
-            f"P in {SEASONAL_AR_ORDERS}, Q in {SEASONAL_MA_ORDERS}."
+            f"Candidate orders: every p, q with p + d + q <= {MAX_ORDER_SUM} "
+            f"({len(nonseasonal_orders())} pairs), P in {SEASONAL_AR_ORDERS}, "
+            f"Q in {SEASONAL_MA_ORDERS}: {len(candidate_orders)} candidates per series."
         ),
         "Lower AIC, AICc, and BIC indicate a preferred fit/complexity tradeoff.",
         "AICc applies the finite-sample correction to AIC.",
@@ -273,7 +304,7 @@ def information_criteria(dataframe: pd.DataFrame) -> tuple[pd.DataFrame, str]:
             best = eligible.loc[eligible[criterion].idxmin()]
             report_lines.append(
                 f"  Best by {criterion}: "
-                f"SARIMA({int(best['p'])},0,{int(best['q'])})"
+                f"SARIMA({int(best['p'])},{int(best['d'])},{int(best['q'])})"
                 f"x({int(best['P'])},0,{int(best['Q'])},{int(best['s'])}), "
                 f"{criterion}={best[criterion]:.4f}"
             )
@@ -285,26 +316,40 @@ def information_criteria(dataframe: pd.DataFrame) -> tuple[pd.DataFrame, str]:
 
 @app.command()
 def main(
-    input_path: Path = PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv",
+    levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv",
+    differences_path: Path = PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv",
 ) -> None:
-    if not input_path.is_file():
-        raise FileNotFoundError(
-            f"First-difference dataset not found at {input_path}. Generate it with make features."
-        )
-    dataframe = pd.read_csv(input_path)
+    for path in (levels_path, differences_path):
+        if not path.is_file():
+            raise FileNotFoundError(f"{path} not found. Generate it with make features.")
+    levels = pd.read_csv(levels_path, parse_dates=[DATE_COLUMN])
+    boundaries = split_boundaries(levels)
+    train_levels = split_by_time(levels, boundaries)["train"]
+    train_differences = split_by_time(
+        pd.read_csv(differences_path, parse_dates=[DATE_COLUMN]), boundaries
+    )["train"]
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
-    report = stationarity_report(dataframe)
+    # Trending levels are tested against trend-stationarity; their differences against a constant mean.
+    report = (
+        split_header(train_levels, "levels")
+        + stationarity_report(train_levels, "levels", regression="ct")
+        + "\n"
+        + split_header(train_differences, "first differences")
+        + stationarity_report(train_differences, "first-order differences", regression="c")
+    )
     (REPORTS_DIR / "stationarity_tests.txt").write_text(report, encoding="utf-8")
     print(report)
 
-    report, figure = acf_pacf_report(dataframe)
+    report, figure = acf_pacf_report(train_differences)
+    report = split_header(train_differences, "first differences") + report
     figure.savefig(ACF_PACF_FIGURE_PATH, dpi=150)
     plt.close(figure)
     (REPORTS_DIR / "acf_pacf_analysis.txt").write_text(report, encoding="utf-8")
     print(report)
 
-    candidates, report = information_criteria(dataframe)
+    candidates, report = information_criteria(train_differences)
+    report = split_header(train_differences, "first differences") + report
     candidates.to_csv(CANDIDATES_PATH, index=False)
     (REPORTS_DIR / "information_criteria_summary.txt").write_text(report, encoding="utf-8")
     print(report)
