@@ -10,7 +10,7 @@ Experiments on autoregressive approaches, from traditional econometrics (SARIMA,
 ## Plan
 
 - **Univariate (SARIMA, then ARCH / GARCH):** stationarity tests (ADF / KPSS on levels and first differences), ACF / PACF, and SARIMA order selection by AIC / AICc / BIC, residual checks of the selected models (Ljung-Box, Breusch-Godfrey), volatility checks (Engle's ARCH-LM, with and without a variance break), and GARCH(1,1) on the residuals are done on the training split. Rolling-origin forecasts (expanding window, one fold per monthly origin) are scored on validation and then once on test, against naive, drift and seasonal-naive baselines: MAE, MSE, RMSE, MAPE, MASE and Diebold-Mariano tests at 1–12 months, plus quantile forecast intervals (80% / 95% coverage, pinball loss) with and without GARCH; see [`reports/`](reports/).
-- **Multivariate (VAR / VECM):** lag selection and the Johansen cointegration test are done on the training split; no cointegration was found, so the system is a VAR on the first differences. VAR(5) and a rank-1 VECM(5) are estimated, stable and pass the residual checks; Granger causality, impulse responses and the variance decomposition show a one-way link, from total assets to the monetary base. Next comes their out-of-sample evaluation.
+- **Multivariate (VAR / VECM):** lag selection and the Johansen cointegration test are done on the training split; no cointegration was found, so the system is a VAR on the first differences. VAR(5) and a rank-1 VECM(5) are estimated, stable and pass the residual checks; Granger causality, impulse responses and the variance decomposition show a one-way link, from total assets to the monetary base. Both systems are evaluated with the same harness, on validation and once on test, including a Diebold-Mariano comparison against the selected SARIMA: joint modelling doesn't beat univariate modelling for either series.
 - **Machine learning and neural networks:** models on lag features (gradient boosting, regularized regression), on lookback windows (MLP, N-BEATS, DLinear), and recurrent networks (LSTM, GRU), evaluated on the same chronological 60 / 20 / 20 split.
 
 ## Quickstart
@@ -28,7 +28,7 @@ make diagnostics                  # ADF / KPSS, ACF / PACF and SARIMA informatio
 make residuals                    # Ljung-Box / Breusch-Godfrey on the selected models -> reports/
 make volatility                   # ARCH-LM and a variance-break check on those models -> reports/
 make garch                        # GARCH(1,1) vs constant variance on those models -> reports/
-make evaluate                     # rolling-origin forecasts on validation and test: accuracy, DM, intervals (~5 min)
+make evaluate                     # rolling-origin forecasts (SARIMA, VAR, VECM) on validation and test (~4-6 min)
 make var                          # VAR lag order and Johansen cointegration test -> reports/
 make var-checks                   # fit VAR / VECM candidates; stability and Portmanteau checks -> reports/
 make var-analysis                 # Granger causality, impulse responses, variance decomposition -> reports/
@@ -90,7 +90,7 @@ autoregressive-experiments/
 │   ├── residual_checks.py       # Ljung-Box and Breusch-Godfrey on the selected models' residuals
 │   ├── volatility_checks.py     # ARCH-LM, with and without an estimated variance break
 │   ├── volatility_models.py     # GARCH(1,1) (normal and Student-t) vs constant variance, by BIC
-│   ├── forecast_evaluation.py   # rolling-origin forecasts vs naive baselines, validation and test
+│   ├── forecast_evaluation.py   # rolling-origin forecasts (SARIMA, VAR, VECM) vs baselines, validation and test
 │   ├── var_diagnostics.py       # VAR lag order (AIC / BIC / HQIC) and Johansen cointegration
 │   ├── var_models.py            # VAR / VECM candidates: estimation, stability, residual checks
 │   ├── var_analysis.py          # Granger causality, impulse responses, variance decomposition

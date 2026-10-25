@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from autoregressive_experiments.forecast_evaluation import (
+    SYSTEMS,
     accuracy,
     convergence_failures,
     diebold_mariano,
@@ -20,6 +21,9 @@ from autoregressive_experiments.forecast_evaluation import (
     rolling_forecasts,
     seasonal_naive_forecast,
     standardized_quantiles,
+    system_forecast,
+    system_forecaster,
+    system_level_variances,
 )
 
 LEVELS = np.array([1.0, 2.0, 4.0, 7.0])  # monthly changes 1, 2, 3
@@ -49,6 +53,53 @@ def test_level_variances_sum_the_error_weights():
 def test_level_variances_weight_each_month_by_its_own_shock_variance():
     """psi 1, 0.5 with shock variances 1 then 4: h = 2 has 1.5^2 * 1 + 1^2 * 4 = 6.25."""
     assert level_variances(np.array([1.0, 0.5]), np.array([1.0, 4.0]))[1] == pytest.approx(6.25)
+
+
+def test_system_level_variances_reduce_to_the_univariate_case():
+    """One series with psi 1, 0.5 and shock variance 1: 1, then 1.5^2 + 1 = 3.25, as for
+    level_variances."""
+    psi = np.array([[[1.0]], [[0.5]]])
+
+    assert system_level_variances(psi, np.array([[1.0]]))[:, 0] == pytest.approx([1.0, 3.25])
+
+
+def test_system_level_variances_of_white_noise_differences_grow_by_the_shock_variances():
+    """No dynamics (psi = I, then zeros): each level's variance is h times its own shock
+    variance, 2 and 1; the shocks' covariance of 0.5 doesn't enter the diagonals."""
+    psi = np.stack([np.eye(2), np.zeros((2, 2)), np.zeros((2, 2))])
+    sigma = np.array([[2.0, 0.5], [0.5, 1.0]])
+
+    assert system_level_variances(psi, sigma) == pytest.approx(np.array([[2, 1], [4, 2], [6, 3]]))
+
+
+def two_random_walks(count: int = 150) -> np.ndarray:
+    return np.cumsum(np.random.default_rng(0).normal(size=(count, 2)), axis=0)
+
+
+def test_system_forecaster_refuses_a_history_that_doesnt_match_the_months_handed_over():
+    """The leakage guard: the target's history must be exactly the system's first months."""
+    all_levels = two_random_walks()
+    forecaster = system_forecaster(SYSTEMS[0], all_levels, target=0, cache={})
+
+    with pytest.raises(AssertionError):
+        forecaster(all_levels[:100, 1], 3)  # the other series' history
+
+
+def test_both_series_share_one_system_fit_per_origin():
+    """Forecasting each series from the same origin fits the system once; each forecaster
+    returns its own series of that one fit."""
+    all_levels = two_random_walks()
+    cache: dict = {}
+    first = system_forecaster(SYSTEMS[0], all_levels, target=0, cache=cache)
+    second = system_forecaster(SYSTEMS[0], all_levels, target=1, cache=cache)
+
+    output_first = first(all_levels[:100, 0], 3)
+    output_second = second(all_levels[:100, 1], 3)
+    mean, spread = system_forecast(SYSTEMS[0], all_levels[:100], 3)
+
+    assert len(cache) == 1
+    assert output_first["forecast"] == pytest.approx(mean[:, 0])
+    assert output_second["sd_constant"] == pytest.approx(spread[:, 1])
 
 
 def test_standardized_quantiles_for_normal_and_unit_variance_student_t():

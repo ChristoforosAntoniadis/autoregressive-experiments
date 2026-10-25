@@ -1,6 +1,12 @@
 """
-Forecast evaluation (step U6): how accurate are the SARIMA models out of sample, do they beat
-naive forecasts, and are their forecast intervals honest?
+Forecast evaluation (step U6, then the VAR / VECM systems): how accurate are the models out of
+sample, do they beat naive forecasts, does modelling the two series jointly beat modelling them
+alone, and are the forecast intervals honest?
+
+The systems, VAR(5) on the differences and VECM(5) on the levels (carried forward from step
+V6), are refitted on both series up to each origin and forecast both; their intervals are normal,
+from the system's forecast-error covariance (GARCH is univariate here). Each system is also
+tested against the series' selected SARIMA with Diebold-Mariano.
 
 Rolling origin with an expanding window, on validation and then on test: at every month from the
 end of the previous split onwards, each model is refitted on all data up to that month and
@@ -51,6 +57,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy import stats
+from statsmodels.tsa.api import VAR
+from statsmodels.tsa.vector_ar.vecm import VECM
 import typer
 
 from autoregressive_experiments.config import (
@@ -77,6 +85,8 @@ from autoregressive_experiments.residual_checks import (
     checked_models,
     model_label,
 )
+from autoregressive_experiments.var_analysis import CARRIED_LAGS
+from autoregressive_experiments.var_models import VECM_RANK
 from autoregressive_experiments.volatility_models import garch_check, garch_variance_path
 
 app = typer.Typer()
@@ -85,8 +95,12 @@ HORIZONS = (1, 3, 6, 12)
 MAX_HORIZON = max(HORIZONS)
 METRICS = ("MAE", "MSE", "RMSE", "MAPE", "MASE")
 DM_COLUMNS = ("DM_absolute", "DM_absolute_p", "DM_squared", "DM_squared_p")
+DM_SARIMA_COLUMNS = tuple(column.replace("DM", "DM_SARIMA") for column in DM_COLUMNS)
 NAIVE = "naive"
 BASELINES = (NAIVE, "drift", "seasonal naive")
+# The systems carried forward from step V6; each forecasts both series at once.
+SYSTEMS = (f"VAR({CARRIED_LAGS})", f"VECM({CARRIED_LAGS})")
+NORMAL_95 = stats.norm.ppf(0.975)
 SPLITS = ("validation", "test")
 QUANTILES = (0.025, 0.1, 0.5, 0.9, 0.975)
 VARIANCES = ("constant", "garch")
@@ -105,6 +119,9 @@ BASELINE_STYLES = {
     "drift": (MUTED_INK, 1.2),
     "seasonal naive": ("#c3c2b7", 1.2),
 }
+# Slots 4 and 5 for the systems (validated with slots 1-3; the report's tables back their
+# below-3:1 contrast).
+SYSTEM_COLORS = {SYSTEMS[0]: "#eda100", SYSTEMS[1]: "#e87ba4"}
 # Slots 1 and 2 (validated together) for constant variance vs GARCH in the interval figure.
 VARIANCE_COLORS = {"constant": MODEL_COLORS[0], "garch": MODEL_COLORS[1]}
 
@@ -166,6 +183,51 @@ def sarima_forecaster(model: dict, garch_variant: str) -> Forecaster:
             "nu_garch": nu,
             "converged": bool(fitted.mle_retvals.get("converged", False)),
         }
+
+    return forecast
+
+
+def system_level_variances(psi: np.ndarray, sigma: np.ndarray) -> np.ndarray:
+    """Level forecast-error variance of each series at h = 1..len(psi), for a VAR on the
+    differences with error-weight matrices psi (psi_0 = I) and shock covariance sigma.
+
+    The matrix version of level_variances: the level error at h is the sum over s = 0..h-1 of
+    C_s u_(t+h-s), with C_s = psi_0 + ... + psi_s, so its covariance sums C_s sigma C_s'.
+    Returns the diagonals, shape (h, series)."""
+    summed = np.cumsum(psi, axis=0)
+    covariances = np.cumsum(np.einsum("sij,jk,slk->sil", summed, sigma, summed), axis=0)
+    return np.diagonal(covariances, axis1=1, axis2=2)
+
+
+def system_forecast(kind: str, history: np.ndarray, steps: int) -> tuple[np.ndarray, np.ndarray]:
+    """Fit VAR(5) on the differences or VECM(5) on the levels of both series; return the level
+    forecasts and their standard deviations, each of shape (steps, series)."""
+    if kind == SYSTEMS[0]:
+        differences = np.diff(history, axis=0)
+        fitted = VAR(differences).fit(CARRIED_LAGS, trend="c")
+        path = fitted.forecast(differences[-CARRIED_LAGS:], steps)
+        spread = np.sqrt(system_level_variances(fitted.ma_rep(steps)[:steps], fitted.sigma_u))
+        return history[-1] + np.cumsum(path, axis=0), spread
+    fitted = VECM(history, k_ar_diff=CARRIED_LAGS, coint_rank=VECM_RANK, deterministic="co").fit()
+    mean, _, upper = fitted.predict(steps, alpha=0.05)
+    # statsmodels gives normal 95% level intervals; recover the standard deviation from them.
+    return mean, (upper - mean) / NORMAL_95
+
+
+def system_forecaster(kind: str, all_levels: np.ndarray, target: int, cache: dict) -> Forecaster:
+    """A forecaster for one series of a system. The harness passes that series' levels up to
+    the origin; both series are cut at the same month. Each origin's fit is shared between the
+    two series through the cache."""
+
+    def forecast(levels: np.ndarray, steps: int) -> dict:
+        history = all_levels[: len(levels)]
+        # Leakage guard: the system sees exactly the months the harness handed over.
+        assert np.array_equal(history[:, target], levels)
+        key = (kind, len(levels), steps)
+        if key not in cache:
+            cache[key] = system_forecast(kind, history, steps)
+        mean, spread = cache[key]
+        return {"forecast": mean[:, target], "sd_constant": spread[:, target]}
 
     return forecast
 
@@ -251,24 +313,25 @@ def diebold_mariano(loss_a: np.ndarray, loss_b: np.ndarray, horizon: int) -> tup
     return float(statistic), float(2 * stats.t.sf(abs(statistic), count - 1))
 
 
-def dm_against_naive(forecasts: pd.DataFrame) -> pd.DataFrame:
-    """Each model against naive, per horizon, with absolute and squared error losses."""
+def dm_against(forecasts: pd.DataFrame, reference: str, prefix: str = "DM") -> pd.DataFrame:
+    """Each other model against the reference model, per horizon, with absolute and squared
+    error losses; columns are named prefix_absolute, prefix_absolute_p, and so on."""
     errors = forecasts.assign(error=forecasts["actual"] - forecasts["forecast"])
-    naive = errors[errors["model"] == NAIVE].set_index(["origin", "horizon"])["error"]
+    reference_errors = errors[errors["model"] == reference].set_index(["origin", "horizon"])
     rows = []
-    for (model, horizon), group in errors[errors["model"] != NAIVE].groupby(
+    for (model, horizon), group in errors[errors["model"] != reference].groupby(
         ["model", "horizon"], sort=False
     ):
         if horizon not in HORIZONS:
             continue
         model_errors = group.set_index(["origin", "horizon"])["error"]
-        naive_errors = naive.loc[model_errors.index]
+        matching = reference_errors.loc[model_errors.index, "error"]
         row = {"model": model, "horizon": horizon}
         for loss, function in (("absolute", np.abs), ("squared", np.square)):
             statistic, p_value = diebold_mariano(
-                function(model_errors.to_numpy()), function(naive_errors.to_numpy()), horizon
+                function(model_errors.to_numpy()), function(matching.to_numpy()), horizon
             )
-            row |= {f"DM_{loss}": statistic, f"DM_{loss}_p": p_value}
+            row |= {f"{prefix}_{loss}": statistic, f"{prefix}_{loss}_p": p_value}
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -361,11 +424,16 @@ def convergence_failures(forecasts: pd.DataFrame) -> dict[str, list[str]]:
     }
 
 
-def accuracy_report(metrics: pd.DataFrame, selected: dict[str, str]) -> list[str]:
+def accuracy_report(
+    metrics: pd.DataFrame, selected: dict[str, str], selected_system: dict[str, str]
+) -> list[str]:
     lines = []
     for column in VALUE_COLUMNS:
         series_metrics = metrics[metrics["series"] == column]
-        lines.append(f"{column}  (selected on validation: {selected[column]})")
+        lines.append(
+            f"{column}  (selected on validation: {selected[column]}, "
+            f"system {selected_system[column]})"
+        )
         for horizon in HORIZONS:
             table = series_metrics[series_metrics["horizon"] == horizon].sort_values("MASE")
             naive_mase = table.loc[table["model"] == NAIVE, "MASE"].iloc[0]
@@ -373,6 +441,7 @@ def accuracy_report(metrics: pd.DataFrame, selected: dict[str, str]) -> list[str
             lines.append(
                 f"    {'model':<30}{'MAE':>9}{'MSE':>11}{'RMSE':>9}{'MAPE %':>9}{'MASE':>8}"
                 f"   {'DM vs naive (abs)':<20}{'DM vs naive (sq)':<20}"
+                f"{'DM vs SARIMA (abs)':<20}{'DM vs SARIMA (sq)':<20}"
             )
             for row in table.itertuples():
                 lines.append(
@@ -380,6 +449,8 @@ def accuracy_report(metrics: pd.DataFrame, selected: dict[str, str]) -> list[str
                     f"{row.MAPE:9.2f}{row.MASE:8.3f}"
                     f"   {dm_verdict(row.DM_absolute, row.DM_absolute_p):<20}"
                     f"{dm_verdict(row.DM_squared, row.DM_squared_p):<20}"
+                    f"{dm_verdict(row.DM_SARIMA_absolute, row.DM_SARIMA_absolute_p):<20}"
+                    f"{dm_verdict(row.DM_SARIMA_squared, row.DM_SARIMA_squared_p):<20}"
                 )
             best = table.iloc[0]
             verdict = (
@@ -418,14 +489,22 @@ def interval_report(intervals: pd.DataFrame) -> list[str]:
     return lines
 
 
-def evaluation_report(results: dict, periods: dict[str, str], scales: dict, selected: dict) -> str:
+def evaluation_report(
+    results: dict, periods: dict[str, str], scales: dict, selected: dict, selected_system: dict
+) -> str:
     lines = [
-        "Out-of-sample forecast evaluation (step U6): validation, then test",
+        "Out-of-sample forecast evaluation: SARIMA (step U6) and the VAR / VECM systems",
         (
             "Rolling origin, expanding window: each model is refitted at every monthly origin on "
             f"all data up to it (data start {periods['start']}); each origin is one fold. "
-            "Orders come from training, the selected model per series from validation (lowest "
-            "one-month MASE), fixed before test. Test is run once, with all models."
+            "Orders come from training; the selected model per series and family (SARIMA, "
+            "system) from validation (lowest one-month MASE), fixed before test. Each family's "
+            "test is run once, with all its models."
+        ),
+        (
+            f"Systems: {SYSTEMS[0]} on the differences and {SYSTEMS[1]} (rank {VECM_RANK}) on "
+            "the levels, fitted on both series up to each origin and forecasting both; normal "
+            "intervals from the system's forecast-error covariance (no GARCH)."
         ),
         (
             "Point errors are on the levels: MAE, RMSE in trillions; MSE in trillions squared; "
@@ -439,7 +518,8 @@ def evaluation_report(results: dict, periods: dict[str, str], scales: dict, sele
             "forecast, absolute-error loss (matches MAE) and squared-error loss (matches MSE), "
             "with the Harvey-Leybourne-Newbold correction and h - 1 autocovariance lags. "
             f"'better' / 'worse' when significant at {SIGNIFICANCE_LEVEL:.0%}, otherwise the "
-            "p-value."
+            "p-value. DM vs SARIMA: the same test, each system against the series' selected "
+            "SARIMA model: does modelling the two series jointly beat modelling them alone?"
         ),
         (
             "Intervals: quantiles of each model's forecast distribution on the levels, with a "
@@ -454,7 +534,7 @@ def evaluation_report(results: dict, periods: dict[str, str], scales: dict, sele
         metrics, intervals, failures = results[split]
         lines.append(f"===== {split.upper()}: targets {periods[split]} =====")
         lines.append("")
-        lines.extend(accuracy_report(metrics, selected))
+        lines.extend(accuracy_report(metrics, selected, selected_system))
         lines.extend(interval_report(intervals))
         failed = {model: months for model, months in failures.items() if months}
         refits = sum(len(months) for months in failures.values())
@@ -479,7 +559,8 @@ def series_title(column: str) -> str:
 
 def model_styles(sarima_names: list[str]) -> dict[str, tuple[str, float]]:
     styles = {name: (color, 2) for name, color in zip(sarima_names, MODEL_COLORS)}
-    return styles | BASELINE_STYLES
+    systems = {name: (color, 2) for name, color in SYSTEM_COLORS.items()}
+    return styles | systems | BASELINE_STYLES
 
 
 def evaluation_figure(
@@ -487,10 +568,12 @@ def evaluation_figure(
     forecasts: pd.DataFrame,
     sarima_names: dict[str, list[str]],
     selected: dict[str, str],
+    selected_system: dict[str, str],
     test_start: pd.Timestamp,
 ) -> plt.Figure:
     """Per series: each model's MAE relative to naive by horizon on validation and on test, and
-    the actual path against the selected model's and the naive one-month forecasts."""
+    the actual path against the selected SARIMA's, the selected system's and the naive
+    one-month forecasts."""
     apply_chart_style()
     rows = len(VALUE_COLUMNS)
     figure, axes = plt.subplots(
@@ -552,7 +635,7 @@ def evaluation_figure(
         path_axis.plot(
             actual["target"], actual["actual"], color=PRIMARY_INK, linewidth=2, label="actual"
         )
-        for name in (selected[column], NAIVE):
+        for name in (selected[column], selected_system[column], NAIVE):
             model_path = one_month[one_month["model"] == name]
             path_axis.plot(
                 model_path["target"],
@@ -579,7 +662,8 @@ def evaluation_figure(
         path_axis.set_ylabel("Trillions")
         path_axis.set_title(
             f"{series_title(column)}: actual vs one-month forecasts\n"
-            f"selected model {selected[column]}, and naive\n",
+            f"selected {selected[column]}, selected system {selected_system[column]}, "
+            "and naive\n",
             loc="left",
             fontsize=10,
         )
@@ -680,15 +764,21 @@ def main(
         column: [model_label(m) for m in passed if m["series"] == column]
         for column in VALUE_COLUMNS
     }
+    all_levels = levels[list(VALUE_COLUMNS)].to_numpy(dtype=float)
+    # One fit per system and origin, shared by both series' forecasters.
+    system_fits: dict = {}
     all_forecasts, all_metrics, all_intervals, failures = [], [], [], {}
     for split, (first_origin, last_target) in windows.items():
         failures[split] = {}
-        for column in VALUE_COLUMNS:
+        for target, column in enumerate(VALUE_COLUMNS):
             values = levels[column].to_numpy(dtype=float)
             forecasters: dict[str, Forecaster] = {
                 model_label(m): sarima_forecaster(m, garch_variants[(column, model_label(m))])
                 for m in passed
                 if m["series"] == column
+            }
+            forecasters |= {
+                kind: system_forecaster(kind, all_levels, target, system_fits) for kind in SYSTEMS
             }
             forecasters |= {
                 NAIVE: naive_forecast,
@@ -701,7 +791,7 @@ def main(
             all_forecasts.append(forecasts.assign(**labels))
             all_metrics.append(
                 metrics_table(forecasts, scales[column])
-                .merge(dm_against_naive(forecasts), on=["model", "horizon"], how="left")
+                .merge(dm_against(forecasts, NAIVE), on=["model", "horizon"], how="left")
                 .assign(**labels)
             )
             all_intervals.append(interval_table(forecasts).assign(**labels))
@@ -710,18 +800,35 @@ def main(
     forecasts = pd.concat(all_forecasts, ignore_index=True)
     metrics = pd.concat(all_metrics, ignore_index=True)
     intervals = pd.concat(all_intervals, ignore_index=True)
-    validation_one_month = metrics[
-        (metrics["split"] == "validation")
-        & (metrics["horizon"] == 1)
-        & ~metrics["model"].isin(BASELINES)
-    ]
-    selected = {
-        column: group.sort_values("MASE")["model"].iloc[0]
-        for column, group in validation_one_month.groupby("series")
+    # Selection per family, on validation only: the SARIMA family's choice is unchanged by the
+    # systems joining the harness.
+    validation_one_month = metrics[(metrics["split"] == "validation") & (metrics["horizon"] == 1)]
+    families = {
+        "SARIMA": ~validation_one_month["model"].isin([*BASELINES, *SYSTEMS]),
+        "system": validation_one_month["model"].isin(SYSTEMS),
     }
-    metrics[["split", "series", "model", "horizon", "n", *METRICS, *DM_COLUMNS]].to_csv(
-        METRICS_PATH, index=False
+    selected, selected_system = (
+        {
+            column: group.sort_values("MASE")["model"].iloc[0]
+            for column, group in validation_one_month[mask].groupby("series")
+        }
+        for mask in families.values()
     )
+    # Does joint modelling beat univariate modelling? Each system against the selected SARIMA.
+    against_sarima = [
+        dm_against(
+            group[group["model"].isin([*SYSTEMS, selected[column]])],
+            selected[column],
+            prefix="DM_SARIMA",
+        ).assign(split=split, series=column)
+        for (split, column), group in forecasts.groupby(["split", "series"])
+    ]
+    metrics = metrics.merge(
+        pd.concat(against_sarima), on=["split", "series", "model", "horizon"], how="left"
+    )
+    metrics[
+        ["split", "series", "model", "horizon", "n", *METRICS, *DM_COLUMNS, *DM_SARIMA_COLUMNS]
+    ].to_csv(METRICS_PATH, index=False)
     intervals.to_csv(INTERVALS_PATH, index=False)
 
     results = {
@@ -732,12 +839,14 @@ def main(
         )
         for split in SPLITS
     }
-    report = evaluation_report(results, periods, scales, selected)
+    report = evaluation_report(results, periods, scales, selected, selected_system)
     REPORT_PATH.write_text(report, encoding="utf-8")
     print(report)
 
     test_start = dates.iloc[validation_end + 1]
-    figure = evaluation_figure(metrics, forecasts, sarima_names, selected, test_start)
+    figure = evaluation_figure(
+        metrics, forecasts, sarima_names, selected, selected_system, test_start
+    )
     figure.savefig(FIGURE_PATH, dpi=150, facecolor=SURFACE)
     plt.close(figure)
     figure = intervals_figure(intervals, selected)
