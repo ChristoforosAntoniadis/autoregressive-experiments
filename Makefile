@@ -82,9 +82,21 @@ var: export MPLBACKEND = Agg
 var:
 	$(PYTHON_INTERPRETER) -m $(PACKAGE).var_diagnostics
 
-## Run the whole pipeline: features, plots, univariate steps, evaluation, VAR diagnostics
+## Fit the VAR / VECM candidates and check stability and residuals (no plot windows)
+.PHONY: var-checks
+var-checks: export MPLBACKEND = Agg
+var-checks:
+	$(PYTHON_INTERPRETER) -m $(PACKAGE).var_models
+
+## Granger causality, impulse responses and variance decomposition for VAR(5) / VECM(5)
+.PHONY: var-analysis
+var-analysis: export MPLBACKEND = Agg
+var-analysis:
+	$(PYTHON_INTERPRETER) -m $(PACKAGE).var_analysis
+
+## Run the whole pipeline: features, plots, univariate steps, evaluation, VAR steps
 .PHONY: all
-all: features plots diagnostics residuals volatility garch evaluate var
+all: features plots diagnostics residuals volatility garch evaluate var var-checks var-analysis
 
 ## Run the test suite
 .PHONY: test
