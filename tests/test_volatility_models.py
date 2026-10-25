@@ -8,9 +8,11 @@ import pytest
 from autoregressive_experiments.volatility_models import (
     CONSTANT,
     GARCH_NORMAL,
+    GARCH_T,
     GARCH_T_BREAK,
     fit_variance_models,
     garch_check,
+    garch_variance_path,
     half_life,
     original_units_loglikelihood,
 )
@@ -56,6 +58,29 @@ def test_break_adjusted_garch_wins_when_clustering_sits_on_top_of_a_variance_jum
 
     assert result["best"] == GARCH_T_BREAK
     assert result["verdict"] == "CARRY GARCH FORWARD"
+
+
+def test_garch_variance_path_is_in_the_units_it_was_given():
+    """Multiplying the residuals by 10 multiplies every forecast variance by 100, whatever
+    internal scale arch chose; the Student-t degrees of freedom don't change."""
+    values = simulate_garch(600) * 0.05
+
+    small, nu_small = garch_variance_path(values, GARCH_T, 6)
+    large, nu_large = garch_variance_path(10 * values, GARCH_T, 6)
+
+    assert large == pytest.approx(100 * small, rel=1e-3)
+    assert nu_large == pytest.approx(nu_small, rel=1e-3)
+
+
+def test_break_adjusted_variance_path_forecasts_on_the_latest_regime_scale():
+    """With the second half scaled by 5, the break-adjusted forecast variances sit on the
+    volatile regime's scale: far above the calm half's average squared residual."""
+    values = simulate_garch(600)
+    values[300:] *= 5
+
+    variances, _ = garch_variance_path(values, GARCH_T_BREAK, 3)
+
+    assert (variances > 5 * np.mean(values[:300] ** 2)).all()
 
 
 def test_garch_fit_recovers_the_simulated_parameters():

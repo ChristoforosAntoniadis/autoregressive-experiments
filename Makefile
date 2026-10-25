@@ -70,9 +70,21 @@ garch: export MPLBACKEND = Agg
 garch:
 	$(PYTHON_INTERPRETER) -m $(PACKAGE).volatility_models
 
-## Run the whole pipeline: features, plots, diagnostics, residual, volatility and GARCH checks
+## Score rolling-origin forecasts on validation: MAE, MSE, RMSE, MAPE, MASE (no plot windows)
+.PHONY: evaluate
+evaluate: export MPLBACKEND = Agg
+evaluate:
+	$(PYTHON_INTERPRETER) -m $(PACKAGE).forecast_evaluation
+
+## VAR lag order and Johansen cointegration on the training split (no plot windows)
+.PHONY: var
+var: export MPLBACKEND = Agg
+var:
+	$(PYTHON_INTERPRETER) -m $(PACKAGE).var_diagnostics
+
+## Run the whole pipeline: features, plots, univariate steps, evaluation, VAR diagnostics
 .PHONY: all
-all: features plots diagnostics residuals volatility garch
+all: features plots diagnostics residuals volatility garch evaluate var
 
 ## Run the test suite
 .PHONY: test

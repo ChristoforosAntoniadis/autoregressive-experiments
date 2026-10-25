@@ -1,0 +1,155 @@
+"""
+Tests for the out-of-sample forecast evaluation (step U6) in
+autoregressive_experiments.forecast_evaluation.
+"""
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from autoregressive_experiments.forecast_evaluation import (
+    accuracy,
+    convergence_failures,
+    diebold_mariano,
+    drift_forecast,
+    interval_scores,
+    level_variances,
+    mase_scale,
+    naive_forecast,
+    pinball_loss,
+    rolling_forecasts,
+    seasonal_naive_forecast,
+    standardized_quantiles,
+)
+
+LEVELS = np.array([1.0, 2.0, 4.0, 7.0])  # monthly changes 1, 2, 3
+
+
+def test_baselines_on_a_hand_made_series():
+    """Naive repeats 7; drift adds the average change (7 - 1) / 3 = 2 per month; seasonal naive
+    with a 2-month period repeats the last two changes, 2 then 3."""
+    assert naive_forecast(LEVELS, 2)["forecast"].tolist() == [7.0, 7.0]
+    assert drift_forecast(LEVELS, 2)["forecast"].tolist() == [9.0, 11.0]
+    assert seasonal_naive_forecast(LEVELS, 2, period=2)["forecast"].tolist() == [9.0, 12.0]
+
+
+def test_naive_spread_is_a_random_walk():
+    """Changes 1, 2, 3 have standard deviation 1, so the spread is 1, then sqrt(2)."""
+    assert naive_forecast(LEVELS, 2)["sd_constant"] == pytest.approx([1.0, np.sqrt(2)])
+
+
+def test_level_variances_sum_the_error_weights():
+    """psi 1, 0.5 give summed weights 1, 1.5. With unit shocks: h = 1 has 1^2 = 1; h = 2 has
+    1.5^2 (the first shock, two months on) + 1^2 (the second) = 3.25. A random walk (psi 1, 0,
+    0) with shock variance 2 grows by 2 a month: 2, 4, 6."""
+    assert level_variances(np.array([1.0, 0.5]), np.ones(2)) == pytest.approx([1.0, 3.25])
+    assert level_variances(np.array([1.0, 0, 0]), np.full(3, 2.0)) == pytest.approx([2, 4, 6])
+
+
+def test_level_variances_weight_each_month_by_its_own_shock_variance():
+    """psi 1, 0.5 with shock variances 1 then 4: h = 2 has 1.5^2 * 1 + 1^2 * 4 = 6.25."""
+    assert level_variances(np.array([1.0, 0.5]), np.array([1.0, 4.0]))[1] == pytest.approx(6.25)
+
+
+def test_standardized_quantiles_for_normal_and_unit_variance_student_t():
+    """Normal 97.5%: 1.960. Student-t with 5 degrees of freedom: 2.571 rescaled by
+    sqrt(3 / 5) to unit variance, 1.991. Both are symmetric, with the median at 0."""
+    normal = standardized_quantiles(np.inf)
+    student = standardized_quantiles(5.0)
+
+    assert normal[-1] == pytest.approx(1.960, abs=1e-3)
+    assert student[-1] == pytest.approx(1.991, abs=1e-3)
+    assert normal[2] == student[2] == 0
+    assert normal[0] == pytest.approx(-normal[-1])
+
+
+def test_pinball_loss_by_hand():
+    """Actual 0 against quantile forecasts -2, -1, 0, 1, 2: the losses are 0.025 * 2, 0.1 * 1, 0,
+    0.1 * 1 and 0.025 * 2, so the mean over 5 quantiles is 0.3 / 5 = 0.06."""
+    quantiles = np.array([[-2.0, -1.0, 0.0, 1.0, 2.0]])
+    assert pinball_loss(np.array([0.0]), quantiles) == pytest.approx(0.06)
+
+
+def test_interval_scores_by_hand():
+    """Both forecasts have quantiles -2, -1, 0, 1, 2. Actual 0 is inside both intervals, actual
+    5 inside neither: coverage 0.5 each; widths 2 (80%) and 4 (95%); 0 < 2 counts as below the
+    97.5% quantile, 5 doesn't: 0.5; nothing is below the median."""
+    quantiles = np.tile([-2.0, -1.0, 0.0, 1.0, 2.0], (2, 1))
+
+    scores = interval_scores(np.array([0.0, 5.0]), quantiles)
+
+    assert scores["coverage_80"] == scores["coverage_95"] == 0.5
+    assert (scores["width_80"], scores["width_95"]) == (2.0, 4.0)
+    assert scores["below_97.5"] == 0.5
+    assert scores["below_50"] == 0.0
+
+
+def test_convergence_failures_list_each_failed_origin_once():
+    """Two horizons per origin; the 2020-02 refit failed, so it is listed once."""
+    origins = pd.to_datetime(["2020-01-31", "2020-01-31", "2020-02-29", "2020-02-29"])
+    forecasts = pd.DataFrame(
+        {"model": "m", "origin": origins, "converged": [True, True, False, False]}
+    )
+
+    assert convergence_failures(forecasts) == {"m": ["2020-02"]}
+
+
+def test_seasonal_naive_refuses_to_forecast_past_one_period():
+    with pytest.raises(ValueError, match="at most 2"):
+        seasonal_naive_forecast(LEVELS, 3, period=2)
+
+
+def test_mase_scale_is_the_mean_absolute_monthly_change():
+    """|1| + |2| + |3| over 3 months = 2."""
+    assert mase_scale(LEVELS) == pytest.approx(2.0)
+
+
+def test_accuracy_metrics_on_two_hand_computed_errors():
+    """Actual 2 and 4, forecast 1 and 7: errors 1 and -3. MAE (1 + 3) / 2 = 2; MSE (1 + 9) / 2
+    = 5; RMSE sqrt(5); MAPE 100 * (1/2 + 3/4) / 2 = 62.5; MASE with scale 0.5 is 2 / 0.5 = 4."""
+    scores = accuracy(np.array([2.0, 4.0]), np.array([1.0, 7.0]), scale=0.5)
+
+    assert scores == pytest.approx(
+        {"MAE": 2.0, "MSE": 5.0, "RMSE": np.sqrt(5.0), "MAPE": 62.5, "MASE": 4.0}
+    )
+
+
+def test_diebold_mariano_one_step_by_hand():
+    """Loss differences 1, 2, 3, 4: mean 2.5, variance (2.25 + 0.25 + 0.25 + 2.25) / 4 = 1.25,
+    so DM = 2.5 / sqrt(1.25 / 4) = 4.472. The small-sample factor sqrt((4 + 1 - 2) / 4) = 0.866
+    gives 3.873; positive, because the first model has the larger loss."""
+    statistic, p_value = diebold_mariano(np.array([1.0, 2, 3, 4]), np.zeros(4), horizon=1)
+
+    assert statistic == pytest.approx(3.873, abs=1e-3)
+    assert 0.02 < p_value < 0.05  # t with 3 degrees of freedom
+
+
+def test_diebold_mariano_two_step_falls_back_when_the_long_run_variance_turns_negative():
+    """Differences 1, 3, 1, 3: deviations -1, 1, -1, 1; lag-0 autocovariance 1, lag-1
+    autocovariance -3/4, so 1 + 2(-0.75) = -0.5 < 0 and the lag-0 variance 1 is used:
+    DM = 2 / sqrt(1 / 4) = 4, times sqrt((4 + 1 - 4 + 2 / 4) / 4) = 0.612, so 2.449."""
+    statistic, _ = diebold_mariano(np.array([1.0, 3, 1, 3]), np.zeros(4), horizon=2)
+
+    assert statistic == pytest.approx(2.449, abs=1e-3)
+
+
+def test_diebold_mariano_finds_no_difference_between_identical_losses():
+    losses = np.array([0.5, 1.0, 0.2])
+    assert diebold_mariano(losses, losses, horizon=1) == (0.0, 1.0)
+
+
+def test_rolling_forecasts_only_use_data_up_to_each_origin():
+    """Levels 0, 1, 2, ... make leakage visible: a naive forecast from origin k must be exactly
+    k, and its target k + h, so every error equals the horizon."""
+    levels = np.arange(20, dtype=float)
+    dates = pd.Series(pd.date_range("2020-01-31", periods=20, freq="ME"))
+
+    forecasts = rolling_forecasts(dates, levels, 10, 15, {"naive": naive_forecast})
+
+    origins = forecasts["origin"].map(lambda date: dates[dates == date].index[0])
+    assert (forecasts["forecast"] == origins).all()
+    assert (forecasts["actual"] - forecasts["forecast"] == forecasts["horizon"]).all()
+    # Origins 10 to 14; targets never pass index 15, so origin 14 forecasts 1 step only.
+    assert forecasts["origin"].nunique() == 5
+    assert forecasts["target"].max() == dates[15]
+    assert len(forecasts) == 5 + 4 + 3 + 2 + 1

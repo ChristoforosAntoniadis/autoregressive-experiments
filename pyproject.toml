@@ -17,6 +17,8 @@ dependencies = [
     "matplotlib==3.11.2",
     "statsmodels==0.15.0",
     "arch==8.0.0",
+    # Already installed with statsmodels; pinned because the Diebold-Mariano test imports it.
+    "scipy==1.18.1",
     "kagglehub==1.0.3",
     "loguru==0.7.3",
     "typer==0.27.3",

@@ -1,0 +1,301 @@
+Out-of-sample forecast evaluation (step U6): validation, then test
+Rolling origin, expanding window: each model is refitted at every monthly origin on all data up to it (data start 2002-12); each origin is one fold. Orders come from training, the selected model per series from validation (lowest one-month MASE), fixed before test. Test is run once, with all models.
+Point errors are on the levels: MAE, RMSE in trillions; MSE in trillions squared; MAPE in %; MASE = MAE / the training split's in-sample MAE of the one-month naive forecast (scales: fed_total_assets_T 0.0337, monetary_base_T 0.0402).
+DM vs naive: Diebold-Mariano test of equal expected loss against the naive forecast, absolute-error loss (matches MAE) and squared-error loss (matches MSE), with the Harvey-Leybourne-Newbold correction and h - 1 autocovariance lags. 'better' / 'worse' when significant at 5%, otherwise the p-value.
+Intervals: quantiles of each model's forecast distribution on the levels, with a constant shock variance or the GARCH variant chosen in step U5b (refitted at every origin); normal for constant variance, unit-variance Student-t for GARCH-t; naive uses random-walk quantiles. Pinball = mean quantile loss over the 5 quantiles.
+The COVID months (2020) are in validation and are kept, by the user's decision.
+
+===== VALIDATION: targets 2016-11 to 2021-06 =====
+
+fed_total_assets_T  (selected on validation: SARIMA(2,1,2))
+  1-month horizon (56 forecasts)
+    model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    
+    SARIMA(2,1,2)                    0.0912   0.051492   0.2269     1.62   2.707   p=0.56              p=0.50              
+    SARIMA(0,1,4)                    0.0923   0.050288   0.2243     1.63   2.741   p=0.72              p=0.56              
+    naive                            0.0970   0.064283   0.2535     1.70   2.881   -                   -                   
+    drift                            0.1002   0.061730   0.2485     1.83   2.976   p=0.27              p=0.07              
+    seasonal naive                   0.1376   0.117223   0.3424     2.23   4.086   p=0.14              p=0.13              
+    Lowest MAE: SARIMA(2,1,2) (beats naive by 6% in MAE)
+  3-month horizon (54 forecasts)
+    model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    
+    naive                            0.2734   0.387161   0.6222     4.57   8.118   -                   -                   
+    SARIMA(2,1,2)                    0.2785   0.358536   0.5988     4.84   8.268   p=0.79              p=0.36              
+    drift                            0.2844   0.367268   0.6060     5.00   8.445   p=0.54              p=0.25              
+    SARIMA(0,1,4)                    0.2891   0.391996   0.6261     5.02   8.582   p=0.53              p=0.87              
+    seasonal naive                   0.3746   0.678148   0.8235     5.90  11.123   p=0.34              p=0.25              
+    Lowest MAE: naive (nothing beats naive)
+  6-month horizon (51 forecasts)
+    model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    
+    naive                            0.5351   0.974150   0.9870     8.75  15.888   -                   -                   
+    drift                            0.5515   0.900005   0.9487     9.56  16.375   p=0.78              p=0.36              
+    SARIMA(2,1,2)                    0.5535   0.877086   0.9365     9.52  16.434   p=0.70              p=0.34              
+    SARIMA(0,1,4)                    0.5746   0.929760   0.9642     9.88  17.060   p=0.41              p=0.56              
+    seasonal naive                   0.6418   1.390952   1.1794    10.21  19.054   p=0.23              p=0.15              
+    Lowest MAE: naive (nothing beats naive)
+  12-month horizon (45 forecasts)
+    model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    
+    naive                            1.0767   2.768160   1.6638    16.73  31.966   -                   -                   
+    SARIMA(2,1,2)                    1.1205   2.466311   1.5704    18.70  33.268   p=0.81              p=0.53              
+    drift                            1.1340   2.505042   1.5827    18.96  33.669   p=0.74              p=0.55              
+    SARIMA(0,1,4)                    1.1466   2.497575   1.5804    19.11  34.041   p=0.67              p=0.55              
+    seasonal naive                   1.1929   3.302859   1.8174    18.36  35.418   p=0.26              p=0.18              
+    Lowest MAE: naive (nothing beats naive)
+
+monetary_base_T  (selected on validation: SARIMA(0,1,1))
+  1-month horizon (56 forecasts)
+    model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    
+    SARIMA(0,1,1)                    0.0866   0.021728   0.1474     2.06   2.153   p=0.10              p=0.15              
+    SARIMA(0,1,1)x(1,0,1,12)         0.0902   0.022927   0.1514     2.15   2.243   p=0.25              p=0.20              
+    SARIMA(1,1,1)x(1,0,1,12)         0.0930   0.024810   0.1575     2.20   2.314   p=0.39              p=0.25              
+    drift                            0.0989   0.030175   0.1737     2.30   2.459   p=0.93              p=0.12              
+    naive                            0.0991   0.031425   0.1773     2.29   2.465   -                   -                   
+    seasonal naive                   0.1164   0.044940   0.2120     2.65   2.894   p=0.25              p=0.21              
+    Lowest MAE: SARIMA(0,1,1) (beats naive by 13% in MAE)
+  3-month horizon (54 forecasts)
+    model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    
+    SARIMA(0,1,1)                    0.2312   0.149875   0.3871     5.18   5.751   p=0.83              p=0.20              
+    naive                            0.2345   0.164563   0.4057     5.13   5.831   -                   -                   
+    drift                            0.2383   0.153555   0.3919     5.35   5.927   p=0.76              p=0.23              
+    SARIMA(0,1,1)x(1,0,1,12)         0.2390   0.156943   0.3962     5.34   5.943   p=0.73              p=0.38              
+    SARIMA(1,1,1)x(1,0,1,12)         0.2477   0.171335   0.4139     5.53   6.161   p=0.46              p=0.63              
+    seasonal naive                   0.2823   0.208878   0.4570     6.37   7.021   p=0.15              p=0.16              
+    Lowest MAE: SARIMA(0,1,1) (beats naive by 1% in MAE)
+  6-month horizon (51 forecasts)
+    model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    
+    SARIMA(0,1,1)                    0.3926   0.324739   0.5699     8.84   9.763   p=0.91              p=0.31              
+    drift                            0.3947   0.332766   0.5769     8.92   9.817   p=0.97              p=0.37              
+    naive                            0.3962   0.369675   0.6080     8.69   9.854   -                   -                   
+    SARIMA(0,1,1)x(1,0,1,12)         0.4011   0.336556   0.5801     9.01   9.975   p=0.87              p=0.38              
+    SARIMA(1,1,1)x(1,0,1,12)         0.4119   0.352906   0.5941     9.23  10.244   p=0.56              p=0.54              
+    seasonal naive                   0.4505   0.419859   0.6480    10.39  11.204   p=0.42              p=0.59              
+    Lowest MAE: SARIMA(0,1,1) (beats naive by 1% in MAE)
+  12-month horizon (45 forecasts)
+    model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    
+    naive                            0.7183   0.948518   0.9739    15.59  17.863   -                   -                   
+    SARIMA(0,1,1)                    0.7188   0.818304   0.9046    16.41  17.876   p=1.00              p=0.61              
+    SARIMA(1,1,1)x(1,0,1,12)         0.7214   0.839561   0.9163    16.48  17.941   p=0.98              p=0.65              
+    SARIMA(0,1,1)x(1,0,1,12)         0.7281   0.837445   0.9151    16.58  18.108   p=0.94              p=0.64              
+    drift                            0.7332   0.846403   0.9200    16.70  18.234   p=0.90              p=0.66              
+    seasonal naive                   0.8125   1.158347   1.0763    18.10  20.206   worse p=0.001       p=0.05              
+    Lowest MAE: naive (nothing beats naive)
+
+  Forecast intervals (targets: 80% and 95% coverage; below_q should be close to q)
+  fed_total_assets_T
+    1-month horizon
+      model                         variance   cov 80% cov 95%  width 80%  width 95%  pinball   below 2.5 / 10 / 50 / 90 / 97.5%
+      SARIMA(2,1,2)                 garch         0.70    0.88     0.1978     0.3550   0.0250   0.05 / 0.16 / 0.73 / 0.86 / 0.93
+      SARIMA(0,1,4)                 garch         0.71    0.88     0.1987     0.3584   0.0253   0.07 / 0.16 / 0.75 / 0.88 / 0.95
+      SARIMA(0,1,4)                 constant      0.82    0.95     0.1920     0.2937   0.0319   0.02 / 0.05 / 0.75 / 0.88 / 0.96
+      SARIMA(2,1,2)                 constant      0.84    0.95     0.1922     0.2939   0.0320   0.02 / 0.04 / 0.73 / 0.88 / 0.96
+      naive                         constant      0.88    0.93     0.2343     0.3584   0.0339   0.00 / 0.00 / 0.48 / 0.88 / 0.93
+    3-month horizon
+      model                         variance   cov 80% cov 95%  width 80%  width 95%  pinball   below 2.5 / 10 / 50 / 90 / 97.5%
+      SARIMA(2,1,2)                 garch         0.52    0.87     0.5483     0.9838   0.0897   0.06 / 0.33 / 0.67 / 0.85 / 0.93
+      SARIMA(0,1,4)                 garch         0.52    0.87     0.5673     1.0244   0.0910   0.06 / 0.33 / 0.65 / 0.85 / 0.93
+      SARIMA(2,1,2)                 constant      0.83    0.91     0.4960     0.7585   0.0938   0.02 / 0.04 / 0.67 / 0.87 / 0.93
+      naive                         constant      0.80    0.89     0.3976     0.6081   0.0961   0.00 / 0.00 / 0.57 / 0.80 / 0.89
+      SARIMA(0,1,4)                 constant      0.85    0.91     0.5099     0.7798   0.0977   0.02 / 0.06 / 0.65 / 0.91 / 0.93
+    6-month horizon
+      model                         variance   cov 80% cov 95%  width 80%  width 95%  pinball   below 2.5 / 10 / 50 / 90 / 97.5%
+      SARIMA(2,1,2)                 constant      0.61    0.86     0.7072     1.0816   0.1823   0.00 / 0.22 / 0.63 / 0.82 / 0.86
+      SARIMA(0,1,4)                 constant      0.61    0.84     0.7405     1.1325   0.1879   0.02 / 0.24 / 0.63 / 0.84 / 0.86
+      SARIMA(2,1,2)                 garch         0.24    0.69     0.8302     1.4892   0.1909   0.16 / 0.53 / 0.63 / 0.76 / 0.84
+      SARIMA(0,1,4)                 garch         0.25    0.71     0.8802     1.5919   0.1935   0.18 / 0.55 / 0.63 / 0.80 / 0.88
+      naive                         constant      0.49    0.78     0.5431     0.8305   0.1952   0.00 / 0.18 / 0.51 / 0.67 / 0.78
+    12-month horizon
+      model                         variance   cov 80% cov 95%  width 80%  width 95%  pinball   below 2.5 / 10 / 50 / 90 / 97.5%
+      SARIMA(0,1,4)                 constant      0.33    0.56     0.9527     1.4571   0.4044   0.16 / 0.36 / 0.64 / 0.69 / 0.71
+      SARIMA(2,1,2)                 constant      0.36    0.58     0.9231     1.4118   0.4051   0.13 / 0.33 / 0.64 / 0.69 / 0.71
+      naive                         constant      0.40    0.64     0.7013     1.0726   0.4328   0.02 / 0.24 / 0.56 / 0.64 / 0.67
+      SARIMA(2,1,2)                 garch         0.18    0.31     1.1513     2.0665   0.4339   0.42 / 0.56 / 0.64 / 0.73 / 0.73
+      SARIMA(0,1,4)                 garch         0.18    0.31     1.2220     2.2144   0.4383   0.42 / 0.56 / 0.64 / 0.73 / 0.73
+
+  monetary_base_T
+    1-month horizon
+      model                         variance   cov 80% cov 95%  width 80%  width 95%  pinball   below 2.5 / 10 / 50 / 90 / 97.5%
+      SARIMA(0,1,1)                 garch         0.80    0.91     0.2691     0.4248   0.0227   0.02 / 0.09 / 0.52 / 0.89 / 0.93
+      SARIMA(0,1,1)x(1,0,1,12)      garch         0.79    0.89     0.2658     0.4196   0.0235   0.04 / 0.11 / 0.54 / 0.89 / 0.93
+      SARIMA(1,1,1)x(1,0,1,12)      garch         0.80    0.89     0.2636     0.4171   0.0241   0.04 / 0.09 / 0.54 / 0.89 / 0.93
+      SARIMA(0,1,1)                 constant      0.66    0.84     0.1706     0.2609   0.0248   0.05 / 0.12 / 0.52 / 0.79 / 0.89
+      SARIMA(0,1,1)x(1,0,1,12)      constant      0.61    0.84     0.1693     0.2590   0.0261   0.05 / 0.16 / 0.54 / 0.77 / 0.89
+      SARIMA(1,1,1)x(1,0,1,12)      constant      0.62    0.84     0.1691     0.2586   0.0276   0.05 / 0.14 / 0.54 / 0.77 / 0.89
+      naive                         constant      0.73    0.88     0.1908     0.2917   0.0287   0.02 / 0.07 / 0.48 / 0.80 / 0.89
+    3-month horizon
+      model                         variance   cov 80% cov 95%  width 80%  width 95%  pinball   below 2.5 / 10 / 50 / 90 / 97.5%
+      SARIMA(0,1,1)                 garch         0.78    0.91     0.6311     0.9956   0.0667   0.00 / 0.06 / 0.61 / 0.83 / 0.91
+      SARIMA(0,1,1)                 constant      0.70    0.83     0.3917     0.5990   0.0687   0.02 / 0.09 / 0.61 / 0.80 / 0.85
+      SARIMA(0,1,1)x(1,0,1,12)      garch         0.78    0.91     0.6255     0.9868   0.0687   0.00 / 0.06 / 0.63 / 0.83 / 0.91
+      SARIMA(1,1,1)x(1,0,1,12)      garch         0.78    0.89     0.6275     0.9937   0.0704   0.00 / 0.06 / 0.63 / 0.83 / 0.89
+      SARIMA(0,1,1)x(1,0,1,12)      constant      0.67    0.83     0.3892     0.5953   0.0718   0.02 / 0.11 / 0.63 / 0.78 / 0.85
+      naive                         constant      0.63    0.78     0.3255     0.4979   0.0744   0.02 / 0.09 / 0.52 / 0.72 / 0.80
+      SARIMA(1,1,1)x(1,0,1,12)      constant      0.65    0.83     0.3877     0.5930   0.0754   0.02 / 0.13 / 0.63 / 0.78 / 0.85
+    6-month horizon
+      model                         variance   cov 80% cov 95%  width 80%  width 95%  pinball   below 2.5 / 10 / 50 / 90 / 97.5%
+      SARIMA(0,1,1)                 garch         0.67    0.88     0.9262     1.4574   0.1123   0.00 / 0.16 / 0.57 / 0.82 / 0.88
+      SARIMA(0,1,1)x(1,0,1,12)      garch         0.67    0.86     0.9191     1.4463   0.1142   0.00 / 0.16 / 0.55 / 0.82 / 0.86
+      SARIMA(1,1,1)x(1,0,1,12)      garch         0.63    0.88     0.9272     1.4655   0.1165   0.00 / 0.18 / 0.55 / 0.80 / 0.88
+      SARIMA(0,1,1)                 constant      0.51    0.78     0.5706     0.8726   0.1174   0.00 / 0.25 / 0.57 / 0.76 / 0.78
+      SARIMA(0,1,1)x(1,0,1,12)      constant      0.51    0.78     0.5670     0.8671   0.1208   0.00 / 0.25 / 0.55 / 0.76 / 0.78
+      SARIMA(1,1,1)x(1,0,1,12)      constant      0.47    0.76     0.5618     0.8592   0.1251   0.02 / 0.29 / 0.55 / 0.76 / 0.78
+      naive                         constant      0.55    0.75     0.4499     0.6880   0.1328   0.00 / 0.16 / 0.43 / 0.71 / 0.75
+    12-month horizon
+      model                         variance   cov 80% cov 95%  width 80%  width 95%  pinball   below 2.5 / 10 / 50 / 90 / 97.5%
+      SARIMA(0,1,1)                 garch         0.42    0.71     1.1890     1.8522   0.2140   0.02 / 0.31 / 0.58 / 0.73 / 0.73
+      SARIMA(0,1,1)x(1,0,1,12)      garch         0.42    0.71     1.1718     1.8249   0.2161   0.02 / 0.31 / 0.62 / 0.73 / 0.73
+      SARIMA(1,1,1)x(1,0,1,12)      garch         0.40    0.69     1.1638     1.8187   0.2213   0.04 / 0.33 / 0.62 / 0.73 / 0.73
+      SARIMA(0,1,1)                 constant      0.33    0.56     0.7817     1.1955   0.2261   0.18 / 0.36 / 0.58 / 0.69 / 0.73
+      SARIMA(0,1,1)x(1,0,1,12)      constant      0.33    0.53     0.7764     1.1875   0.2295   0.18 / 0.36 / 0.62 / 0.69 / 0.71
+      SARIMA(1,1,1)x(1,0,1,12)      constant      0.33    0.53     0.7563     1.1567   0.2337   0.20 / 0.36 / 0.62 / 0.69 / 0.73
+      naive                         constant      0.31    0.58     0.6019     0.9205   0.2553   0.07 / 0.31 / 0.47 / 0.62 / 0.64
+
+  Refits that failed to converge: SARIMA(0,1,1): 2019-06
+  (1 failed refits in total for this split)
+
+===== TEST: targets 2021-07 to 2026-02 =====
+
+fed_total_assets_T  (selected on validation: SARIMA(2,1,2))
+  1-month horizon (56 forecasts)
+    model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    
+    SARIMA(0,1,4)                    0.0610   0.008975   0.0947     0.78   1.812   p=0.14              p=0.80              
+    SARIMA(2,1,2)                    0.0614   0.008969   0.0947     0.78   1.822   p=0.14              p=0.81              
+    naive                            0.0727   0.008158   0.0903     0.92   2.159   -                   -                   
+    drift                            0.0883   0.010319   0.1016     1.13   2.623   worse p=0.000       worse p=0.004       
+    seasonal naive                   0.0911   0.014830   0.1218     1.13   2.703   p=0.09              p=0.05              
+    Lowest MAE: SARIMA(0,1,4) (beats naive by 16% in MAE)
+  3-month horizon (54 forecasts)
+    model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    
+    naive                            0.1819   0.044539   0.2110     2.32   5.401   -                   -                   
+    SARIMA(2,1,2)                    0.1875   0.051151   0.2262     2.41   5.565   p=0.75              p=0.55              
+    SARIMA(0,1,4)                    0.1897   0.052772   0.2297     2.44   5.633   p=0.67              p=0.47              
+    seasonal naive                   0.2115   0.070977   0.2664     2.66   6.278   p=0.60              p=0.39              
+    drift                            0.2285   0.066329   0.2575     2.96   6.785   worse p=0.020       worse p=0.040       
+    Lowest MAE: naive (nothing beats naive)
+  6-month horizon (51 forecasts)
+    model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    
+    naive                            0.3364   0.149786   0.3870     4.36   9.988   -                   -                   
+    seasonal naive                   0.4014   0.235978   0.4858     5.07  11.918   p=0.68              p=0.60              
+    SARIMA(2,1,2)                    0.4111   0.212475   0.4609     5.39  12.205   p=0.12              p=0.15              
+    SARIMA(0,1,4)                    0.4161   0.219100   0.4681     5.46  12.353   p=0.10              p=0.14              
+    drift                            0.4569   0.251889   0.5019     6.00  13.565   worse p=0.022       p=0.05              
+    Lowest MAE: naive (nothing beats naive)
+  12-month horizon (45 forecasts)
+    model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    
+    naive                            0.6457   0.500906   0.7077     8.71  19.171   -                   -                   
+    seasonal naive                   0.7476   0.821925   0.9066     9.51  22.197   p=0.82              p=0.66              
+    SARIMA(2,1,2)                    0.8852   0.923350   0.9609    11.98  26.283   worse p=0.001       worse p=0.016       
+    SARIMA(0,1,4)                    0.8938   0.945373   0.9723    12.10  26.538   worse p=0.001       worse p=0.021       
+    drift                            0.9335   1.018756   1.0093    12.66  27.716   worse p=0.001       worse p=0.017       
+    Lowest MAE: naive (nothing beats naive)
+
+monetary_base_T  (selected on validation: SARIMA(0,1,1))
+  1-month horizon (56 forecasts)
+    model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    
+    SARIMA(0,1,1)x(1,0,1,12)         0.0729   0.009925   0.0996     1.27   1.813   p=0.55              p=0.40              
+    SARIMA(1,1,1)x(1,0,1,12)         0.0740   0.010143   0.1007     1.29   1.841   p=0.68              p=0.51              
+    SARIMA(0,1,1)                    0.0742   0.010140   0.1007     1.30   1.845   p=0.70              p=0.50              
+    naive                            0.0766   0.011173   0.1057     1.34   1.906   -                   -                   
+    drift                            0.0788   0.012094   0.1100     1.38   1.960   p=0.41              p=0.14              
+    seasonal naive                   0.1201   0.025196   0.1587     2.09   2.987   worse p=0.001       worse p=0.004       
+    Lowest MAE: SARIMA(0,1,1)x(1,0,1,12) (beats naive by 5% in MAE)
+  3-month horizon (54 forecasts)
+    model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    
+    naive                            0.1506   0.040356   0.2009     2.65   3.745   -                   -                   
+    SARIMA(0,1,1)                    0.1640   0.048206   0.2196     2.90   4.077   p=0.18              p=0.08              
+    SARIMA(0,1,1)x(1,0,1,12)         0.1689   0.050132   0.2239     2.98   4.201   p=0.06              p=0.07              
+    SARIMA(1,1,1)x(1,0,1,12)         0.1690   0.050138   0.2239     2.99   4.203   worse p=0.045       worse p=0.048       
+    drift                            0.1693   0.050055   0.2237     3.00   4.211   p=0.16              p=0.15              
+    seasonal naive                   0.3050   0.154773   0.3934     5.35   7.584   worse p=0.002       p=0.05              
+    Lowest MAE: naive (nothing beats naive)
+  6-month horizon (51 forecasts)
+    model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    
+    naive                            0.2547   0.101732   0.3190     4.55   6.334   -                   -                   
+    SARIMA(0,1,1)                    0.2933   0.141893   0.3767     5.25   7.295   p=0.16              p=0.11              
+    drift                            0.2949   0.146586   0.3829     5.29   7.334   p=0.26              p=0.17              
+    SARIMA(1,1,1)x(1,0,1,12)         0.3077   0.149479   0.3866     5.50   7.652   p=0.06              p=0.11              
+    SARIMA(0,1,1)x(1,0,1,12)         0.3084   0.150767   0.3883     5.51   7.670   p=0.07              p=0.12              
+    seasonal naive                   0.5369   0.493688   0.7026     9.52  13.352   worse p=0.037       p=0.12              
+    Lowest MAE: naive (nothing beats naive)
+  12-month horizon (45 forecasts)
+    model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    
+    naive                            0.3140   0.184462   0.4295     5.68   7.809   -                   -                   
+    SARIMA(0,1,1)                    0.4405   0.335763   0.5795     8.01  10.954   p=0.17              p=0.25              
+    drift                            0.4517   0.342711   0.5854     8.21  11.233   p=0.14              p=0.25              
+    SARIMA(1,1,1)x(1,0,1,12)         0.4534   0.356046   0.5967     8.23  11.275   p=0.09              p=0.23              
+    SARIMA(0,1,1)x(1,0,1,12)         0.4556   0.360115   0.6001     8.27  11.330   p=0.10              p=0.24              
+    seasonal naive                   0.7962   1.190268   1.0910    14.35  19.801   p=0.07              p=0.20              
+    Lowest MAE: naive (nothing beats naive)
+
+  Forecast intervals (targets: 80% and 95% coverage; below_q should be close to q)
+  fed_total_assets_T
+    1-month horizon
+      model                         variance   cov 80% cov 95%  width 80%  width 95%  pinball   below 2.5 / 10 / 50 / 90 / 97.5%
+      SARIMA(0,1,4)                 garch         0.68    0.95     0.1668     0.2974   0.0145   0.02 / 0.25 / 0.71 / 0.93 / 0.96
+      SARIMA(2,1,2)                 garch         0.68    0.95     0.1655     0.2957   0.0146   0.02 / 0.25 / 0.73 / 0.93 / 0.96
+      SARIMA(0,1,4)                 constant      0.95    0.96     0.2756     0.4215   0.0169   0.02 / 0.04 / 0.71 / 0.98 / 0.98
+      SARIMA(2,1,2)                 constant      0.95    0.96     0.2763     0.4225   0.0170   0.02 / 0.04 / 0.73 / 0.98 / 0.98
+      naive                         constant      0.98    0.98     0.3536     0.5408   0.0178   0.00 / 0.00 / 0.75 / 0.98 / 0.98
+    3-month horizon
+      model                         variance   cov 80% cov 95%  width 80%  width 95%  pinball   below 2.5 / 10 / 50 / 90 / 97.5%
+      naive                         constant      0.85    1.00     0.6130     0.9375   0.0361   0.00 / 0.09 / 0.74 / 0.94 / 1.00
+      SARIMA(2,1,2)                 garch         0.57    0.94     0.4705     0.8408   0.0375   0.06 / 0.37 / 0.81 / 0.94 / 1.00
+      SARIMA(0,1,4)                 garch         0.56    0.94     0.4770     0.8508   0.0378   0.06 / 0.39 / 0.81 / 0.94 / 1.00
+      SARIMA(2,1,2)                 constant      0.98    0.98     0.7836     1.1984   0.0427   0.02 / 0.02 / 0.81 / 1.00 / 1.00
+      SARIMA(0,1,4)                 constant      0.96    0.98     0.7859     1.2019   0.0433   0.02 / 0.04 / 0.81 / 1.00 / 1.00
+    6-month horizon
+      model                         variance   cov 80% cov 95%  width 80%  width 95%  pinball   below 2.5 / 10 / 50 / 90 / 97.5%
+      naive                         constant      0.67    0.96     0.8681     1.3276   0.0659   0.02 / 0.25 / 0.82 / 0.92 / 0.98
+      SARIMA(2,1,2)                 constant      0.86    0.98     1.2223     1.8694   0.0797   0.02 / 0.14 / 0.90 / 1.00 / 1.00
+      SARIMA(0,1,4)                 constant      0.86    0.98     1.2272     1.8769   0.0810   0.02 / 0.14 / 0.90 / 1.00 / 1.00
+      SARIMA(2,1,2)                 garch         0.43    0.86     0.7777     1.3900   0.0839   0.14 / 0.53 / 0.90 / 0.96 / 1.00
+      SARIMA(0,1,4)                 garch         0.45    0.86     0.7879     1.4053   0.0842   0.14 / 0.51 / 0.90 / 0.96 / 1.00
+    12-month horizon
+      model                         variance   cov 80% cov 95%  width 80%  width 95%  pinball   below 2.5 / 10 / 50 / 90 / 97.5%
+      naive                         constant      0.47    0.87     1.2304     1.8817   0.1307   0.13 / 0.49 / 0.89 / 0.96 / 1.00
+      SARIMA(2,1,2)                 constant      0.44    0.98     1.7875     2.7338   0.1700   0.02 / 0.56 / 0.93 / 1.00 / 1.00
+      SARIMA(0,1,4)                 constant      0.44    0.91     1.7983     2.7503   0.1730   0.09 / 0.56 / 0.93 / 1.00 / 1.00
+      SARIMA(2,1,2)                 garch         0.22    0.60     1.2630     2.2578   0.2056   0.40 / 0.78 / 0.93 / 1.00 / 1.00
+      SARIMA(0,1,4)                 garch         0.22    0.62     1.2826     2.2880   0.2060   0.38 / 0.78 / 0.93 / 1.00 / 1.00
+
+  monetary_base_T
+    1-month horizon
+      model                         variance   cov 80% cov 95%  width 80%  width 95%  pinball   below 2.5 / 10 / 50 / 90 / 97.5%
+      SARIMA(0,1,1)x(1,0,1,12)      constant      0.82    0.91     0.2305     0.3525   0.0177   0.07 / 0.12 / 0.55 / 0.95 / 0.98
+      SARIMA(1,1,1)x(1,0,1,12)      constant      0.80    0.91     0.2302     0.3521   0.0178   0.07 / 0.14 / 0.55 / 0.95 / 0.98
+      SARIMA(0,1,1)                 constant      0.80    0.91     0.2316     0.3542   0.0179   0.07 / 0.14 / 0.57 / 0.95 / 0.98
+      SARIMA(0,1,1)x(1,0,1,12)      garch         0.84    0.91     0.2387     0.3946   0.0181   0.05 / 0.12 / 0.55 / 0.96 / 0.96
+      SARIMA(1,1,1)x(1,0,1,12)      garch         0.84    0.91     0.2397     0.3972   0.0182   0.05 / 0.12 / 0.55 / 0.96 / 0.96
+      SARIMA(0,1,1)                 garch         0.80    0.91     0.2467     0.4066   0.0184   0.05 / 0.14 / 0.57 / 0.95 / 0.96
+      naive                         constant      0.86    0.91     0.2725     0.4167   0.0189   0.07 / 0.09 / 0.52 / 0.95 / 0.98
+    3-month horizon
+      model                         variance   cov 80% cov 95%  width 80%  width 95%  pinball   below 2.5 / 10 / 50 / 90 / 97.5%
+      naive                         constant      0.76    0.89     0.4721     0.7220   0.0349   0.09 / 0.15 / 0.57 / 0.91 / 0.98
+      SARIMA(0,1,1)                 garch         0.81    0.96     0.6139     1.0116   0.0384   0.04 / 0.17 / 0.69 / 0.98 / 1.00
+      SARIMA(0,1,1)                 constant      0.85    0.94     0.5704     0.8723   0.0389   0.06 / 0.13 / 0.69 / 0.98 / 1.00
+      SARIMA(1,1,1)x(1,0,1,12)      garch         0.83    0.96     0.6100     1.0105   0.0389   0.04 / 0.15 / 0.63 / 0.98 / 1.00
+      SARIMA(0,1,1)x(1,0,1,12)      garch         0.81    0.96     0.5921     0.9785   0.0390   0.04 / 0.17 / 0.65 / 0.98 / 1.00
+      SARIMA(0,1,1)x(1,0,1,12)      constant      0.81    0.94     0.5655     0.8649   0.0396   0.06 / 0.17 / 0.65 / 0.98 / 1.00
+      SARIMA(1,1,1)x(1,0,1,12)      constant      0.83    0.94     0.5787     0.8850   0.0396   0.06 / 0.15 / 0.63 / 0.98 / 1.00
+    6-month horizon
+      model                         variance   cov 80% cov 95%  width 80%  width 95%  pinball   below 2.5 / 10 / 50 / 90 / 97.5%
+      naive                         constant      0.76    0.90     0.6679     1.0215   0.0570   0.10 / 0.22 / 0.61 / 0.98 / 1.00
+      SARIMA(0,1,1)                 garch         0.80    0.96     0.9328     1.5361   0.0664   0.04 / 0.20 / 0.67 / 1.00 / 1.00
+      SARIMA(0,1,1)                 constant      0.78    0.92     0.8560     1.3092   0.0668   0.08 / 0.22 / 0.67 / 1.00 / 1.00
+      SARIMA(1,1,1)x(1,0,1,12)      garch         0.82    0.96     0.9415     1.5582   0.0680   0.04 / 0.18 / 0.65 / 1.00 / 1.00
+      SARIMA(0,1,1)x(1,0,1,12)      garch         0.78    0.96     0.9024     1.4900   0.0682   0.04 / 0.22 / 0.65 / 1.00 / 1.00
+      SARIMA(1,1,1)x(1,0,1,12)      constant      0.80    0.92     0.8777     1.3423   0.0686   0.08 / 0.20 / 0.65 / 1.00 / 1.00
+      SARIMA(0,1,1)x(1,0,1,12)      constant      0.76    0.92     0.8485     1.2977   0.0696   0.08 / 0.24 / 0.65 / 1.00 / 1.00
+    12-month horizon
+      model                         variance   cov 80% cov 95%  width 80%  width 95%  pinball   below 2.5 / 10 / 50 / 90 / 97.5%
+      naive                         constant      0.73    0.84     0.9461     1.4469   0.0780   0.16 / 0.22 / 0.62 / 0.96 / 1.00
+      SARIMA(0,1,1)                 garch         0.80    0.91     1.4080     2.3168   0.1041   0.09 / 0.20 / 0.84 / 1.00 / 1.00
+      SARIMA(1,1,1)x(1,0,1,12)      garch         0.80    0.91     1.4308     2.3654   0.1060   0.09 / 0.20 / 0.84 / 1.00 / 1.00
+      SARIMA(0,1,1)                 constant      0.78    0.84     1.2449     1.9039   0.1074   0.16 / 0.22 / 0.84 / 1.00 / 1.00
+      SARIMA(0,1,1)x(1,0,1,12)      garch         0.78    0.89     1.3597     2.2421   0.1085   0.11 / 0.22 / 0.84 / 1.00 / 1.00
+      SARIMA(1,1,1)x(1,0,1,12)      constant      0.78    0.84     1.2854     1.9658   0.1089   0.16 / 0.22 / 0.84 / 1.00 / 1.00
+      SARIMA(0,1,1)x(1,0,1,12)      constant      0.78    0.84     1.2338     1.8869   0.1122   0.16 / 0.22 / 0.84 / 1.00 / 1.00
+
+  Refits that failed to converge: SARIMA(2,1,2): 2022-04; SARIMA(0,1,1): 2023-01; SARIMA(1,1,1)x(1,0,1,12): 2025-04
+  (3 failed refits in total for this split)
+
+All numbers: reports/forecast_metrics.csv, reports/forecast_intervals.csv
+Figures: reports/figures/forecast_evaluation.png, reports/figures/forecast_intervals.png

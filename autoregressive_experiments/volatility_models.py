@@ -144,6 +144,23 @@ def variance_candidates(residuals: np.ndarray) -> dict[str, dict]:
     return candidates
 
 
+def garch_variance_path(
+    residuals: np.ndarray, variant: str, steps: int
+) -> tuple[np.ndarray, float]:
+    """Forecast shock variances for the next steps months (trillions squared) from the chosen
+    GARCH variant, and its Student-t degrees of freedom (inf for normal errors)."""
+    values = np.asarray(residuals, dtype=float)
+    regime_scale = 1.0
+    if variant == GARCH_T_BREAK:
+        scales = regime_scales(values, variance_break(values))
+        values, regime_scale = values / scales, scales[-1]
+    spec = VARIANCE_MODELS[GARCH_T if variant == GARCH_T_BREAK else variant]
+    fit = arch_model(values, mean="Zero", rescale=True, **spec).fit(disp="off")
+    variances = fit.forecast(horizon=steps, reindex=False).variance.to_numpy()[-1]
+    # Back from arch's rescaled units, and onto the latest (post-break) regime's scale.
+    return variances / fit.scale**2 * regime_scale**2, float(fit.params.get("nu", np.inf))
+
+
 def half_life(persistence: float) -> float:
     """Months for a volatility shock to halve: persistence ** h = 0.5."""
     return float(np.log(0.5) / np.log(persistence)) if 0 < persistence < 1 else np.inf
