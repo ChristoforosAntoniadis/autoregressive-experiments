@@ -104,7 +104,8 @@ def test_split_boundaries_reject_too_few_months() -> None:
 
 
 def test_first_difference_sorts_by_date_and_drops_the_first_row() -> None:
-    """Rows given out of order are sorted first; each value becomes the change from the month before."""
+    """Rows given out of order are sorted first; each value becomes the change from the month
+    before."""
     # Sorted by date, total assets is 1, 4, 9 (changes 3, 5) and the base 2.0, 2.5, 2.0
     # (changes 0.5, -0.5).
     dataframe = pd.DataFrame(

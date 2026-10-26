@@ -48,9 +48,10 @@ src = ["autoregressive_experiments"]
 include = ["pyproject.toml", "autoregressive_experiments/**/*.py", "tests/**/*.py", "tools/**/*.py"]
 
 [tool.ruff.lint]
-# Ruff's default rules (pyflakes and pycodestyle errors) plus import sorting,
-# as in the Cookiecutter Data Science template.
-extend-select = ["I"]
+# Ruff's default rules (pyflakes and pycodestyle errors) plus import sorting, as in the
+# Cookiecutter Data Science template, plus E501 so the 99-character limit also holds for strings
+# and comments, which the formatter doesn't wrap.
+extend-select = ["I", "E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["autoregressive_experiments"]

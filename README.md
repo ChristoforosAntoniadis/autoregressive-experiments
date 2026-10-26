@@ -28,13 +28,13 @@ make plots                        # the cleaned series -> reports/figures/fed_ba
 make diagnostics                  # ADF / KPSS, ACF / PACF and SARIMA information criteria -> reports/
 make residuals                    # Ljung-Box / Breusch-Godfrey on the selected models -> reports/
 make volatility                   # ARCH-LM and a variance-break check on those models -> reports/
-make garch                        # GARCH(1,1) vs constant variance on those models -> reports/
-make asymmetric-garch             # EGARCH and GJR-GARCH vs that GARCH -> reports/
-make evaluate                     # rolling-origin forecasts (SARIMA, VAR, VECM) on validation and test (~4-6 min)
+make garch                        # GARCH(1,1) vs constant variance on those models, bootstrap checks (~3 min) -> reports/
+make asymmetric-garch             # EGARCH and GJR-GARCH vs that GARCH, bootstrap checks (~12 min) -> reports/
+make evaluate                     # rolling-origin forecasts of every model on validation and test (~5 min)
 make var                          # VAR lag order and Johansen cointegration test -> reports/
 make var-checks                   # fit VAR / VECM candidates; stability and Portmanteau checks -> reports/
 make var-analysis                 # Granger causality, impulse responses, variance decomposition -> reports/
-make all                          # every step above, in order
+make all                          # every step above, in order (~18 min)
 
 make test                         # unit tests
 make lint                         # check style and lint with ruff (changes nothing)

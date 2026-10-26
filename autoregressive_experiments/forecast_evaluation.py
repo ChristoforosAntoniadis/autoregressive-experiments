@@ -1282,7 +1282,8 @@ def interval_report(intervals: pd.DataFrame) -> list[str]:
             lines.append(f"    {horizon}-month horizon")
             lines.append(
                 f"      {'model':<30}{'variance':<10}{'cov 80%':>8}{'cov 95%':>8}"
-                f"{'width 80%':>11}{'width 95%':>11}{'pinball':>9}   below 2.5 / 10 / 50 / 90 / 97.5%"
+                f"{'width 80%':>11}{'width 95%':>11}{'pinball':>9}"
+                "   below 2.5 / 10 / 50 / 90 / 97.5%"
             )
             # Plain dictionaries: itertuples would rename the "below_2.5" columns.
             for row in table.to_dict("records"):

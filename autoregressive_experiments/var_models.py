@@ -316,7 +316,8 @@ def coefficient_lines(candidate: dict[str, Any]) -> list[str]:
     ):
         lines.append(f"      {column:<22} {alpha:+.4f} (p={p_value:.3f})")
     lines.append(
-        "    Short-run terms (gamma) and constants are in the fitted model; the forecasts use them."
+        "    Short-run terms (gamma) and constants are in the fitted model; "
+        "the forecasts use them."
     )
     return lines
 
@@ -365,7 +366,8 @@ def models_report(results: dict[str, dict[str, Any]], period: str) -> str:
         lines.extend(coefficient_lines(result))
         moduli = ", ".join(f"{value:.4f}" for value in np.abs(result["roots"]))
         lines.append(
-            f"  V5 inverse-root moduli: {moduli} -> {'stable' if result['stable'] else 'NOT stable'}"
+            f"  V5 inverse-root moduli: {moduli} -> "
+            f"{'stable' if result['stable'] else 'NOT stable'}"
         )
         portmanteau = ", ".join(
             f"lag {lag} p={result['portmanteau'][lag]:.4f}"
@@ -534,7 +536,8 @@ def main(
         pd.read_csv(differences_path, parse_dates=[DATE_COLUMN]), boundaries
     )["train"]
     period = (
-        f"levels {train_levels[DATE_COLUMN].min():%Y-%m} to {train_levels[DATE_COLUMN].max():%Y-%m}"
+        f"levels {train_levels[DATE_COLUMN].min():%Y-%m} to "
+        f"{train_levels[DATE_COLUMN].max():%Y-%m}"
         f" ({len(train_levels)} months)"
     )
 

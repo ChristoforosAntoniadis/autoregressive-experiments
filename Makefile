@@ -76,7 +76,7 @@ asymmetric-garch: export MPLBACKEND = Agg
 asymmetric-garch:
 	$(PYTHON_INTERPRETER) -m $(PACKAGE).asymmetric_garch
 
-## Score rolling-origin forecasts on validation: MAE, MSE, RMSE, MAPE, MASE (no plot windows)
+## Score every model's rolling-origin forecasts on validation and test (no plot windows)
 .PHONY: evaluate
 evaluate: export MPLBACKEND = Agg
 evaluate:
@@ -100,7 +100,7 @@ var-analysis: export MPLBACKEND = Agg
 var-analysis:
 	$(PYTHON_INTERPRETER) -m $(PACKAGE).var_analysis
 
-## Run the whole pipeline: features, plots, univariate steps, evaluation, VAR steps
+## Run the whole pipeline: features, plots, univariate steps, VAR steps, evaluation
 .PHONY: all
 all: features plots diagnostics residuals volatility garch asymmetric-garch var var-checks var-analysis evaluate
 

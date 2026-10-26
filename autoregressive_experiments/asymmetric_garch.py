@@ -8,8 +8,8 @@ GJR-GARCH(1,1), both with Student-t errors, are fitted plain and break-adjusted 
 divided by its own standard deviation, as in U5b); BIC picks one version per family. Likelihoods
 are in original units, so the BIC compares directly with U5b's chosen variant.
 
-- GJR: variance_t = omega + (alpha + gamma * [e_(t-1) < 0]) e_(t-1)^2 + beta variance_(t-1); gamma > 0
-  means falls raise volatility more. Persistence alpha + gamma / 2 + beta.
+- GJR: variance_t = omega + (alpha + gamma * [e_(t-1) < 0]) e_(t-1)^2 + beta variance_(t-1);
+  gamma > 0 means falls raise volatility more. Persistence alpha + gamma / 2 + beta.
 - EGARCH: log variance_t = omega + alpha (|z| - E|z|) + gamma z_(t-1) + beta log variance_(t-1);
   gamma < 0 means falls raise volatility more. Persistence beta.
 
@@ -99,9 +99,9 @@ def persistence(family: str, params: pd.Series) -> float:
     -----
     Why the formulas differ: EGARCH models log variance, whose dependence on its own past is
     beta alone; alpha and gamma act on the standardized shock z, which has a fixed
-    distribution, so they add a fresh impulse each month without feeding back. In GJR, the expected effect of last month's squared shock on this month's
-    variance is alpha plus gamma times the probability of a fall, which is 1/2 for a
-    symmetric shock distribution.
+    distribution, so they add a fresh impulse each month without feeding back. In GJR, the
+    expected effect of last month's squared shock on this month's variance is alpha plus
+    gamma times the probability of a fall, which is 1/2 for a symmetric shock distribution.
     """
     if family == EGARCH_T:
         return float(params["beta[1]"])
@@ -175,7 +175,8 @@ def asymmetric_check(
             name: information_criteria(c["loglikelihood"], c["parameters"], count)[1]
             for name, c in versions.items()
         }
-        # mypy can't match dict.get's overloads to min's key type; at runtime it returns the BIC.
+        # mypy can't match the overloads of dict.get to min's key type; at runtime it returns
+        # the BIC.
         chosen = min(bics, key=bics.get)  # type: ignore[arg-type]
         fit = versions[chosen]["fit"]
         delta = bics[chosen] - reference_bic

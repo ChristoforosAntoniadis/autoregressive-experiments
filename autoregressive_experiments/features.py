@@ -3,9 +3,10 @@ Clean the raw Fed balance-sheet data and first-difference it for modeling.
 
 Input: ``data/raw/fed_balance_sheet.csv``.
 
-Output: ``data/interim/fed_balance_sheet_cleaned.csv`` (complete rows;
-duplicates are reported, not removed, and the raw data has none) and ``data/processed/fed_balance_sheet_first_difference.csv`` (month-over-month
-changes of both series).
+Output: ``data/interim/fed_balance_sheet_cleaned.csv`` (complete rows; duplicates are
+reported, not removed, and the raw data has none) and
+``data/processed/fed_balance_sheet_first_difference.csv`` (month-over-month changes of both
+series).
 
 Also provides the chronological 60 / 20 / 20 train / validation / test split that every
 analysis and model uses. Its boundaries are dates taken from the cleaned levels, so the

@@ -295,24 +295,24 @@ def stationarity_report(
 
     for column in VALUE_COLUMNS:
         values = series(dataframe, column)
-        # adfuller returns (statistic, p-value, lags used, nobs, critical values, best IC);
-        # kpss returns (statistic, p-value, lags, critical values).
-        adf_result = adfuller(values, regression=regression, autolag="AIC")
-        kpss_result = kpss(values, regression=regression, nlags="auto")
+        # result_object=True: named fields (statistic, pvalue, lags, critical_values) instead of
+        # plain tuples, which statsmodels 0.16 drops.
+        adf_result = adfuller(values, regression=regression, autolag="AIC", result_object=True)
+        kpss_result = kpss(values, regression=regression, nlags="auto", result_object=True)
         report_lines.extend(
             [
                 f"{column} (observations: {len(values)})",
                 (
-                    f"  ADF: statistic={adf_result[0]:.6f}, "
-                    f"p-value={adf_result[1]:.6g}, selected lags={adf_result[2]}"
+                    f"  ADF: statistic={adf_result.statistic:.6f}, "
+                    f"p-value={adf_result.pvalue:.6g}, selected lags={adf_result.lags}"
                 ),
-                f"  ADF critical values: {adf_result[4]}",
+                f"  ADF critical values: {adf_result.critical_values}",
                 (
-                    f"  KPSS: statistic={kpss_result[0]:.6f}, "
-                    f"p-value={kpss_result[1]:.6g}, lags={kpss_result[2]}"
+                    f"  KPSS: statistic={kpss_result.statistic:.6f}, "
+                    f"p-value={kpss_result.pvalue:.6g}, lags={kpss_result.lags}"
                 ),
-                f"  KPSS critical values: {kpss_result[3]}",
-                f"  Assessment: {assess_stationarity(adf_result[1], kpss_result[1])}",
+                f"  KPSS critical values: {kpss_result.critical_values}",
+                f"  Assessment: {assess_stationarity(adf_result.pvalue, kpss_result.pvalue)}",
                 "",
             ]
         )
@@ -373,10 +373,12 @@ def acf_pacf_report(dataframe: pd.DataFrame) -> tuple[str, Figure]:
             raise ValueError(f"At least four usable values are required for {column}.")
 
         lag_count = min(MAX_LAGS, len(values) // 2 - 1)
-        # With alpha, acf and pacf return (values, intervals); intervals has shape (L + 1, 2).
-        acf_values, acf_intervals = acf(
-            values, nlags=lag_count, alpha=SIGNIFICANCE_LEVEL, fft=False
+        # With alpha, both give the values and their intervals, shape (L + 1, 2); acf's result
+        # object replaces the plain tuple that statsmodels 0.16 drops.
+        acf_result = acf(
+            values, nlags=lag_count, alpha=SIGNIFICANCE_LEVEL, fft=False, result_object=True
         )
+        acf_values, acf_intervals = acf_result.acf, acf_result.confint
         pacf_values, pacf_intervals = pacf(
             values, nlags=lag_count, alpha=SIGNIFICANCE_LEVEL, method="ywm"
         )
@@ -575,7 +577,8 @@ def information_criteria(dataframe: pd.DataFrame) -> tuple[pd.DataFrame, str]:
         "Input: first-order-differenced balance-sheet data.",
         (
             f"d={DIFFERENCING_ORDER} is applied by the differencing: each candidate is an "
-            f"ARMA(p, q) with a constant on the differences, i.e. ARIMA(p, {DIFFERENCING_ORDER}, q) "
+            "ARMA(p, q) with a constant on the differences, i.e. "
+            f"ARIMA(p, {DIFFERENCING_ORDER}, q) "
             "with drift on the levels."
         ),
         f"Monthly seasonal period: {SEASONAL_PERIOD}; all candidates use D=0.",

@@ -312,7 +312,8 @@ def volatility_report(results: list[dict[str, Any]], train: pd.DataFrame) -> str
         (
             "Variance break: the split that best fits one variance before and another after, "
             f"with at least {BREAK_TRIM:.0%} of the months on each side. A searched break has a "
-            "non-standard test distribution, so the decisive evidence is ARCH-LM after removing it."
+            "non-standard test distribution, so the decisive evidence is ARCH-LM after "
+            "removing it."
         ),
         "Break-adjusted: each regime's residuals divided by that regime's standard deviation.",
         "",
