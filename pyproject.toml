@@ -31,6 +31,8 @@ dev = [
     "pytest>=8",
     "ruff==0.17.2",
     "jupyter==1.1.1",
+    # Static type checker: make typecheck.
+    "mypy==2.4.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -53,3 +55,17 @@ extend-select = ["I"]
 [tool.ruff.lint.isort]
 known-first-party = ["autoregressive_experiments"]
 force-sort-within-sections = true
+
+[tool.mypy]
+python_version = "3.12"
+files = ["autoregressive_experiments", "tests", "tools"]
+# Strict about this project: every function must be fully annotated, and annotated bodies are
+# checked.
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+# Lenient about libraries without type information (statsmodels, pandas without stubs, kagglehub,
+# typer's decorators...): their objects are treated as Any rather than reported.
+ignore_missing_imports = true

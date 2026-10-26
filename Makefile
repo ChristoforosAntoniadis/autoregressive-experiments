@@ -109,6 +109,11 @@ all: features plots diagnostics residuals volatility garch asymmetric-garch var 
 test:
 	$(PYTHON_INTERPRETER) -m pytest
 
+## Check the type hints with mypy (reports only, changes nothing)
+.PHONY: typecheck
+typecheck:
+	$(PYTHON_INTERPRETER) -m mypy
+
 ## Check code style and lint with ruff (reports only, changes nothing)
 .PHONY: lint
 lint:

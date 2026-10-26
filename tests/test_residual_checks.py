@@ -9,6 +9,21 @@ from autoregressive_experiments.residual_checks import passes, recommended_order
 
 
 def candidate_table() -> pd.DataFrame:
+    """A small hand-made U3 grid result: two series, with AIC / AICc / BIC per candidate.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per SARIMA candidate, with the columns of the U3 information-criteria table:
+        series, p, d, q, P, Q, converged, AIC, AICc and BIC.
+
+    Notes
+    -----
+    Series "a": (2,1,2) has the lowest AIC (-100) and AICc (-99); (0,1,1) the lowest BIC (-93);
+    (0,1,4) is 0.5 AIC behind the winner. (1,1,1) has the lowest values of all but did not
+    converge, so it must never be picked. Series "b": (1,1,0)x(1,0,1) wins AIC and AICc,
+    (0,1,0) wins BIC and is 3 AIC behind.
+    """
     columns = ["series", "p", "d", "q", "P", "Q", "converged", "AIC", "AICc", "BIC"]
     rows = [
         ("a", 2, 1, 2, 0, 0, True, -100.0, -99.0, -90.0),
@@ -21,7 +36,7 @@ def candidate_table() -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
-def test_recommended_orders_take_each_criterion_winner_and_a_tied_aic_runner_up():
+def test_recommended_orders_take_each_criterion_winner_and_a_tied_aic_runner_up() -> None:
     """Series a: (2,1,2) wins AIC and AICc, (0,1,1) wins BIC, (0,1,4) is 0.5 AIC behind (a tie).
     Series b: the AIC runner-up is 3 AIC behind, more than the margin of 2, so it isn't added
     for being a runner-up; it still enters as the BIC winner."""
@@ -39,8 +54,9 @@ def test_recommended_orders_take_each_criterion_winner_and_a_tied_aic_runner_up(
     ]
 
 
-def test_passes_ignores_untestable_lags_and_fails_below_five_percent():
+def test_passes_ignores_untestable_lags_and_fails_below_five_percent() -> None:
     """NaN (too few degrees of freedom) is skipped; any p-value under 0.05 fails the model."""
+    # The lowest testable p-value is 0.06, just above 0.05, so this table passes.
     tests = pd.DataFrame(
         {"lag": [6, 12, 24], "ljung_box_p": [np.nan, 0.20, 0.06], "breusch_godfrey_p": [0.5] * 3}
     )
@@ -49,7 +65,7 @@ def test_passes_ignores_untestable_lags_and_fails_below_five_percent():
     assert not passes(tests.assign(breusch_godfrey_p=[0.5, 0.049, 0.5]))
 
 
-def test_white_noise_passes_and_an_ar1_series_fails():
+def test_white_noise_passes_and_an_ar1_series_fails() -> None:
     """Independent noise has no autocorrelation; x_t = 0.8 x_(t-1) + e_t has plenty."""
     noise = np.random.default_rng(0).normal(size=300)
     ar1 = np.zeros(300)
@@ -58,10 +74,11 @@ def test_white_noise_passes_and_an_ar1_series_fails():
 
     assert passes(residual_tests(pd.Series(noise), arma_terms=0))
     ar1_tests = residual_tests(pd.Series(ar1), arma_terms=0)
+    # Both tests reject at every lag, by a wide margin.
     assert (ar1_tests[["ljung_box_p", "breusch_godfrey_p"]] < 1e-6).all().all()
 
 
-def test_ljung_box_loses_one_degree_of_freedom_per_arma_term():
+def test_ljung_box_loses_one_degree_of_freedom_per_arma_term() -> None:
     """With 6 ARMA terms, lag 6 has 0 degrees of freedom (n/a), and the same statistic at
     lag 12 is judged on 6 instead of 12 degrees of freedom, so its p-value is smaller."""
     noise = pd.Series(np.random.default_rng(0).normal(size=300))
@@ -69,6 +86,7 @@ def test_ljung_box_loses_one_degree_of_freedom_per_arma_term():
     plain = residual_tests(noise, arma_terms=0)
     corrected = residual_tests(noise, arma_terms=6)
 
+    # Rows are lags 6, 12, 24: row 0 is lag 6 and row 1 is lag 12.
     assert np.isnan(corrected["ljung_box_p"].iloc[0])
     assert corrected["ljung_box_p"].iloc[1] < plain["ljung_box_p"].iloc[1]
     # Breusch-Godfrey has no ARMA correction, so it is unchanged.

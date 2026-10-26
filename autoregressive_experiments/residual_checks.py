@@ -14,8 +14,10 @@ Output, in ``reports/``:
 """
 
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
+from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -43,16 +45,21 @@ from autoregressive_experiments.features import DATE_COLUMN, split_boundaries, s
 
 app = typer.Typer()
 
+# Lags (months) at which both tests are reported: half a year, one year and two years.
 TEST_LAGS = (6, 12, 24)
 # Burnham & Anderson: a model within 2 AIC of the best still has substantial support.
 AIC_TIE_MARGIN = 2.0
+# Lags shown in the figure's ACF and Ljung-Box panels (two years of monthly data).
 PLOT_LAGS = 24
 
 REPORT_PATH = REPORTS_DIR / "residual_diagnostics.txt"
 FIGURE_PATH = FIGURES_DIR / "residual_diagnostics.png"
 
-# Reference palette: slot 1 for the data, the reserved "critical" status color for failures.
-SERIES_COLOR = "#2a78d6"
+# Reference palette: categorical slots 1-5 for the data (validated together; 3-5 need a legend),
+# the reserved "critical" status color for failures, and the chrome colors. Every figure in the
+# project takes its colors from here.
+SERIES_PALETTE = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4")
+SERIES_COLOR = SERIES_PALETTE[0]
 CRITICAL_COLOR = "#d03b3b"
 SURFACE = "#fcfcfb"
 PRIMARY_INK = "#0b0b0b"
@@ -62,19 +69,69 @@ GRIDLINE = "#e1e0d9"
 BASELINE = "#c3c2b7"
 
 
-def model_label(model: dict) -> str:
+def model_label(model: dict[str, Any]) -> str:
+    """
+    Format a model's orders as a SARIMA label, e.g. "SARIMA(0,1,1)x(1,0,1,12)".
+
+    Parameters
+    ----------
+    model : dict of str to Any
+        Must hold the integer orders under "p", "d", "q", "P" and "Q". Other keys (the
+        series name, the reason it was picked, fit results...) are ignored.
+
+    Returns
+    -------
+    str
+        "SARIMA(p,d,q)" followed by "x(P,0,Q,12)" when the model has a seasonal term. The
+        seasonal differencing order is always 0 in this project, and the period is
+        SEASONAL_PERIOD (12 months).
+    """
     p, d, q, seasonal_p, seasonal_q = (model[k] for k in ("p", "d", "q", "P", "Q"))
+    # A non-seasonal model gets no "x(0,0,0,12)" suffix, so labels stay short.
     seasonal = (
         f"x({seasonal_p},0,{seasonal_q},{SEASONAL_PERIOD})" if seasonal_p or seasonal_q else ""
     )
     return f"SARIMA({p},{d},{q}){seasonal}"
 
 
-def recommended_orders(candidates: pd.DataFrame) -> list[dict]:
-    """Per series: the best converged model by AIC, AICc and BIC, plus the AIC runner-up if tied."""
-    models: list[dict] = []
+def recommended_orders(candidates: pd.DataFrame) -> list[dict[str, Any]]:
+    """
+    Per series: the best converged model by AIC, AICc and BIC, plus the AIC runner-up if tied.
+
+    Parameters
+    ----------
+    candidates : pd.DataFrame
+        The information-criteria grid from ``make diagnostics``, one row per fitted
+        candidate, with columns "series", "p", "d", "q", "P", "Q", "AIC", "AICc", "BIC"
+        and "converged" (bool).
+
+    Returns
+    -------
+    list of dict of str to Any
+        One dict per distinct recommended order, in the order the series appear in
+        `candidates`. Keys: "series" (column name), "p", "d", "q", "P", "Q" (int orders)
+        and "reason" (str: the criteria that picked it, e.g. "AIC, AICc", or
+        "AIC tie (+0.330)").
+
+    Notes
+    -----
+    Processing:
+    1. Keep only the converged candidates and group them by series.
+    2. For each of AIC, AICc and BIC, find the minimizing row and record the criterion
+       under that row's orders; when several criteria agree, the model appears once with
+       all of them listed.
+    3. Rank by AIC; if the runner-up is less than AIC_TIE_MARGIN (2) above the best, add it
+       too, since by Burnham & Anderson it has substantial support.
+    4. Turn each recorded order into one dict.
+
+    A series with a single converged candidate would make ``iloc[1]`` raise IndexError;
+    the 60-candidate grid makes that unlikely.
+    """
+    models: list[dict[str, Any]] = []
+    # sort=False keeps the series in their order in the CSV (VALUE_COLUMNS order).
     for column, group in candidates[candidates["converged"]].groupby("series", sort=False):
-        picks: dict[tuple, list[str]] = {}
+        # Keyed by the order tuple, so criteria that agree are merged into one entry.
+        picks: dict[tuple[int, ...], list[str]] = {}
         for criterion in ("AIC", "AICc", "BIC"):
             best = group.loc[group[criterion].idxmin()]
             picks.setdefault(order_key(best), []).append(criterion)
@@ -98,12 +155,61 @@ def recommended_orders(candidates: pd.DataFrame) -> list[dict]:
     return models
 
 
-def order_key(row: pd.Series) -> tuple[int, int, int, int, int]:
+def order_key(row: pd.Series) -> tuple[int, ...]:
+    """
+    The (p, d, q, P, Q) orders of a candidate, as a hashable tuple of ints.
+
+    Parameters
+    ----------
+    row : pd.Series
+        A candidate row (or a model dict wrapped in a Series) with "p", "d", "q", "P"
+        and "Q" entries.
+
+    Returns
+    -------
+    tuple of int
+        Always five values, (p, d, q, P, Q). int() turns the CSV's numpy integers (or
+        an object Series' values) into plain ints, so keys from different sources compare
+        equal.
+    """
     return tuple(int(row[k]) for k in ("p", "d", "q", "P", "Q"))
 
 
 def residual_tests(residuals: pd.Series, arma_terms: int) -> pd.DataFrame:
-    """Ljung-Box and Breusch-Godfrey p-values at TEST_LAGS; a NaN means too few degrees of freedom."""
+    """
+    Ljung-Box and Breusch-Godfrey p-values at TEST_LAGS; a NaN means too few degrees of freedom.
+
+    Parameters
+    ----------
+    residuals : pd.Series
+        One-step residuals of a fitted SARIMA model, in trillions, burn-in removed.
+    arma_terms : int
+        Number of fitted ARMA coefficients, p + q + P + Q (the constant not counted).
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per lag in TEST_LAGS, with columns "lag" (int), "ljung_box_p" and
+        "breusch_godfrey_p" (float). Both tests' null hypothesis: no autocorrelation up to
+        that lag. "ljung_box_p" is NaN when lag - arma_terms is not positive.
+
+    Notes
+    -----
+    Processing:
+    1. Ljung-Box at every lag in TEST_LAGS, with ``model_df=arma_terms``.
+    2. Fit an OLS regression of the residuals on a constant only.
+    3. Breusch-Godfrey on that regression at every lag in TEST_LAGS.
+
+    Why ``model_df``: residuals of an estimated ARMA model are fitted to look
+    uncorrelated, so the Ljung-Box statistic is compared with a chi-squared of
+    lag - (p + q + P + Q) degrees of freedom, not lag. Without the correction the test
+    would pass too easily.
+
+    Why the constant-only regression: statsmodels' Breusch-Godfrey only accepts
+    regression results. With a constant as the only regressor, its auxiliary regression
+    is the residuals on a constant and their own lags, and n * R^2 is the LM statistic.
+    For models with MA terms this approximates the exact LM test, as the report says.
+    """
     # Ljung-Box's chi-squared loses one degree of freedom per fitted ARMA coefficient.
     ljung_box = acorr_ljungbox(residuals, lags=list(TEST_LAGS), model_df=arma_terms)
     # statsmodels only offers Breusch-Godfrey on regression results, so regress the residuals on
@@ -122,11 +228,56 @@ def residual_tests(residuals: pd.Series, arma_terms: int) -> pd.DataFrame:
 
 
 def passes(tests: pd.DataFrame) -> bool:
+    """
+    Whether every available p-value is at or above SIGNIFICANCE_LEVEL (5%).
+
+    Parameters
+    ----------
+    tests : pd.DataFrame
+        The output of residual_tests(): columns "ljung_box_p" and "breusch_godfrey_p".
+
+    Returns
+    -------
+    bool
+        True when no test rejects "no autocorrelation". NaN p-values (Ljung-Box lags with
+        no degrees of freedom left) are skipped rather than counted as failures.
+    """
     p_values = tests[["ljung_box_p", "breusch_godfrey_p"]].to_numpy(dtype=float)
+    # bool(): .all() returns numpy.bool_, and callers store the verdict in plain dicts.
     return bool((p_values[np.isfinite(p_values)] >= SIGNIFICANCE_LEVEL).all())
 
 
-def check_model(values: pd.Series, model: dict) -> dict:
+def check_model(values: pd.Series, model: dict[str, Any]) -> dict[str, Any]:
+    """
+    Fit one SARIMA model and run the residual tests on it.
+
+    Parameters
+    ----------
+    values : pd.Series
+        One series' training first differences, in trillions per month.
+    model : dict of str to Any
+        The model to check: "series", "p", "d", "q", "P", "Q" and "reason", as made by
+        recommended_orders().
+
+    Returns
+    -------
+    dict of str to Any
+        Every key of `model`, plus:
+
+        - "residuals": pd.Series, the one-step residuals after the burn-in, in trillions
+        - "arma_terms": int, p + q + P + Q
+        - "tests": pd.DataFrame, the output of residual_tests()
+        - "passed": bool, the output of passes()
+
+    Notes
+    -----
+    Processing:
+    1. Fit the model with diagnostics.fit_sarima(), exactly as in the information-criteria
+       grid, so the checked model is the one that was ranked.
+    2. Drop the first ``loglikelihood_burn`` residuals: statsmodels excludes them from the
+       likelihood because they come from the filter's initialization, not the model.
+    3. Run residual_tests() and passes() on what is left.
+    """
     fitted = fit_sarima(values, model["p"], model["q"], model["P"], model["Q"])
     residuals = fitted.resid.iloc[fitted.loglikelihood_burn :]
     arma_terms = model["p"] + model["q"] + model["P"] + model["Q"]
@@ -141,15 +292,49 @@ def check_model(values: pd.Series, model: dict) -> dict:
 
 
 def check_series(
-    values: pd.Series, column: str, candidates: pd.DataFrame, models: list[dict]
-) -> list[dict]:
-    """Check the recommended models; if none passes, walk down the AIC ranking to the first that does."""
+    values: pd.Series, column: str, candidates: pd.DataFrame, models: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """
+    Check the recommended models; if none passes, walk down the AIC ranking to the first that does.
+
+    Parameters
+    ----------
+    values : pd.Series
+        The series' training first differences, in trillions per month.
+    column : str
+        The series name, e.g. "fed_total_assets_T".
+    candidates : pd.DataFrame
+        The full information-criteria grid (all series), as in recommended_orders().
+    models : list of dict of str to Any
+        This series' recommended models, from recommended_orders().
+
+    Returns
+    -------
+    list of dict of str to Any
+        One check_model() result per recommended model, in the same order. If none of them
+        passed, the first passing alternative from the AIC ranking is appended (its
+        "reason" says "best passing alternative (AIC rank N)"). If no candidate passes at
+        all, only the failing recommended models are returned.
+
+    Notes
+    -----
+    Processing:
+    1. Check every recommended model; stop here if at least one passes.
+    2. Otherwise rank this series' converged candidates by AIC and skip the orders already
+       tried.
+    3. Check each remaining candidate in rank order and return as soon as one passes.
+
+    The fallback keeps the selection rule "the best by information criteria among the
+    models whose residuals are clean", rather than inventing a new order.
+    """
     checked = [check_model(values, model) for model in models]
     if any(result["passed"] for result in checked):
         return checked
 
+    # Wrapped in a Series so order_key() reads the dicts the same way as the CSV rows.
     tried = {order_key(pd.Series(model)) for model in models}
     ranked = candidates[(candidates["series"] == column) & candidates["converged"]]
+    # The rank counts every converged candidate, including the ones already tried.
     for rank, (_, row) in enumerate(ranked.sort_values("AIC").iterrows(), start=1):
         if order_key(row) in tried:
             continue
@@ -162,7 +347,25 @@ def check_series(
     return checked
 
 
-def residual_report(results: list[dict], train: pd.DataFrame) -> str:
+def residual_report(results: list[dict[str, Any]], train: pd.DataFrame) -> str:
+    """
+    Write the text report of the residual checks.
+
+    Parameters
+    ----------
+    results : list of dict of str to Any
+        check_model() results for every series, as returned by checked_models().
+    train : pd.DataFrame
+        The training split of the first differences, with DATE_COLUMN; used for the date
+        range and the observation count in the header.
+
+    Returns
+    -------
+    str
+        The report: a header explaining the method, then per series and model the
+        p-values at each lag in TEST_LAGS and a PASS / FAIL verdict, then per series the
+        models to carry forward (or a note that none passed), then the figure's path.
+    """
     dates = train[DATE_COLUMN]
     lines = [
         "Residual checks of the recommended SARIMA models (step U4)",
@@ -214,11 +417,33 @@ def residual_report(results: list[dict], train: pd.DataFrame) -> str:
 
 
 def format_p(p_value: float) -> str:
+    """
+    Format a p-value with four decimals, or "n/a" when it is NaN or infinite.
+
+    Parameters
+    ----------
+    p_value : float
+        A test p-value; NaN where Ljung-Box has no degrees of freedom left.
+
+    Returns
+    -------
+    str
+        E.g. "0.0612", or "n/a".
+    """
     return "n/a" if not np.isfinite(p_value) else f"{p_value:.4f}"
 
 
 def apply_chart_style() -> None:
-    """Recessive hairline grid and axes in the reference palette's chrome colors."""
+    """
+    Recessive hairline grid and axes in the reference palette's chrome colors.
+
+    Returns
+    -------
+    None
+        Updates matplotlib's global rcParams, so every figure created afterwards in this
+        process uses the style. The other analysis modules call it before drawing, so all
+        the project's figures look the same.
+    """
     plt.rcParams.update(
         {
             "axes.edgecolor": BASELINE,
@@ -229,19 +454,62 @@ def apply_chart_style() -> None:
             "axes.grid": True,
             "grid.color": GRIDLINE,
             "grid.linewidth": 0.6,
+            # No box around the plot: only the left and bottom axes are drawn.
             "axes.spines.top": False,
             "axes.spines.right": False,
         }
     )
 
 
-def model_name(result: dict) -> str:
+def model_name(result: dict[str, Any]) -> str:
+    """
+    A readable series name for chart titles, e.g. "fed total assets".
+
+    Parameters
+    ----------
+    result : dict of str to Any
+        Any model dict with a "series" key holding the column name.
+
+    Returns
+    -------
+    str
+        The column name without its "_T" (trillions) suffix, underscores turned into
+        spaces.
+    """
     return result["series"].removesuffix("_T").replace("_", " ")
 
 
-def residual_figure(results: list[dict], dates: pd.Series) -> plt.Figure:
-    """One row per model: residuals over time, residual ACF, and Ljung-Box p-value by lag."""
+def residual_figure(results: list[dict[str, Any]], dates: pd.Series) -> Figure:
+    """
+    One row per model: residuals over time, residual ACF, and Ljung-Box p-value by lag.
+
+    Parameters
+    ----------
+    results : list of dict of str to Any
+        check_model() results, one figure row each.
+    dates : pd.Series
+        The training split's dates, positionally aligned with the first differences (the
+        split resets the index to 0..n-1, so the residuals' index positions pick them).
+
+    Returns
+    -------
+    Figure
+        A figure with len(results) rows and 3 columns, in the reference palette. The
+        caller saves and closes it.
+
+    Notes
+    -----
+    Processing, per model row:
+    1. Left: the residuals over time (trillions) with a zero line; the title holds the
+       model, its PASS / FAIL verdict and the reason it was checked.
+    2. Middle: the residual ACF at lags 1..PLOT_LAGS with the approximate 95% band
+       +/- 1.96 / sqrt(n); spikes outside the band are marked in the critical color.
+    3. Right: the Ljung-Box p-value at every lag 1..PLOT_LAGS (degrees of freedom
+       corrected as in residual_tests()), on a log scale against the 5% line; failing
+       lags in the critical color.
+    """
     apply_chart_style()
+    # squeeze=False keeps axes 2-D even when there is only one model.
     figure, axes = plt.subplots(
         len(results), 3, figsize=(15, 3.1 * len(results)), squeeze=False, facecolor=SURFACE
     )
@@ -263,7 +531,9 @@ def residual_figure(results: list[dict], dates: pd.Series) -> plt.Figure:
         )
         time_axis.set_ylabel("Residual (trillions)")
 
+        # [1:] drops lag 0, whose autocorrelation is always 1.
         autocorrelations = acf(residuals, nlags=PLOT_LAGS, fft=False)[1:]
+        # Approximate 95% band for white noise: +/- 1.96 / sqrt(n).
         band = 1.96 / np.sqrt(len(residuals))
         lags = np.arange(1, PLOT_LAGS + 1)
         outside = np.abs(autocorrelations) > band
@@ -278,13 +548,17 @@ def residual_figure(results: list[dict], dates: pd.Series) -> plt.Figure:
         )
         acf_axis.set_xlabel("Lag (months)")
 
+        # lags=PLOT_LAGS (an int) gives a p-value at every lag 1..PLOT_LAGS.
         p_values = acorr_ljungbox(residuals, lags=PLOT_LAGS, model_df=result["arma_terms"])[
             "lb_pvalue"
         ].to_numpy()
+        # NaN p-values compare False, so they land in the passing (blue) group, but a log axis
+        # can't draw them, so they simply don't appear.
         failing = p_values < SIGNIFICANCE_LEVEL
         p_axis.scatter(lags[~failing], p_values[~failing], color=SERIES_COLOR, s=24, zorder=3)
         p_axis.scatter(lags[failing], p_values[failing], color=CRITICAL_COLOR, s=24, zorder=3)
         p_axis.axhline(SIGNIFICANCE_LEVEL, color=CRITICAL_COLOR, linewidth=1)
+        # Slightly above the line (x1.3 on the log axis), so the label doesn't sit on it.
         p_axis.text(1, SIGNIFICANCE_LEVEL * 1.3, "5% level", color=SECONDARY_INK, fontsize=9)
         p_axis.set_yscale("log")
         p_axis.set_ylim(1e-4, 1.5)
@@ -303,8 +577,45 @@ def residual_figure(results: list[dict], dates: pd.Series) -> plt.Figure:
 
 def checked_models(
     levels_path: Path, differences_path: Path, candidates_path: Path
-) -> tuple[list[dict], pd.DataFrame]:
-    """Fit and check the recommended models on the training split; also returns that split."""
+) -> tuple[list[dict[str, Any]], pd.DataFrame]:
+    """
+    Fit and check the recommended models on the training split; also returns that split.
+
+    Shared entry point of the U4, U5, U5b and U5c modules, so they all examine the same
+    models fitted on the same data.
+
+    Parameters
+    ----------
+    levels_path : Path
+        The cleaned levels CSV (``make features``); only used to compute the split dates.
+    differences_path : Path
+        The first-differences CSV (``make features``).
+    candidates_path : Path
+        The information-criteria grid CSV (``make diagnostics``).
+
+    Returns
+    -------
+    tuple of (list of dict of str to Any, pd.DataFrame)
+        The check_model() results of every series, in VALUE_COLUMNS order (see
+        check_series() for which models are included), and the training split of the
+        first differences (with DATE_COLUMN and both series, index 0..n-1).
+
+    Raises
+    ------
+    FileNotFoundError
+        If any of the three input files is missing; the message names the make target
+        that produces it.
+
+    Notes
+    -----
+    Processing:
+    1. Check that the inputs exist.
+    2. Compute the 60 / 20 / 20 split boundaries from the levels and cut the differences
+       at the same dates, keeping train only.
+    3. Pick the recommended orders from the grid with recommended_orders().
+    4. Check each series' models with check_series().
+    """
+    # Each input mapped to the make target that generates it, for the error message.
     required = {
         levels_path: "features",
         differences_path: "features",
@@ -314,13 +625,14 @@ def checked_models(
         if not path.is_file():
             raise FileNotFoundError(f"{path} not found. Generate it with make {command}.")
     levels = pd.read_csv(levels_path, parse_dates=[DATE_COLUMN])
+    # The boundaries come from the levels, so levels and differences are cut at the same months.
     train = split_by_time(
         pd.read_csv(differences_path, parse_dates=[DATE_COLUMN]), split_boundaries(levels)
     )["train"]
     candidates = pd.read_csv(candidates_path)
     models = recommended_orders(candidates)
 
-    results = []
+    results: list[dict[str, Any]] = []
     for column in VALUE_COLUMNS:
         series_models = [model for model in models if model["series"] == column]
         results.extend(check_series(series(train, column), column, candidates, series_models))
@@ -333,6 +645,23 @@ def main(
     differences_path: Path = PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv",
     candidates_path: Path = CANDIDATES_PATH,
 ) -> None:
+    """
+    Run the residual checks and write the report and the figure (``make residuals``).
+
+    Parameters
+    ----------
+    levels_path : Path, default=INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv"
+        The cleaned levels CSV.
+    differences_path : Path, default=PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv"
+        The first-differences CSV.
+    candidates_path : Path, default=CANDIDATES_PATH
+        The information-criteria grid CSV.
+
+    Returns
+    -------
+    None
+        Writes REPORT_PATH and FIGURE_PATH, and prints the report.
+    """
     results, train = checked_models(levels_path, differences_path, candidates_path)
 
     report = residual_report(results, train)
@@ -341,9 +670,11 @@ def main(
 
     figure = residual_figure(results, train[DATE_COLUMN])
     figure.savefig(FIGURE_PATH, dpi=150, facecolor=SURFACE)
+    # Free the figure's memory; it is already saved.
     plt.close(figure)
     logger.success(f"Residual checks written to {REPORT_PATH} and {FIGURE_PATH}")
 
 
+# Running this file directly runs the typer CLI (main).
 if __name__ == "__main__":
     app()

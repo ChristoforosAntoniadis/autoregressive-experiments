@@ -7,8 +7,9 @@ import numpy as np
 from autoregressive_experiments.diagnostics import significant_lags
 
 
-def test_significant_lags_keeps_intervals_that_exclude_zero():
+def test_significant_lags_keeps_intervals_that_exclude_zero() -> None:
     """Row 0 (lag 0) is skipped; lags 1 and 3 lie wholly above or below zero."""
+    # One row per lag, [lower, upper] bound of the confidence interval, as statsmodels returns.
     intervals = np.array(
         [
             [1.0, 1.0],  # lag 0: always 1, never reported
@@ -22,7 +23,7 @@ def test_significant_lags_keeps_intervals_that_exclude_zero():
     assert significant_lags(intervals) == [1, 3]
 
 
-def test_significant_lags_is_empty_when_every_interval_contains_zero():
+def test_significant_lags_is_empty_when_every_interval_contains_zero() -> None:
     """No lag is significant if every interval straddles zero."""
     intervals = np.array([[1.0, 1.0], [-0.2, 0.2], [-0.1, 0.1]])
 

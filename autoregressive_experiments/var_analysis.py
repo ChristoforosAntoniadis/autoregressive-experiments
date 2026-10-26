@@ -28,11 +28,13 @@ Output, in ``reports/``:
 from pathlib import Path
 
 from loguru import logger
+from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from statsmodels.tsa.api import VAR
-from statsmodels.tsa.vector_ar.vecm import VECM
+from statsmodels.tsa.vector_ar.var_model import VARResultsWrapper
+from statsmodels.tsa.vector_ar.vecm import VECM, VECMResults
 import typer
 
 from autoregressive_experiments.config import (
@@ -48,6 +50,7 @@ from autoregressive_experiments.residual_checks import (
     CRITICAL_COLOR,
     PRIMARY_INK,
     SECONDARY_INK,
+    SERIES_PALETTE,
     SURFACE,
     apply_chart_style,
 )
@@ -57,24 +60,68 @@ app = typer.Typer()
 
 # The lag order carried forward from step V6 (the user's decision).
 CARRIED_LAGS = 5
+# Impulse responses and variance shares run 24 months after the shock.
 HORIZON = 24
 REPORT_HORIZONS = (1, 6, 12, 24)
+# Standard-normal 97.5% quantile: value +- 1.96 standard errors is a 95% band.
 BAND_Z = 1.96
 
 REPORT_PATH = REPORTS_DIR / "var_analysis.txt"
 FIGURE_PATH = FIGURES_DIR / "var_analysis.png"
 
 # Reference palette slots 1-3 (validated together).
-VAR_COLOR, VECM_COLOR, REVERSED_COLOR = "#2a78d6", "#eb6834", "#1baf7a"
+VAR_COLOR, VECM_COLOR, REVERSED_COLOR = SERIES_PALETTE[:3]
 SHORT_NAMES = {"fed_total_assets_T": "total assets", "monetary_base_T": "monetary base"}
 
 
 def possessive(name: str) -> str:
+    """
+    Make the English possessive of a name.
+
+    Parameters
+    ----------
+    name : str
+        A short series name, e.g. "total assets" or "monetary base".
+
+    Returns
+    -------
+    str
+        The name with "'" if it ends in "s" ("total assets'"), otherwise with "'s"
+        ("monetary base's").
+    """
     return f"{name}'" if name.endswith("s") else f"{name}'s"
 
 
-def fit_systems(levels: pd.DataFrame, differences: pd.DataFrame) -> dict:
-    """VAR(5) on the differences and VECM(5) on the levels, in the frames' column order."""
+def fit_systems(
+    levels: pd.DataFrame, differences: pd.DataFrame
+) -> dict[str, VARResultsWrapper | VECMResults]:
+    """
+    Fit the two systems carried forward from step V6.
+
+    VAR(5) on the differences and VECM(5) on the levels, in the frames' column order.
+
+    Parameters
+    ----------
+    levels : pd.DataFrame
+        Levels of both series, shape (months, 2), indexed by month-end date with a monthly
+        frequency; trillions USD. The column order is the ordering used to orthogonalize
+        the shocks (first column first).
+    differences : pd.DataFrame
+        First differences, same columns in the same order, one row fewer.
+
+    Returns
+    -------
+    dict of str to VARResultsWrapper or VECMResults
+        Two entries, VAR first: "VAR(5)", the VAR fitted with a constant by OLS on the
+        differences, and "VECM(5)", the rank-VECM_RANK VECM with 5 lagged differences and a
+        constant outside the long-run relation, fitted by maximum likelihood on the levels.
+
+    Notes
+    -----
+    Same specifications as var_models' candidates, so V7 and V8 interpret exactly the models
+    V6 carried forward. The column order matters only for orthogonalized impulse responses
+    (the Cholesky factor follows it), which is why main refits with the columns reversed.
+    """
     return {
         f"VAR({CARRIED_LAGS})": VAR(differences).fit(CARRIED_LAGS, trend="c"),
         f"VECM({CARRIED_LAGS})": VECM(
@@ -83,10 +130,46 @@ def fit_systems(levels: pd.DataFrame, differences: pd.DataFrame) -> dict:
     }
 
 
-def granger_tests(systems: dict, columns: list[str]) -> pd.DataFrame:
-    """Each system, each direction: does the causing series help predict the caused one?"""
+def granger_tests(
+    systems: dict[str, VARResultsWrapper | VECMResults], columns: list[str]
+) -> pd.DataFrame:
+    """
+    Run Granger-causality tests in both directions for each system (step V7).
+
+    Each system, each direction: does the causing series help predict the caused one?
+
+    Parameters
+    ----------
+    systems : dict of str to VARResultsWrapper or VECMResults
+        The fitted systems from fit_systems. Names starting with "VAR" are treated as VARs,
+        the rest as VECMs.
+    columns : list of str
+        The two series names, in the systems' column order.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per (system, direction), 4 in all, with columns "model", "causing", "caused",
+        "statistic" (the test statistic: chi-squared for the VAR, F for the VECM) and
+        "p_value".
+
+    Notes
+    -----
+    Processing, for each system and each direction:
+    1. VAR: statsmodels' test_causality, a Wald test that every lag of the causing series is
+       zero in the caused series' equation.
+    2. VECM: statsmodels' test_granger_causality, an F-test on the VECM's levels VAR
+       representation (Lütkepohl 2005, 7.6.3). Its restriction covers the long-run
+       error-correction term as well as the lagged differences, since in a VECM the other
+       series can also act through the long-run relation.
+    3. Collect the statistic and p-value.
+
+    "Granger causes" means only "helps predict": past values of one series carry
+    information about the other beyond its own past. It says nothing about economic cause.
+    """
     rows = []
     for name, fitted in systems.items():
+        # Unpacks [a, b] then [b, a]: both directions.
         for causing, caused in (columns, columns[::-1]):
             if name.startswith("VAR"):
                 result = fitted.test_causality(caused, [causing], kind="wald")
@@ -104,9 +187,44 @@ def granger_tests(systems: dict, columns: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def level_responses(name: str, fitted) -> tuple[np.ndarray, np.ndarray | None]:
-    """Orthogonalized responses of the levels, [month, response, shock], and their standard
-    errors (VAR only: statsmodels' VECM errors ignore the estimated long-run relation)."""
+def level_responses(
+    name: str, fitted: VARResultsWrapper | VECMResults
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """
+    Compute one system's orthogonalized impulse responses of the levels (step V8).
+
+    Orthogonalized responses of the levels, [month, response, shock], and their standard
+    errors (VAR only: statsmodels' VECM errors ignore the estimated long-run relation).
+
+    Parameters
+    ----------
+    name : str
+        The system's name; one starting with "VAR" means a VAR on the differences, anything
+        else a VECM on the levels.
+    fitted : VARResultsWrapper or VECMResults
+        The fitted system, from fit_systems.
+
+    Returns
+    -------
+    tuple of (np.ndarray, np.ndarray or None)
+        - responses: shape (HORIZON + 1, 2, 2), indexed [month, response, shock], months 0
+          (impact) to HORIZON; the response of each series' level, in trillions USD, to a
+          one-standard-deviation orthogonal shock.
+        - standard errors: the asymptotic standard errors of the responses, same shape, for
+          the VAR; None for the VECM.
+
+    Notes
+    -----
+    Orthogonalized shocks come from the Cholesky factor of the residual covariance, so the
+    first column's shock moves both series on impact and the second's moves only itself on
+    impact. That makes the shocks uncorrelated with unit variance, at the price of depending
+    on the column order.
+
+    The VAR models the differences, so its plain responses are responses of the monthly
+    changes; the response of the level after h months is their running total over months
+    0..h, which statsmodels gives as the cumulative effects. The VECM is written in levels,
+    so its responses already are level responses.
+    """
     analysis = fitted.irf(HORIZON)
     if name.startswith("VAR"):
         # The VAR models the differences, so the level response is the running total.
@@ -115,18 +233,84 @@ def level_responses(name: str, fitted) -> tuple[np.ndarray, np.ndarray | None]:
 
 
 def variance_decomposition(responses: np.ndarray) -> np.ndarray:
-    """Share of each variable's h-step forecast-error variance that comes from each orthogonal
+    """
+    Compute the forecast-error variance decomposition from orthogonalized responses (V8).
+
+    Share of each variable's h-step forecast-error variance that comes from each orthogonal
     shock: shares[h - 1, variable, shock] for h = 1..len(responses).
 
     The h-step error is the sum over s = 0..h-1 of responses[s] times that month's shocks, which
-    are uncorrelated with unit variance, so each shock contributes its squared responses."""
+    are uncorrelated with unit variance, so each shock contributes its squared responses.
+
+    Parameters
+    ----------
+    responses : np.ndarray
+        Orthogonalized responses, shape (H, k, k), indexed [month, variable, shock], months 0
+        to H - 1; level responses (level_responses) give the decomposition of the levels.
+
+    Returns
+    -------
+    np.ndarray
+        Shares, shape (H, k, k), indexed [h - 1, variable, shock] for horizons h = 1..H; each
+        [h - 1, variable, :] sums to 1.
+
+    Notes
+    -----
+    Formula: with Theta_s = responses[s], the h-step forecast-error variance of variable i is
+    sum over s = 0..h-1 and shocks j of Theta_s[i, j]^2, and shock j's share is its part of
+    that sum:
+
+        share[h - 1, i, j] = sum_s Theta_s[i, j]^2 / sum_s sum_j' Theta_s[i, j']^2
+
+    Processing:
+    1. Cumulative sums of the squared responses over months give each shock's contribution
+       at every horizon.
+    2. Dividing by the sum over shocks turns contributions into shares.
+
+    One function serves both systems (statsmodels has a fevd() for the VAR only, and the
+    VAR's would decompose the differences, not the levels). Checked against statsmodels'
+    VAR fevd() in the tests.
+    """
+    # Axis 0 is the month: cumsum gives, at index h - 1, the sum over months 0..h-1.
     contributions = np.cumsum(responses**2, axis=0)
+    # Axis 2 is the shock: dividing by the total over shocks gives each shock's share.
     return contributions / contributions.sum(axis=2, keepdims=True)
 
 
 def analysis_report(
-    granger: pd.DataFrame, responses: dict, shares: dict, period: str, columns: list[str]
+    granger: pd.DataFrame,
+    responses: dict[str, tuple[np.ndarray, np.ndarray | None]],
+    shares: dict[tuple[str, str], np.ndarray],
+    period: str,
+    columns: list[str],
 ) -> str:
+    """
+    Write the V7 / V8 text report.
+
+    Parameters
+    ----------
+    granger : pd.DataFrame
+        The Granger tests, from granger_tests.
+    responses : dict of str to tuple of (np.ndarray, np.ndarray or None)
+        Per system name, its level responses and standard errors (level_responses), with
+        total assets ordered first.
+    shares : dict of tuple of (str, str) to np.ndarray
+        Variance shares (variance_decomposition), keyed by (system name, ordering), where the
+        ordering is "total assets first" or "monetary base first". Every array is indexed
+        [h - 1, variable, shock] in `columns` order, whatever the ordering.
+    period : str
+        Description of the training period, e.g. "2002-12 to 2016-10".
+    columns : list of str
+        The two series names, in the main ordering.
+
+    Returns
+    -------
+    str
+        The report, lines joined by newlines: the setup, each Granger test with its verdict,
+        the impulse responses at REPORT_HORIZONS (starred where the VAR's 95% band excludes
+        zero), and the share of each series' forecast-error variance from the other series'
+        shocks for every (system, ordering).
+    """
     lines = [
         "VAR / VECM interpretation, steps V7 (Granger causality) and V8 (impulse responses, FEVD)",
         (
@@ -164,11 +348,13 @@ def analysis_report(
             for response_index, response in enumerate(columns):
                 cells = []
                 for month in REPORT_HORIZONS:
+                    # Index = months after the shock (0 is the impact month).
                     value = values[month, response_index, shock_index]
                     if errors is None:
                         cells.append(f"{month}m {value:+.4f}")
                     else:
                         error = errors[month, response_index, shock_index]
+                        # The band value +- 1.96 x error excludes zero exactly when this holds.
                         excludes_zero = abs(value) > BAND_Z * error
                         cells.append(f"{month}m {value:+.4f}{'*' if excludes_zero else ' '}")
                 lines.append(
@@ -181,8 +367,10 @@ def analysis_report(
     for (name, ordering), values in shares.items():
         cells = []
         for response_index, response in enumerate(columns):
+            # With two series, the other series' index is 1 - this one's.
             other = 1 - response_index
             months = ", ".join(
+                # Shares are indexed by h - 1: row 0 is the 1-month horizon.
                 f"{month}m {100 * values[month - 1, response_index, other]:.0f}%"
                 for month in REPORT_HORIZONS
             )
@@ -197,11 +385,47 @@ def analysis_report(
 
 
 def analysis_figure(
-    granger: pd.DataFrame, responses: dict, shares: dict, columns: list[str]
-) -> plt.Figure:
+    granger: pd.DataFrame,
+    responses: dict[str, tuple[np.ndarray, np.ndarray | None]],
+    shares: dict[tuple[str, str], np.ndarray],
+    columns: list[str],
+) -> Figure:
+    """
+    Draw the V7 / V8 figure: Granger tests, impulse responses and variance shares.
+
+    Parameters
+    ----------
+    granger : pd.DataFrame
+        The Granger tests, from granger_tests.
+    responses : dict of str to tuple of (np.ndarray, np.ndarray or None)
+        Level responses and standard errors per system, as in analysis_report. Exactly two
+        entries, the VAR first (its standard errors are used for the bands), the VECM second.
+    shares : dict of tuple of (str, str) to np.ndarray
+        Variance shares keyed by (system name, ordering), as in analysis_report; must hold
+        both systems with "total assets first" and the VAR with "monetary base first".
+    columns : list of str
+        The two series names, in the main ordering.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        The figure, not yet saved; the caller saves and closes it.
+
+    Notes
+    -----
+    Processing:
+    1. Top row: each Granger p-value on a log scale against the 5% line; significant ones in
+       the data colour, the rest grey.
+    2. Middle 2 x 2: for each (shock column, response row), the VAR's level response with its
+       95% band and the VECM's response without one.
+    3. Bottom row: for each series, the share of its forecast-error variance from the other
+       series' shocks by horizon, for the VAR and the VECM with total assets first and the VAR
+       reversed, to show how much the ordering matters.
+    """
     apply_chart_style()
     figure = plt.figure(figsize=(14, 15.5), facecolor=SURFACE)
     grid = figure.add_gridspec(4, 2, height_ratios=(0.8, 1, 1, 1))
+    # Months 0 (impact) to HORIZON, matching the responses' first axis.
     months = np.arange(HORIZON + 1)
 
     granger_axis = figure.add_subplot(grid[0, :], facecolor=SURFACE)
@@ -209,6 +433,7 @@ def analysis_figure(
         f"{row.model}: {SHORT_NAMES[row.causing]} -> {SHORT_NAMES[row.caused]}"
         for row in granger.itertuples()
     ]
+    # Reversed so the first test is drawn at the top.
     positions = np.arange(len(granger))[::-1]
     significant = granger["p_value"].to_numpy() < SIGNIFICANCE_LEVEL
     granger_axis.scatter(
@@ -246,6 +471,7 @@ def analysis_figure(
     )
     granger_axis.set_title("V7: Granger causality, both directions", loc="left", fontsize=10)
 
+    # fit_systems puts the VAR first, so the first entry is the one with standard errors.
     var_name, vecm_name = list(responses)
     var_values, var_errors = responses[var_name]
     vecm_values, _ = responses[vecm_name]
@@ -253,7 +479,8 @@ def analysis_figure(
         for response_index, response in enumerate(columns):
             axis = figure.add_subplot(grid[1 + response_index, shock_index], facecolor=SURFACE)
             value = var_values[:, response_index, shock_index]
-            error = var_errors[:, response_index, shock_index]
+            # mypy can't see that the VAR's standard errors are never None (only the VECM's).
+            error = var_errors[:, response_index, shock_index]  # type: ignore[index]  # see above
             axis.fill_between(
                 months,
                 value - BAND_Z * error,
@@ -295,6 +522,7 @@ def analysis_figure(
         for key, color in styles.items():
             values = shares[key][:, response_index, other]
             axis.plot(
+                # Share row h - 1 is horizon h; the last row (HORIZON + 1) is cut off by xlim.
                 np.arange(1, HORIZON + 2),
                 100 * values,
                 color=color,
@@ -323,6 +551,40 @@ def main(
     levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv",
     differences_path: Path = PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv",
 ) -> None:
+    """
+    Run steps V7 and V8 on the training split and write the report and figure.
+
+    Parameters
+    ----------
+    levels_path : Path, default=INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv"
+        The cleaned levels, from ``make features``.
+    differences_path : Path, default=PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv"
+        The first differences, from ``make features``.
+
+    Returns
+    -------
+    None
+        Writes REPORT_PATH and FIGURE_PATH, and prints the report.
+
+    Raises
+    ------
+    FileNotFoundError
+        If either input file is missing.
+
+    Notes
+    -----
+    Processing:
+    1. Load both files, keep only the training split, and index them by month-end date.
+    2. Fit VAR(5) and VECM(5) with total assets first.
+    3. V7: Granger tests in both directions.
+    4. V8: level impulse responses and their variance shares.
+    5. Refit both systems with the columns reversed, compute their variance shares, and swap
+       them back onto the main ordering's axes.
+    6. Write and print the report; draw the figure.
+
+    The reverse ordering is a robustness check: orthogonalized shocks depend on which series
+    comes first, so a conclusion that holds under both orderings doesn't rest on that choice.
+    """
     for path in (levels_path, differences_path):
         if not path.is_file():
             raise FileNotFoundError(f"{path} not found. Generate it with make features.")
@@ -350,6 +612,7 @@ def main(
     }
     for name, fitted in reversed_systems.items():
         values, _ = level_responses(name, fitted)
+        # Reverse the variable and shock axes: index 0 is total assets again, as in the main run.
         shares[(name, "monetary base first")] = variance_decomposition(values)[:, ::-1, ::-1]
 
     report = analysis_report(granger, responses, shares, period, columns)

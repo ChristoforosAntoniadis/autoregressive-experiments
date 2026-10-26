@@ -38,6 +38,7 @@ make all                          # every step above, in order
 
 make test                         # unit tests
 make lint                         # check style and lint with ruff (changes nothing)
+make typecheck                    # check the type hints with mypy (changes nothing)
 make format                       # apply ruff's fixes and formatting
 make help                         # list every command
 ```
@@ -92,7 +93,7 @@ autoregressive-experiments/
 │   ├── diagnostics.py           # ADF / KPSS, ACF / PACF, SARIMA information criteria
 │   ├── residual_checks.py       # Ljung-Box and Breusch-Godfrey on the selected models' residuals
 │   ├── volatility_checks.py     # ARCH-LM, with and without an estimated variance break
-│   ├── volatility_models.py     # GARCH(1,1) (normal and Student-t) vs constant variance, by BIC
+│   ├── volatility_models.py     # GARCH(1,1) (normal and Student-t) vs constant variance, by BIC; residual checks by parametric bootstrap
 │   ├── asymmetric_garch.py      # EGARCH and GJR-GARCH (Student-t), plain or break-adjusted, by BIC
 │   ├── forecast_evaluation.py   # rolling-origin forecasts (SARIMA, VAR, VECM) vs baselines, validation and test
 │   ├── var_diagnostics.py       # VAR lag order (AIC / BIC / HQIC) and Johansen cointegration

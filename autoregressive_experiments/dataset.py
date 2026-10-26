@@ -16,15 +16,44 @@ import kagglehub
 
 from autoregressive_experiments.config import RAW_DATA_DIR
 
+# The dataset's "owner/slug" identifier on Kaggle.
 DATASET_HANDLE = "belbino/fed-balance-sheet-and-m2-money-supply-1950-present"
 
 
 def download_dataset() -> Path:
+    """
+    Download the Kaggle dataset and replace the contents of ``data/raw/`` with it.
+
+    Returns
+    -------
+    Path
+        RAW_DATA_DIR, the folder now holding the downloaded files.
+
+    Raises
+    ------
+    RuntimeError
+        If the download finishes but leaves no files. ``data/raw/`` is left untouched then.
+
+    Notes
+    -----
+    Processing:
+    1. Create ``data/raw/`` if it doesn't exist.
+    2. Download a fresh copy (``force_download``, ignoring kagglehub's cache) into a temporary
+       folder next to ``data/raw/``.
+    3. Stop with RuntimeError if nothing was downloaded.
+    4. Delete everything in ``data/raw/`` except ``.gitkeep``.
+    5. Move the downloaded files into ``data/raw/``; the temporary folder is then removed.
+
+    Why a temporary folder: the old files are deleted only after the new ones have arrived,
+    so a failed download never leaves ``data/raw/`` empty. It is created inside ``data/``
+    rather than the system temp folder so the final move stays on the same drive.
+    """
     RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(
         prefix="kaggle-download-", dir=RAW_DATA_DIR.parent
     ) as temporary_directory:
+        # kagglehub returns the folder it wrote into as a str.
         downloaded_path = Path(
             kagglehub.dataset_download(
                 DATASET_HANDLE,
@@ -37,6 +66,7 @@ def download_dataset() -> Path:
             raise RuntimeError(f"No dataset files were downloaded to {downloaded_path}")
 
         for existing_path in RAW_DATA_DIR.iterdir():
+            # .gitkeep keeps the empty folder in git (CCDS convention), so it survives.
             if existing_path.name == ".gitkeep":
                 continue
             if existing_path.is_dir():
@@ -53,5 +83,6 @@ def download_dataset() -> Path:
     return RAW_DATA_DIR
 
 
+# Running this file (make data) downloads the dataset and prints where it went.
 if __name__ == "__main__":
     print(f"Dataset files downloaded to: {download_dataset()}")

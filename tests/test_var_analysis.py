@@ -13,7 +13,20 @@ from autoregressive_experiments.var_analysis import granger_tests, variance_deco
 
 
 def x_drives_y(count: int = 400) -> pd.DataFrame:
-    """y depends on last month's x; x ignores y."""
+    """y depends on last month's x; x ignores y.
+
+    Parameters
+    ----------
+    count : int, default 400
+        Number of months to simulate.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns "x" and "y", seeded with 0:
+        x_t = 0.5 x_(t-1) + e_t and y_t = 0.3 y_(t-1) + 0.6 x_(t-1) + u_t, both starting at 0.
+        The tests treat these as differences (their cumulative sums are the levels).
+    """
     rng = np.random.default_rng(0)
     x, y = np.zeros(count), np.zeros(count)
     for t in range(1, count):
@@ -22,10 +35,12 @@ def x_drives_y(count: int = 400) -> pd.DataFrame:
     return pd.DataFrame({"x": x, "y": y})
 
 
-def test_granger_finds_x_driving_y_and_not_the_reverse():
+def test_granger_finds_x_driving_y_and_not_the_reverse() -> None:
     """Both the VAR's Wald test and the VECM's F-test see x -> y; neither sees y -> x."""
     differences = x_drives_y()
     levels = differences.cumsum()
+    # The names only steer granger_tests ("VAR..." uses the Wald test, anything else the
+    # VECM's F-test); both systems are fitted with 2 lags here, whatever the label says.
     systems = {
         "VAR(5)": VAR(differences).fit(2, trend="c"),
         "VECM(5)": VECM(levels, k_ar_diff=2, coint_rank=1, deterministic="co").fit(),
@@ -36,11 +51,13 @@ def test_granger_finds_x_driving_y_and_not_the_reverse():
     assert table.loc[("VAR(5)", "x"), "p_value"] < 0.001
     assert table.loc[("VAR(5)", "y"), "p_value"] > 0.05
     assert table.loc[("VECM(5)", "x"), "p_value"] < 0.001
+    assert table.loc[("VECM(5)", "y"), "p_value"] > 0.05
 
 
-def test_variance_decomposition_by_hand():
+def test_variance_decomposition_by_hand() -> None:
     """First-month responses [[1, 0], [0.5, 1]]: series 0 is all its own shock; series 1 gets
     0.5^2 = 0.25 from shock 0 and 1 from its own, so 0.25 / 1.25 = 20% and 80%. Shares sum to 1."""
+    # Shape [month, response, shock]: one month, two series, two shocks.
     responses = np.array([[[1.0, 0.0], [0.5, 1.0]]])
 
     shares = variance_decomposition(responses)
@@ -50,28 +67,33 @@ def test_variance_decomposition_by_hand():
     assert shares.sum(axis=2) == pytest.approx(np.ones((1, 2)))
 
 
-def test_variance_decomposition_matches_statsmodels_on_a_var():
+def test_variance_decomposition_matches_statsmodels_on_a_var() -> None:
     """On the VAR's own (differences) responses, the shares equal statsmodels' fevd()."""
     fitted = VAR(x_drives_y()).fit(2, trend="c")
     periods = 12
 
+    # irf(12) returns months 0 to 12 (13 rows); fevd(12) covers the first 12 of them.
     shares = variance_decomposition(fitted.irf(periods).orth_irfs)
     expected = fitted.fevd(periods).decomp  # [variable, month, shock]
 
+    # Reorder statsmodels' [variable, month, shock] to this project's [month, variable, shock].
     assert shares[:periods] == pytest.approx(np.transpose(expected, (1, 0, 2)))
 
 
-def test_cumulative_responses_of_a_hand_built_var1():
+def test_cumulative_responses_of_a_hand_built_var1() -> None:
     """VAR(1) with A = [[0.5, 0], [0.2, 0.5]] and identity shock covariance: the response at
     month s is A^s, so the cumulative level response is I + A + A^2 + ..."""
     coefficients = np.array([[0.5, 0.0], [0.2, 0.5]])
     rng = np.random.default_rng(0)
+    # 20,000 draws, so the estimated A and shock covariance are close to the true ones; with
+    # identity covariance the orthogonalized (Cholesky) responses equal the plain ones.
     values = np.zeros((20000, 2))
     for t in range(1, 20000):
         values[t] = coefficients @ values[t - 1] + rng.normal(size=2)
     fitted = VAR(pd.DataFrame(values, columns=["a", "b"])).fit(1, trend="n")
 
     cumulative = fitted.irf(3).orth_cum_effects
+    # Month 3's cumulative response: I + A + A^2 + A^3.
     expected = sum(np.linalg.matrix_power(coefficients, s) for s in range(4))
 
     assert cumulative[3] == pytest.approx(expected, abs=0.05)
