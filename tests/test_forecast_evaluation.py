@@ -8,14 +8,18 @@ import pandas as pd
 import pytest
 
 from autoregressive_experiments.forecast_evaluation import (
+    EXPONENTIAL_SMOOTHING,
     SYSTEMS,
     accuracy,
+    combine_forecasts,
     convergence_failures,
     diebold_mariano,
     drift_forecast,
+    exponential_smoothing_forecaster,
     interval_scores,
     level_variances,
     mase_scale,
+    moving_average_forecaster,
     naive_forecast,
     pinball_loss,
     rolling_forecasts,
@@ -35,6 +39,56 @@ def test_baselines_on_a_hand_made_series():
     assert naive_forecast(LEVELS, 2)["forecast"].tolist() == [7.0, 7.0]
     assert drift_forecast(LEVELS, 2)["forecast"].tolist() == [9.0, 11.0]
     assert seasonal_naive_forecast(LEVELS, 2, period=2)["forecast"].tolist() == [9.0, 12.0]
+
+
+def test_moving_average_forecasts_the_mean_of_the_last_levels_at_every_horizon():
+    """Last two levels 4 and 7: SMA(2) forecasts 5.5 for every month ahead."""
+    assert moving_average_forecaster(2)(LEVELS, 3)["forecast"].tolist() == [5.5, 5.5, 5.5]
+
+
+def test_exponential_smoothing_variants_behave_as_their_definitions():
+    """On a straight line 10, 11, ..., 69: single smoothing forecasts a flat path; Holt carries
+    the slope of 1 forward; damped Holt still rises, by less each month; Holt-Winters on a line
+    plus a 12-month pattern repeats that pattern."""
+    line = np.arange(10.0, 70.0)
+    single = exponential_smoothing_forecaster(EXPONENTIAL_SMOOTHING["single exp. smoothing"])
+    holt = exponential_smoothing_forecaster(EXPONENTIAL_SMOOTHING["double exp. smoothing (Holt)"])
+    damped = exponential_smoothing_forecaster(
+        EXPONENTIAL_SMOOTHING["double exp. smoothing, damped"]
+    )
+    winters = exponential_smoothing_forecaster(
+        EXPONENTIAL_SMOOTHING["triple exp. smoothing (Holt-Winters)"]
+    )
+
+    flat = single(line, 3)["forecast"]
+    assert flat == pytest.approx(np.full(3, flat[0]))
+    assert holt(line, 3)["forecast"] == pytest.approx([70.0, 71.0, 72.0], abs=1e-3)
+    steps = np.diff(np.concatenate([[line[-1]], damped(line, 12)["forecast"]]))
+    assert (steps > 0).all() and (np.diff(steps) <= 1e-9).all()
+    pattern = np.tile([0.0, 3, -2, 1, 0, -1, 2, 0, -3, 1, 0, -1], 8)
+    seasonal = np.arange(96.0) + pattern
+    assert winters(seasonal, 12)["forecast"] == pytest.approx(
+        np.arange(96.0, 108.0) + pattern[:12], abs=0.05
+    )
+
+
+def test_combine_forecasts_averages_two_models_at_the_same_origin_and_horizon():
+    """Forecasts 2 and 4 average to 3; 1 and 5 to 3; a model's extra row has no partner."""
+    rows = pd.DataFrame(
+        {
+            "model": ["a", "a", "b", "b", "a"],
+            "origin": [1, 1, 1, 1, 2],
+            "horizon": [1, 2, 1, 2, 1],
+            "target": [2, 3, 2, 3, 3],
+            "actual": [9.0, 9, 9, 9, 9],
+            "forecast": [2.0, 1, 4, 5, 8],
+        }
+    )
+
+    combined = combine_forecasts(rows, "a", "b", "a + b")
+
+    assert combined["forecast"].tolist() == [3.0, 3.0]
+    assert combined["model"].unique().tolist() == ["a + b"]
 
 
 def test_naive_spread_is_a_random_walk():

@@ -74,10 +74,23 @@ VARIANCE_MODELS = {
     GARCH_NORMAL: {"vol": "GARCH", "p": 1, "q": 1, "dist": "normal"},
     GARCH_T: {"vol": "GARCH", "p": 1, "q": 1, "dist": "t"},
 }
-GARCH_T_BREAK = "GARCH(1,1), Student-t, break-adjusted"
+BREAK_SUFFIX = ", break-adjusted"
+GARCH_T_BREAK = GARCH_T + BREAK_SUFFIX
 # The regime scaling adds two parameters: the ratio of the two regimes' scales (the overall
 # scale is GARCH's omega) and the break date.
 BREAK_PARAMETERS = 2
+# Asymmetric GARCH (step U5c): volatility may react more to falls than to rises. Separate new
+# models; U5b's choice above is final and doesn't consider them.
+EGARCH_T = "EGARCH(1,1), Student-t"
+GJR_T = "GJR-GARCH(1,1), Student-t"
+ASYMMETRIC_MODELS = {
+    EGARCH_T: {"vol": "EGARCH", "p": 1, "o": 1, "q": 1, "dist": "t"},
+    GJR_T: {"vol": "GARCH", "p": 1, "o": 1, "q": 1, "dist": "t"},
+}
+# EGARCH has no closed-form multi-step variance forecast, so it is simulated; a fixed seed makes
+# every rerun give identical numbers.
+SIMULATIONS = 2000
+SIMULATION_SEED = 0
 
 VERDICTS = {
     "CARRY GARCH FORWARD": (
@@ -117,31 +130,40 @@ def information_criteria(loglikelihood: float, parameters: int, count: int) -> t
     return -2 * loglikelihood + 2 * parameters, -2 * loglikelihood + parameters * np.log(count)
 
 
-def variance_candidates(residuals: np.ndarray) -> dict[str, dict]:
-    """All four variance models, with log-likelihoods of the same residuals in trillions, their
-    parameter counts, and each model's monthly standard deviation in trillions."""
+def variance_spec(name: str) -> dict:
+    """arch settings for a variance model, with or without the break-adjustment suffix."""
+    return (VARIANCE_MODELS | ASYMMETRIC_MODELS)[name.removesuffix(BREAK_SUFFIX)]
+
+
+def fit_candidate(residuals: np.ndarray, name: str) -> dict:
+    """One variance model on zero-mean residuals: its fit, the log-likelihood of the residuals in
+    trillions, its parameter count, and its monthly standard deviation in trillions. A
+    break-adjusted model is fitted on each regime divided by its own standard deviation."""
     values = np.asarray(residuals, dtype=float)
-    candidates = {
-        name: {
+    spec = variance_spec(name)
+    if not name.endswith(BREAK_SUFFIX):
+        fit = arch_model(values, mean="Zero", rescale=True, **spec).fit(disp="off")
+        return {
             "fit": fit,
             "loglikelihood": original_units_loglikelihood(fit),
             "parameters": fit.num_params,
             "sd": np.asarray(fit.conditional_volatility) / fit.scale,
         }
-        for name, fit in fit_variance_models(values).items()
-    }
     scales = regime_scales(values, variance_break(values))
-    break_fit = arch_model(
-        values / scales, mean="Zero", rescale=True, **VARIANCE_MODELS[GARCH_T]
-    ).fit(disp="off")
-    candidates[GARCH_T_BREAK] = {
-        "fit": break_fit,
+    fit = arch_model(values / scales, mean="Zero", rescale=True, **spec).fit(disp="off")
+    return {
+        "fit": fit,
         # Change of variables u = e / s: log f(e) = log f(u) - log s, summed over the months.
-        "loglikelihood": original_units_loglikelihood(break_fit) - float(np.log(scales).sum()),
-        "parameters": break_fit.num_params + BREAK_PARAMETERS,
-        "sd": scales * np.asarray(break_fit.conditional_volatility) / break_fit.scale,
+        "loglikelihood": original_units_loglikelihood(fit) - float(np.log(scales).sum()),
+        "parameters": fit.num_params + BREAK_PARAMETERS,
+        "sd": scales * np.asarray(fit.conditional_volatility) / fit.scale,
     }
-    return candidates
+
+
+def variance_candidates(residuals: np.ndarray) -> dict[str, dict]:
+    """All four U5b variance models, with log-likelihoods of the same residuals in trillions,
+    their parameter counts, and each model's monthly standard deviation in trillions."""
+    return {name: fit_candidate(residuals, name) for name in [*VARIANCE_MODELS, GARCH_T_BREAK]}
 
 
 def garch_variance_path(
@@ -151,14 +173,24 @@ def garch_variance_path(
     GARCH variant, and its Student-t degrees of freedom (inf for normal errors)."""
     values = np.asarray(residuals, dtype=float)
     regime_scale = 1.0
-    if variant == GARCH_T_BREAK:
+    if variant.endswith(BREAK_SUFFIX):
         scales = regime_scales(values, variance_break(values))
         values, regime_scale = values / scales, scales[-1]
-    spec = VARIANCE_MODELS[GARCH_T if variant == GARCH_T_BREAK else variant]
+    spec = variance_spec(variant)
     fit = arch_model(values, mean="Zero", rescale=True, **spec).fit(disp="off")
-    variances = fit.forecast(horizon=steps, reindex=False).variance.to_numpy()[-1]
+    nu = float(fit.params.get("nu", np.inf))
+    options = {}
+    if spec["vol"] == "EGARCH" and steps > 1:
+        generator = np.random.default_rng(SIMULATION_SEED)
+        options = {
+            "method": "simulation",
+            "simulations": SIMULATIONS,
+            # Seeded unit-variance Student-t shocks; arch ignores random_state here.
+            "rng": lambda size: generator.standard_t(nu, size) * np.sqrt((nu - 2) / nu),
+        }
+    variances = fit.forecast(horizon=steps, reindex=False, **options).variance.to_numpy()[-1]
     # Back from arch's rescaled units, and onto the latest (post-break) regime's scale.
-    return variances / fit.scale**2 * regime_scale**2, float(fit.params.get("nu", np.inf))
+    return variances / fit.scale**2 * regime_scale**2, nu
 
 
 def half_life(persistence: float) -> float:

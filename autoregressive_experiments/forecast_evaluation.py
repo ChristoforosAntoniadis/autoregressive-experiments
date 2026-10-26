@@ -58,9 +58,11 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from statsmodels.tsa.api import VAR
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from statsmodels.tsa.vector_ar.vecm import VECM
 import typer
 
+from autoregressive_experiments.asymmetric_garch import EGARCH_T, GJR_T, asymmetric_check
 from autoregressive_experiments.config import (
     FIGURES_DIR,
     INTERIM_DATA_DIR,
@@ -87,7 +89,7 @@ from autoregressive_experiments.residual_checks import (
 )
 from autoregressive_experiments.var_analysis import CARRIED_LAGS
 from autoregressive_experiments.var_models import VECM_RANK
-from autoregressive_experiments.volatility_models import garch_check, garch_variance_path
+from autoregressive_experiments.volatility_models import garch_variance_path
 
 app = typer.Typer()
 
@@ -101,9 +103,32 @@ BASELINES = (NAIVE, "drift", "seasonal naive")
 # The systems carried forward from step V6; each forecasts both series at once.
 SYSTEMS = (f"VAR({CARRIED_LAGS})", f"VECM({CARRIED_LAGS})")
 NORMAL_95 = stats.norm.ppf(0.975)
+# Smoothing baselines (the user's request, 2026-10-26): simple moving averages of the last k
+# levels, and exponential smoothing via statsmodels' holtwinters.ExponentialSmoothing.
+MOVING_AVERAGE_WINDOWS = (3, 6, 12)
+EXPONENTIAL_SMOOTHING = {
+    "single exp. smoothing": {},
+    "double exp. smoothing (Holt)": {"trend": "add"},
+    "double exp. smoothing, damped": {"trend": "add", "damped_trend": True},
+    "triple exp. smoothing (Holt-Winters)": {
+        "trend": "add",
+        "seasonal": "add",
+        "seasonal_periods": SEASONAL_PERIOD,
+    },
+}
+SMOOTHING = (*(f"SMA({window})" for window in MOVING_AVERAGE_WINDOWS), *EXPONENTIAL_SMOOTHING)
+# A 50 / 50 average of the selected SARIMA and naive forecasts.
+COMBINATION = "SARIMA + naive average"
 SPLITS = ("validation", "test")
 QUANTILES = (0.025, 0.1, 0.5, 0.9, 0.975)
-VARIANCES = ("constant", "garch")
+# Interval variants: constant variance, U5b's GARCH, and U5c's EGARCH and GJR-GARCH.
+VARIANCES = ("constant", "garch", "egarch", "gjr")
+VARIANCE_NAMES = {
+    "constant": "constant variance",
+    "garch": "with GARCH",
+    "egarch": "with EGARCH",
+    "gjr": "with GJR-GARCH",
+}
 
 REPORT_PATH = REPORTS_DIR / "forecast_evaluation.txt"
 METRICS_PATH = REPORTS_DIR / "forecast_metrics.csv"
@@ -111,19 +136,22 @@ INTERVALS_PATH = REPORTS_DIR / "forecast_intervals.csv"
 FIGURE_PATH = FIGURES_DIR / "forecast_evaluation.png"
 INTERVALS_FIGURE_PATH = FIGURES_DIR / "forecast_intervals.png"
 
-# Reference palette, categorical slots 1-3 for the SARIMA models (validated; slot 3's contrast
-# warning is covered by the legend and the report's tables). Baselines are ink and greys.
-MODEL_COLORS = ("#2a78d6", "#eb6834", "#1baf7a")
+# Reference palette: baselines are ink and greys; slots 3-4's below-3:1 contrast is backed by
+# the legends and the report's tables.
 BASELINE_STYLES = {
     NAIVE: (PRIMARY_INK, 2),
     "drift": (MUTED_INK, 1.2),
     "seasonal naive": ("#c3c2b7", 1.2),
 }
-# Slots 4 and 5 for the systems (validated with slots 1-3; the report's tables back their
-# below-3:1 contrast).
-SYSTEM_COLORS = {SYSTEMS[0]: "#eda100", SYSTEMS[1]: "#e87ba4"}
-# Slots 1 and 2 (validated together) for constant variance vs GARCH in the interval figure.
-VARIANCE_COLORS = {"constant": MODEL_COLORS[0], "garch": MODEL_COLORS[1]}
+# Slots 1-4 (validated together) for the interval variants in the interval figure.
+VARIANCE_COLORS = dict(zip(VARIANCES, ("#2a78d6", "#eb6834", "#1baf7a", "#eda100")))
+# The accuracy figure shows each family's selected model in slots 1-4 (validated together).
+FAMILY_COLORS = {
+    "SARIMA": "#2a78d6",
+    "system": "#eb6834",
+    "smoothing": "#1baf7a",
+    "combination": "#eda100",
+}
 
 # A forecaster takes the levels up to an origin and a step count, and returns "forecast" (the
 # level path) plus, optionally, "sd_constant" / "sd_garch" paths, "nu_garch" and "converged".
@@ -149,6 +177,40 @@ def seasonal_naive_forecast(levels: np.ndarray, steps: int, period: int = SEASON
     return {"forecast": levels[-1] + np.cumsum(last_changes[:steps])}
 
 
+def moving_average_forecaster(window: int) -> Forecaster:
+    """Every horizon gets the average of the last `window` levels."""
+
+    def forecast(levels: np.ndarray, steps: int) -> dict:
+        return {"forecast": np.full(steps, np.mean(levels[-window:]))}
+
+    return forecast
+
+
+def exponential_smoothing_forecaster(settings: dict) -> Forecaster:
+    """statsmodels' ExponentialSmoothing on the levels, refitted (parameters re-estimated) at
+    every origin: single (no settings), Holt (additive trend, optionally damped), or
+    Holt-Winters (additive trend and season)."""
+
+    def forecast(levels: np.ndarray, steps: int) -> dict:
+        fitted = ExponentialSmoothing(levels, initialization_method="estimated", **settings).fit()
+        return {"forecast": np.asarray(fitted.forecast(steps))}
+
+    return forecast
+
+
+def combine_forecasts(forecasts: pd.DataFrame, first: str, second: str, name: str) -> pd.DataFrame:
+    """Rows for `name`: the equal-weight average of two models' forecasts, same origin and
+    horizon. Point forecasts only; no intervals."""
+    keys = ["origin", "horizon", "target", "actual"]
+    pair = forecasts[forecasts["model"] == first][[*keys, "forecast"]].merge(
+        forecasts[forecasts["model"] == second][[*keys, "forecast"]],
+        on=keys,
+        suffixes=("_first", "_second"),
+    )
+    average = (pair["forecast_first"] + pair["forecast_second"]) / 2
+    return pair[keys].assign(model=name, forecast=average)
+
+
 def level_variances(psi: np.ndarray, shock_variances: np.ndarray) -> np.ndarray:
     """Forecast-error variance of the level at each horizon h = 1, ..., len(shock_variances).
 
@@ -164,9 +226,10 @@ def level_variances(psi: np.ndarray, shock_variances: np.ndarray) -> np.ndarray:
     )
 
 
-def sarima_forecaster(model: dict, garch_variant: str) -> Forecaster:
+def sarima_forecaster(model: dict, variants: dict[str, str]) -> Forecaster:
     """Refit the model on the history's first differences; add its forecasts to the last level;
-    give the level's spread with a constant shock variance and with the GARCH variant's path."""
+    give the level's spread with a constant shock variance and with each volatility model's
+    variance path (variants maps "garch" / "egarch" / "gjr" to the chosen variant names)."""
 
     def forecast(levels: np.ndarray, steps: int) -> dict:
         fitted = fit_sarima(
@@ -174,15 +237,18 @@ def sarima_forecaster(model: dict, garch_variant: str) -> Forecaster:
         )
         psi = np.asarray(fitted.impulse_responses(steps=steps)).ravel()[:steps]
         residuals = fitted.resid.iloc[fitted.loglikelihood_burn :]
-        garch_variances, nu = garch_variance_path(residuals, garch_variant, steps)
         constant = np.full(steps, float(fitted.params["sigma2"]))
-        return {
+        output = {
             "forecast": levels[-1] + np.cumsum(np.asarray(fitted.forecast(steps))),
             "sd_constant": np.sqrt(level_variances(psi, constant)),
-            "sd_garch": np.sqrt(level_variances(psi, garch_variances)),
-            "nu_garch": nu,
             "converged": bool(fitted.mle_retvals.get("converged", False)),
         }
+        # One spread path per volatility model (U5b's GARCH, U5c's EGARCH and GJR).
+        for key, variant in variants.items():
+            variances, nu = garch_variance_path(residuals, variant, steps)
+            output[f"sd_{key}"] = np.sqrt(level_variances(psi, variances))
+            output[f"nu_{key}"] = nu
+        return output
 
     return forecast
 
@@ -424,16 +490,14 @@ def convergence_failures(forecasts: pd.DataFrame) -> dict[str, list[str]]:
     }
 
 
-def accuracy_report(
-    metrics: pd.DataFrame, selected: dict[str, str], selected_system: dict[str, str]
-) -> list[str]:
+def accuracy_report(metrics: pd.DataFrame, selected_by_family: dict) -> list[str]:
     lines = []
     for column in VALUE_COLUMNS:
         series_metrics = metrics[metrics["series"] == column]
-        lines.append(
-            f"{column}  (selected on validation: {selected[column]}, "
-            f"system {selected_system[column]})"
+        chosen = ", ".join(
+            f"{family} {picks[column]}" for family, picks in selected_by_family.items()
         )
+        lines.append(f"{column}  (selected on validation: {chosen})")
         for horizon in HORIZONS:
             table = series_metrics[series_metrics["horizon"] == horizon].sort_values("MASE")
             naive_mase = table.loc[table["model"] == NAIVE, "MASE"].iloc[0]
@@ -490,21 +554,34 @@ def interval_report(intervals: pd.DataFrame) -> list[str]:
 
 
 def evaluation_report(
-    results: dict, periods: dict[str, str], scales: dict, selected: dict, selected_system: dict
+    results: dict, periods: dict[str, str], scales: dict, selected_by_family: dict
 ) -> str:
     lines = [
-        "Out-of-sample forecast evaluation: SARIMA (step U6) and the VAR / VECM systems",
+        (
+            "Out-of-sample forecast evaluation: SARIMA, VAR / VECM, smoothing baselines, and the "
+            "SARIMA + naive average"
+        ),
         (
             "Rolling origin, expanding window: each model is refitted at every monthly origin on "
             f"all data up to it (data start {periods['start']}); each origin is one fold. "
             "Orders come from training; the selected model per series and family (SARIMA, "
-            "system) from validation (lowest one-month MASE), fixed before test. Each family's "
-            "test is run once, with all its models."
+            "system, smoothing) from validation (lowest one-month MASE), fixed before test. "
+            "Each family's test is run once, with all its models."
         ),
         (
             f"Systems: {SYSTEMS[0]} on the differences and {SYSTEMS[1]} (rank {VECM_RANK}) on "
             "the levels, fitted on both series up to each origin and forecasting both; normal "
             "intervals from the system's forecast-error covariance (no GARCH)."
+        ),
+        (
+            "Smoothing: SMA(k) forecasts the average of the last k levels; single, double "
+            "(Holt, plain and damped) and triple (Holt-Winters, 12-month season) exponential "
+            "smoothing, statsmodels' ExponentialSmoothing on the levels, re-estimated at every "
+            "origin. Point forecasts only."
+        ),
+        (
+            f"{COMBINATION}: the equal-weight average of the series' selected SARIMA and the "
+            "naive (no-change) forecast, from the same origins. Point forecasts only."
         ),
         (
             "Point errors are on the levels: MAE, RMSE in trillions; MSE in trillions squared; "
@@ -518,14 +595,15 @@ def evaluation_report(
             "forecast, absolute-error loss (matches MAE) and squared-error loss (matches MSE), "
             "with the Harvey-Leybourne-Newbold correction and h - 1 autocovariance lags. "
             f"'better' / 'worse' when significant at {SIGNIFICANCE_LEVEL:.0%}, otherwise the "
-            "p-value. DM vs SARIMA: the same test, each system against the series' selected "
-            "SARIMA model: does modelling the two series jointly beat modelling them alone?"
+            "p-value. DM vs SARIMA: the same test, each non-SARIMA model against the series' "
+            "selected SARIMA: does any other approach beat it?"
         ),
         (
             "Intervals: quantiles of each model's forecast distribution on the levels, with a "
-            "constant shock variance or the GARCH variant chosen in step U5b (refitted at every "
-            "origin); normal for constant variance, unit-variance Student-t for GARCH-t; naive "
-            "uses random-walk quantiles. Pinball = mean quantile loss over the 5 quantiles."
+            "constant shock variance, U5b's GARCH, or U5c's EGARCH / GJR-GARCH (each refitted "
+            "at every origin; EGARCH's multi-step variances simulated with a fixed seed); normal "
+            "for constant variance, unit-variance Student-t otherwise; naive uses random-walk "
+            "quantiles. Pinball = mean quantile loss over the 5 quantiles."
         ),
         "The COVID months (2020) are in validation and are kept, by the user's decision.",
         "",
@@ -534,7 +612,7 @@ def evaluation_report(
         metrics, intervals, failures = results[split]
         lines.append(f"===== {split.upper()}: targets {periods[split]} =====")
         lines.append("")
-        lines.extend(accuracy_report(metrics, selected, selected_system))
+        lines.extend(accuracy_report(metrics, selected_by_family))
         lines.extend(interval_report(intervals))
         failed = {model: months for model, months in failures.items() if months}
         refits = sum(len(months) for months in failures.values())
@@ -557,23 +635,28 @@ def series_title(column: str) -> str:
     return column.removesuffix("_T").replace("_", " ")
 
 
-def model_styles(sarima_names: list[str]) -> dict[str, tuple[str, float]]:
-    styles = {name: (color, 2) for name, color in zip(sarima_names, MODEL_COLORS)}
-    systems = {name: (color, 2) for name, color in SYSTEM_COLORS.items()}
-    return styles | systems | BASELINE_STYLES
+def family_styles(selected_by_family: dict, column: str) -> dict[str, tuple[str, float, str]]:
+    """Each family's selected model for the series, then drift and seasonal naive: name ->
+    (color, line width, legend label)."""
+    styles = {
+        picks[column]: (FAMILY_COLORS[family], 2, f"{family}: {picks[column]}")
+        for family, picks in selected_by_family.items()
+    }
+    for name in ("drift", "seasonal naive"):
+        color, width = BASELINE_STYLES[name]
+        styles[name] = (color, width, name)
+    return styles
 
 
 def evaluation_figure(
     metrics: pd.DataFrame,
     forecasts: pd.DataFrame,
-    sarima_names: dict[str, list[str]],
-    selected: dict[str, str],
-    selected_system: dict[str, str],
+    selected_by_family: dict,
     test_start: pd.Timestamp,
 ) -> plt.Figure:
-    """Per series: each model's MAE relative to naive by horizon on validation and on test, and
-    the actual path against the selected SARIMA's, the selected system's and the naive
-    one-month forecasts."""
+    """Per series: each family's selected model's MAE relative to naive by horizon, on
+    validation and on test (every model is in the report's tables), and the actual path against
+    the selected SARIMA's, the best other family's and the naive one-month forecasts."""
     apply_chart_style()
     rows = len(VALUE_COLUMNS)
     figure, axes = plt.subplots(
@@ -585,7 +668,7 @@ def evaluation_figure(
         gridspec_kw={"width_ratios": (1, 1, 1.4)},
     )
     for row, column in enumerate(VALUE_COLUMNS):
-        styles = model_styles(sarima_names[column])
+        styles = family_styles(selected_by_family, column)
         for axis in axes[row]:
             axis.set_facecolor(SURFACE)
         for split, axis in zip(SPLITS, axes[row][:2]):
@@ -595,12 +678,10 @@ def evaluation_figure(
             naive_mase = split_metrics[split_metrics["model"] == NAIVE].set_index("horizon")[
                 "MASE"
             ]
-            for name, (color, width) in styles.items():
-                if name == NAIVE:
-                    continue
+            for name, (color, width, label) in styles.items():
                 model_metrics = split_metrics[split_metrics["model"] == name].set_index("horizon")
                 relative = model_metrics["MASE"] / naive_mase
-                axis.plot(relative.index, relative, color=color, linewidth=width, label=name)
+                axis.plot(relative.index, relative, color=color, linewidth=width, label=label)
                 # Filled: significantly different from naive (DM, absolute loss); hollow: not.
                 significant = model_metrics["DM_absolute_p"] < SIGNIFICANCE_LEVEL
                 for filled, face in ((significant, color), (~significant, SURFACE)):
@@ -618,7 +699,7 @@ def evaluation_figure(
             axis.set_xlabel("Horizon (months)")
             axis.set_ylabel("MAE relative to naive")
             axis.set_title(
-                f"{series_title(column)}, {split}: forecast error relative to naive\n"
+                f"{series_title(column)}, {split}: each family's selected model vs naive\n"
                 "below the naive line at 1: more accurate than naive\n"
                 "filled point: significantly different from naive (Diebold-Mariano, 5%)",
                 loc="left",
@@ -626,16 +707,29 @@ def evaluation_figure(
             )
             # Below the axes: the lines can sit anywhere between the worst and the best model.
             axis.legend(
-                loc="upper center", bbox_to_anchor=(0.5, -0.17), ncols=3, fontsize=8, frameon=False
+                loc="upper center", bbox_to_anchor=(0.5, -0.17), ncols=2, fontsize=8, frameon=False
             )
 
+        # The SARIMA pick against whichever other family's pick did best on validation.
+        validation = metrics[
+            (metrics["series"] == column)
+            & (metrics["split"] == "validation")
+            & (metrics["horizon"] == 1)
+        ].set_index("model")["MASE"]
+        sarima = selected_by_family["SARIMA"][column]
+        rival = min(
+            (picks[column] for family, picks in selected_by_family.items() if family != "SARIMA"),
+            key=lambda name: validation[name],
+        )
         path_axis = axes[row][2]
         one_month = forecasts[(forecasts["series"] == column) & (forecasts["horizon"] == 1)]
+        # Sorted by date: the average's rows are appended split by split, not in time order.
+        one_month = one_month.sort_values("target")
         actual = one_month[one_month["model"] == NAIVE]
         path_axis.plot(
             actual["target"], actual["actual"], color=PRIMARY_INK, linewidth=2, label="actual"
         )
-        for name in (selected[column], selected_system[column], NAIVE):
+        for name in (sarima, rival, NAIVE):
             model_path = one_month[one_month["model"] == name]
             path_axis.plot(
                 model_path["target"],
@@ -662,8 +756,7 @@ def evaluation_figure(
         path_axis.set_ylabel("Trillions")
         path_axis.set_title(
             f"{series_title(column)}: actual vs one-month forecasts\n"
-            f"selected {selected[column]}, selected system {selected_system[column]}, "
-            "and naive\n",
+            f"selected {sarima}, the best other family's {rival}, and naive\n",
             loc="left",
             fontsize=10,
         )
@@ -674,14 +767,15 @@ def evaluation_figure(
 
 
 def intervals_figure(intervals: pd.DataFrame, selected: dict[str, str]) -> plt.Figure:
-    """Per series and split: the selected model's 80% and 95% coverage by horizon, constant
-    variance vs GARCH, against the targets."""
+    """Per series, interval level and split: the selected SARIMA's coverage by horizon with
+    constant variance, GARCH, EGARCH and GJR-GARCH, against the target."""
     apply_chart_style()
-    rows = len(VALUE_COLUMNS)
+    panels = [(column, level) for column in VALUE_COLUMNS for level in ("80", "95")]
     figure, axes = plt.subplots(
-        rows, len(SPLITS), figsize=(14, 4.4 * rows), squeeze=False, facecolor=SURFACE
+        len(panels), len(SPLITS), figsize=(14, 3.6 * len(panels)), squeeze=False, facecolor=SURFACE
     )
-    for row, column in enumerate(VALUE_COLUMNS):
+    for row, (column, level) in enumerate(panels):
+        target = int(level) / 100
         for split, axis in zip(SPLITS, axes[row]):
             axis.set_facecolor(SURFACE)
             chosen = intervals[
@@ -689,42 +783,39 @@ def intervals_figure(intervals: pd.DataFrame, selected: dict[str, str]) -> plt.F
                 & (intervals["split"] == split)
                 & (intervals["model"] == selected[column])
             ]
-            for target in (0.8, 0.95):
-                axis.axhline(target, color=PRIMARY_INK, linewidth=1)
-                axis.annotate(
-                    f" {target:.0%} target",
-                    (1, target),
-                    xycoords=("axes fraction", "data"),
-                    va="center",
-                    color=SECONDARY_INK,
-                    fontsize=9,
-                )
+            axis.axhline(target, color=PRIMARY_INK, linewidth=1)
+            axis.annotate(
+                f" {level}% target",
+                (1, target),
+                xycoords=("axes fraction", "data"),
+                va="center",
+                color=SECONDARY_INK,
+                fontsize=9,
+            )
             for variance in VARIANCES:
                 lines = chosen[chosen["variance"] == variance].set_index("horizon")
-                for level, marker in (("95", "o"), ("80", "s")):
-                    axis.plot(
-                        lines.index,
-                        lines[f"coverage_{level}"],
-                        color=VARIANCE_COLORS[variance],
-                        linewidth=2,
-                        marker=marker,
-                        markersize=6,
-                        label=f"{level}% interval, "
-                        + ("constant variance" if variance == "constant" else "with GARCH"),
-                    )
+                axis.plot(
+                    lines.index,
+                    lines[f"coverage_{level}"],
+                    color=VARIANCE_COLORS[variance],
+                    linewidth=2,
+                    marker="o",
+                    markersize=6,
+                    label=VARIANCE_NAMES[variance],
+                )
             axis.set_ylim(0, 1.05)
             axis.set_xticks(HORIZONS)
             axis.set_xlabel("Horizon (months)")
-            axis.set_ylabel("Share of actuals inside the interval")
+            axis.set_ylabel("Share of actuals inside")
             axis.set_title(
-                f"{series_title(column)}, {split}: {selected[column]}\n"
-                "interval coverage; on its target line: honest; below: too narrow",
+                f"{series_title(column)}, {split}: {selected[column]}, {level}% interval\n"
+                "on the target line: honest; below: too narrow; above: too wide",
                 loc="left",
                 fontsize=10,
             )
     handles, labels = axes[0][0].get_legend_handles_labels()
     figure.legend(handles, labels, loc="upper right", ncols=4, frameon=False, fontsize=9)
-    figure.tight_layout(rect=(0, 0, 0.96, 1 - 0.35 / figure.get_figheight()))
+    figure.tight_layout(rect=(0, 0, 0.95, 1 - 0.35 / figure.get_figheight()))
     return figure
 
 
@@ -736,11 +827,16 @@ def main(
 ) -> None:
     checked, _ = checked_models(levels_path, differences_path, candidates_path)
     passed = [result for result in checked if result["passed"]]
-    # The GARCH variant each model carries forward, chosen on the training residuals (step U5b).
-    garch_variants = {
-        (result["series"], model_label(result)): garch_check(result["residuals"])["garch_name"]
-        for result in passed
-    }
+    # Each model's volatility variants, chosen on the training residuals: U5b's GARCH (final,
+    # unchanged) and U5c's EGARCH and GJR-GARCH.
+    volatility_variants = {}
+    for result in passed:
+        checks = asymmetric_check(result["residuals"])
+        volatility_variants[(result["series"], model_label(result))] = {
+            "garch": checks["reference"],
+            "egarch": checks[EGARCH_T]["variant"],
+            "gjr": checks[GJR_T]["variant"],
+        }
     levels = pd.read_csv(levels_path, parse_dates=[DATE_COLUMN])
     levels = levels.sort_values(DATE_COLUMN).reset_index(drop=True)
     splits = split_by_time(levels, split_boundaries(levels))
@@ -760,10 +856,6 @@ def main(
         column: mase_scale(splits["train"][column].to_numpy(dtype=float))
         for column in VALUE_COLUMNS
     }
-    sarima_names = {
-        column: [model_label(m) for m in passed if m["series"] == column]
-        for column in VALUE_COLUMNS
-    }
     all_levels = levels[list(VALUE_COLUMNS)].to_numpy(dtype=float)
     # One fit per system and origin, shared by both series' forecasters.
     system_fits: dict = {}
@@ -773,7 +865,7 @@ def main(
         for target, column in enumerate(VALUE_COLUMNS):
             values = levels[column].to_numpy(dtype=float)
             forecasters: dict[str, Forecaster] = {
-                model_label(m): sarima_forecaster(m, garch_variants[(column, model_label(m))])
+                model_label(m): sarima_forecaster(m, volatility_variants[(column, model_label(m))])
                 for m in passed
                 if m["series"] == column
             }
@@ -784,6 +876,14 @@ def main(
                 NAIVE: naive_forecast,
                 "drift": drift_forecast,
                 "seasonal naive": seasonal_naive_forecast,
+            }
+            forecasters |= {
+                f"SMA({window})": moving_average_forecaster(window)
+                for window in MOVING_AVERAGE_WINDOWS
+            }
+            forecasters |= {
+                name: exponential_smoothing_forecaster(settings)
+                for name, settings in EXPONENTIAL_SMOOTHING.items()
             }
             logger.info(f"{split}, {column}: rolling forecasts for {len(forecasters)} models")
             forecasts = rolling_forecasts(dates, values, first_origin, last_target, forecasters)
@@ -800,24 +900,46 @@ def main(
     forecasts = pd.concat(all_forecasts, ignore_index=True)
     metrics = pd.concat(all_metrics, ignore_index=True)
     intervals = pd.concat(all_intervals, ignore_index=True)
-    # Selection per family, on validation only: the SARIMA family's choice is unchanged by the
-    # systems joining the harness.
+    # Selection per family, on validation only: earlier families' choices are unchanged by new
+    # families joining the harness.
     validation_one_month = metrics[(metrics["split"] == "validation") & (metrics["horizon"] == 1)]
+    model = validation_one_month["model"]
     families = {
-        "SARIMA": ~validation_one_month["model"].isin([*BASELINES, *SYSTEMS]),
-        "system": validation_one_month["model"].isin(SYSTEMS),
+        "SARIMA": ~model.isin([*BASELINES, *SYSTEMS, *SMOOTHING]),
+        "system": model.isin(SYSTEMS),
+        "smoothing": model.isin(SMOOTHING),
     }
-    selected, selected_system = (
-        {
+    selected_by_family = {
+        family: {
             column: group.sort_values("MASE")["model"].iloc[0]
             for column, group in validation_one_month[mask].groupby("series")
         }
-        for mask in families.values()
-    )
-    # Does joint modelling beat univariate modelling? Each system against the selected SARIMA.
+        for family, mask in families.items()
+    }
+    selected = selected_by_family["SARIMA"]
+    # The average of the validation-selected SARIMA and naive, from the forecasts already made.
+    combined = []
+    for (split, column), group in forecasts.groupby(["split", "series"]):
+        labels = {"split": split, "series": column}
+        rows = combine_forecasts(group, selected[column], NAIVE, COMBINATION)
+        combined.append(rows.assign(**labels))
+        pool = pd.concat([group[group["model"] == NAIVE], rows])
+        metrics = pd.concat(
+            [
+                metrics,
+                metrics_table(rows, scales[column])
+                .merge(dm_against(pool, NAIVE), on=["model", "horizon"], how="left")
+                .assign(**labels),
+            ],
+            ignore_index=True,
+        )
+    forecasts = pd.concat([forecasts, *combined], ignore_index=True)
+    selected_by_family["combination"] = {column: COMBINATION for column in VALUE_COLUMNS}
+    # Does any other approach beat univariate SARIMA? Each one against the selected SARIMA.
+    others = [*SYSTEMS, *SMOOTHING, COMBINATION]
     against_sarima = [
         dm_against(
-            group[group["model"].isin([*SYSTEMS, selected[column]])],
+            group[group["model"].isin([*others, selected[column]])],
             selected[column],
             prefix="DM_SARIMA",
         ).assign(split=split, series=column)
@@ -839,14 +961,12 @@ def main(
         )
         for split in SPLITS
     }
-    report = evaluation_report(results, periods, scales, selected, selected_system)
+    report = evaluation_report(results, periods, scales, selected_by_family)
     REPORT_PATH.write_text(report, encoding="utf-8")
     print(report)
 
     test_start = dates.iloc[validation_end + 1]
-    figure = evaluation_figure(
-        metrics, forecasts, sarima_names, selected, selected_system, test_start
-    )
+    figure = evaluation_figure(metrics, forecasts, selected_by_family, test_start)
     figure.savefig(FIGURE_PATH, dpi=150, facecolor=SURFACE)
     plt.close(figure)
     figure = intervals_figure(intervals, selected)

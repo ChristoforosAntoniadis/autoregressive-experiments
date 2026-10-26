@@ -9,8 +9,9 @@ Experiments on autoregressive approaches, from traditional econometrics (SARIMA,
 
 ## Plan
 
-- **Univariate (SARIMA, then ARCH / GARCH):** stationarity tests (ADF / KPSS on levels and first differences), ACF / PACF, and SARIMA order selection by AIC / AICc / BIC, residual checks of the selected models (Ljung-Box, Breusch-Godfrey), volatility checks (Engle's ARCH-LM, with and without a variance break), and GARCH(1,1) on the residuals are done on the training split. Rolling-origin forecasts (expanding window, one fold per monthly origin) are scored on validation and then once on test, against naive, drift and seasonal-naive baselines: MAE, MSE, RMSE, MAPE, MASE and Diebold-Mariano tests at 1–12 months, plus quantile forecast intervals (80% / 95% coverage, pinball loss) with and without GARCH; see [`reports/`](reports/).
+- **Univariate (SARIMA, then ARCH / GARCH):** stationarity tests (ADF / KPSS on levels and first differences), ACF / PACF, and SARIMA order selection by AIC / AICc / BIC, residual checks of the selected models (Ljung-Box, Breusch-Godfrey), volatility checks (Engle's ARCH-LM, with and without a variance break), GARCH(1,1), EGARCH and GJR-GARCH on the residuals are done on the training split. Rolling-origin forecasts (expanding window, one fold per monthly origin) are scored on validation and then once on test, against naive, drift and seasonal-naive baselines: MAE, MSE, RMSE, MAPE, MASE and Diebold-Mariano tests at 1–12 months, plus quantile forecast intervals (80% / 95% coverage, pinball loss) with and without GARCH; see [`reports/`](reports/).
 - **Multivariate (VAR / VECM):** lag selection and the Johansen cointegration test are done on the training split; no cointegration was found, so the system is a VAR on the first differences. VAR(5) and a rank-1 VECM(5) are estimated, stable and pass the residual checks; Granger causality, impulse responses and the variance decomposition show a one-way link, from total assets to the monetary base. Both systems are evaluated with the same harness, on validation and once on test, including a Diebold-Mariano comparison against the selected SARIMA: joint modelling doesn't beat univariate modelling for either series.
+- **Smoothing baselines and a combination:** moving averages (3, 6, 12 months), single, double (Holt, plain and damped) and triple (Holt-Winters) exponential smoothing, and a 50 / 50 average of SARIMA and the naive forecast, all through the same harness. On test, damped Holt is the best total-assets model so far, significantly better than naive and SARIMA at every horizon.
 - **Machine learning and neural networks:** models on lag features (gradient boosting, regularized regression), on lookback windows (MLP, N-BEATS, DLinear), and recurrent networks (LSTM, GRU), evaluated on the same chronological 60 / 20 / 20 split.
 
 ## Quickstart
@@ -28,6 +29,7 @@ make diagnostics                  # ADF / KPSS, ACF / PACF and SARIMA informatio
 make residuals                    # Ljung-Box / Breusch-Godfrey on the selected models -> reports/
 make volatility                   # ARCH-LM and a variance-break check on those models -> reports/
 make garch                        # GARCH(1,1) vs constant variance on those models -> reports/
+make asymmetric-garch             # EGARCH and GJR-GARCH vs that GARCH -> reports/
 make evaluate                     # rolling-origin forecasts (SARIMA, VAR, VECM) on validation and test (~4-6 min)
 make var                          # VAR lag order and Johansen cointegration test -> reports/
 make var-checks                   # fit VAR / VECM candidates; stability and Portmanteau checks -> reports/
@@ -54,6 +56,7 @@ python -m autoregressive_experiments.diagnostics
 python -m autoregressive_experiments.residual_checks
 python -m autoregressive_experiments.volatility_checks
 python -m autoregressive_experiments.volatility_models
+python -m autoregressive_experiments.asymmetric_garch
 python -m autoregressive_experiments.forecast_evaluation
 python -m autoregressive_experiments.var_diagnostics
 python -m autoregressive_experiments.var_models
@@ -90,6 +93,7 @@ autoregressive-experiments/
 │   ├── residual_checks.py       # Ljung-Box and Breusch-Godfrey on the selected models' residuals
 │   ├── volatility_checks.py     # ARCH-LM, with and without an estimated variance break
 │   ├── volatility_models.py     # GARCH(1,1) (normal and Student-t) vs constant variance, by BIC
+│   ├── asymmetric_garch.py      # EGARCH and GJR-GARCH (Student-t), plain or break-adjusted, by BIC
 │   ├── forecast_evaluation.py   # rolling-origin forecasts (SARIMA, VAR, VECM) vs baselines, validation and test
 │   ├── var_diagnostics.py       # VAR lag order (AIC / BIC / HQIC) and Johansen cointegration
 │   ├── var_models.py            # VAR / VECM candidates: estimation, stability, residual checks
@@ -100,7 +104,7 @@ autoregressive-experiments/
 └── tools/                       # make help
 ```
 
-The empty folders hold a `.gitkeep` file so they exist for future use, as in the template. `diagnostics.py`, `residual_checks.py`, `volatility_checks.py`, `volatility_models.py`, `forecast_evaluation.py`, `var_diagnostics.py`, `var_models.py`, `var_analysis.py` and `tools/` are this project's additions to the template.
+The empty folders hold a `.gitkeep` file so they exist for future use, as in the template. `diagnostics.py`, `residual_checks.py`, `volatility_checks.py`, `volatility_models.py`, `asymmetric_garch.py`, `forecast_evaluation.py`, `var_diagnostics.py`, `var_models.py`, `var_analysis.py` and `tools/` are this project's additions to the template.
 
 ## Datasets & attribution
 
