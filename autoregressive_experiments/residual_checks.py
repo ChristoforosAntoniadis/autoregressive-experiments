@@ -47,7 +47,7 @@ from autoregressive_experiments.runlog import begin_phase, finish_run, start_run
 
 app = typer.Typer()
 
-# Settings; each value's justification is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in configs/hyperparameters.json.
 # Lags (months) at which both tests are reported.
 TEST_LAGS = HYPERPARAMETERS.residual_checks.test_lags
 # A runner-up within this many AIC points of the best is checked too.

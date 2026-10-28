@@ -60,7 +60,7 @@ from autoregressive_experiments.var_models import VECM_RANK
 
 app = typer.Typer()
 
-# Settings; each value's justification is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in configs/hyperparameters.json.
 # The lag order carried forward from step V6.
 CARRIED_LAGS = HYPERPARAMETERS.var_analysis.carried_lags
 # Months the impulse responses and variance shares run after the shock, and those reported.

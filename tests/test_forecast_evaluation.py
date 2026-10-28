@@ -3,14 +3,15 @@ Tests for the out-of-sample forecast evaluation (step U6) in
 autoregressive_experiments.forecast_evaluation.
 """
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from autoregressive_experiments.features import lagged_exog
 from autoregressive_experiments.forecast_evaluation import (
-    EXPONENTIAL_SMOOTHING,
-    SYSTEMS,
+    VAR_MODEL,
     accuracy,
     combine_forecasts,
     convergence_failures,
@@ -24,6 +25,7 @@ from autoregressive_experiments.forecast_evaluation import (
     naive_forecast,
     pinball_loss,
     rolling_forecasts,
+    sarima_name,
     sarimax_forecaster,
     seasonal_naive_forecast,
     standardized_quantiles,
@@ -33,6 +35,32 @@ from autoregressive_experiments.forecast_evaluation import (
 )
 
 LEVELS = np.array([1.0, 2.0, 4.0, 7.0])  # monthly changes 1, 2, 3
+# A VAR(5) with a constant, as tuned settings.
+VAR_5 = {"lags": 5, "trend": "c"}
+
+
+def smoothing(**chosen: Any) -> dict[str, Any]:
+    """
+    Exponential-smoothing settings in the tuned form: no trend, no season, unless chosen.
+
+    Parameters
+    ----------
+    **chosen : Any
+        The settings that differ from single exponential smoothing, e.g. trend="add".
+
+    Returns
+    -------
+    dict of str to Any
+        All five settings the tuning chooses.
+    """
+    single = {
+        "trend": None,
+        "damped_trend": False,
+        "seasonal": None,
+        "use_boxcox": False,
+        "initialization_method": "estimated",
+    }
+    return single | chosen
 
 
 def test_baselines_on_a_hand_made_series() -> None:
@@ -55,14 +83,10 @@ def test_exponential_smoothing_variants_behave_as_their_definitions() -> None:
     the slope of 1 forward; damped Holt still rises, by less each month; Holt-Winters on a line
     plus a 12-month pattern repeats that pattern."""
     line = np.arange(10.0, 70.0)
-    single = exponential_smoothing_forecaster(EXPONENTIAL_SMOOTHING["single exp. smoothing"])
-    holt = exponential_smoothing_forecaster(EXPONENTIAL_SMOOTHING["double exp. smoothing (Holt)"])
-    damped = exponential_smoothing_forecaster(
-        EXPONENTIAL_SMOOTHING["double exp. smoothing, damped"]
-    )
-    winters = exponential_smoothing_forecaster(
-        EXPONENTIAL_SMOOTHING["triple exp. smoothing (Holt-Winters)"]
-    )
+    single = exponential_smoothing_forecaster(smoothing())
+    holt = exponential_smoothing_forecaster(smoothing(trend="add"))
+    damped = exponential_smoothing_forecaster(smoothing(trend="add", damped_trend=True))
+    winters = exponential_smoothing_forecaster(smoothing(trend="add", seasonal="add"))
 
     flat = single(line, 3)["forecast"]
     assert flat == pytest.approx(np.full(3, flat[0]))
@@ -80,8 +104,9 @@ def test_exponential_smoothing_variants_behave_as_their_definitions() -> None:
     )
 
 
-def test_combine_forecasts_averages_two_models_at_the_same_origin_and_horizon() -> None:
-    """Forecasts 2 and 4 average to 3; 1 and 5 to 3; a model's extra row has no partner."""
+def test_combine_forecasts_weights_two_models_at_the_same_origin_and_horizon() -> None:
+    """A quarter on the first model: 0.25 x 2 + 0.75 x 4 = 3.5 and 0.25 x 1 + 0.75 x 5 = 4; a
+    model's extra row has no partner."""
     # Pairs: origin 1 horizon 1 (a 2, b 4) and origin 1 horizon 2 (a 1, b 5); model a's
     # origin-2 row (forecast 8) has no b row, so it is dropped.
     rows = pd.DataFrame(
@@ -95,9 +120,9 @@ def test_combine_forecasts_averages_two_models_at_the_same_origin_and_horizon() 
         }
     )
 
-    combined = combine_forecasts(rows, "a", "b", "a + b")
+    combined = combine_forecasts(rows, "a", "b", "a + b", 0.25)
 
-    assert combined["forecast"].tolist() == [3.0, 3.0]
+    assert combined["forecast"].tolist() == [3.5, 4.0]
     assert combined["model"].unique().tolist() == ["a + b"]
 
 
@@ -156,8 +181,8 @@ def two_random_walks(count: int = 150) -> np.ndarray:
 def test_system_forecaster_refuses_a_history_that_doesnt_match_the_months_handed_over() -> None:
     """The leakage guard: the target's history must be exactly the system's first months."""
     all_levels = two_random_walks()
-    # SYSTEMS[0] is the VAR(5); the forecaster is for series 0.
-    forecaster = system_forecaster(SYSTEMS[0], all_levels, target=0, cache={})
+    # A VAR(5); the forecaster is for series 0.
+    forecaster = system_forecaster(VAR_MODEL, VAR_5, all_levels, target=0, cache={})
 
     with pytest.raises(AssertionError):
         forecaster(all_levels[:100, 1], 3)  # the other series' history
@@ -167,14 +192,14 @@ def test_both_series_share_one_system_fit_per_origin() -> None:
     """Forecasting each series from the same origin fits the system once; each forecaster
     returns its own series of that one fit."""
     all_levels = two_random_walks()
-    # Keyed by (system, months of history, steps); holds the (mean, spread) of one fit.
-    cache: dict[tuple[str, int, int], tuple[np.ndarray, np.ndarray]] = {}
-    first = system_forecaster(SYSTEMS[0], all_levels, target=0, cache=cache)
-    second = system_forecaster(SYSTEMS[0], all_levels, target=1, cache=cache)
+    # Keyed by (system, settings, months of history, steps); holds one fit's (mean, spread).
+    cache: dict[tuple[str, str, int, int], tuple[np.ndarray, np.ndarray]] = {}
+    first = system_forecaster(VAR_MODEL, VAR_5, all_levels, target=0, cache=cache)
+    second = system_forecaster(VAR_MODEL, VAR_5, all_levels, target=1, cache=cache)
 
     output_first = first(all_levels[:100, 0], 3)
     output_second = second(all_levels[:100, 1], 3)
-    mean, spread = system_forecast(SYSTEMS[0], all_levels[:100], 3)
+    mean, spread = system_forecast(VAR_MODEL, VAR_5, all_levels[:100], 3)
 
     assert len(cache) == 1
     assert output_first["forecast"] == pytest.approx(mean[:, 0])
@@ -193,6 +218,23 @@ def test_standardized_quantiles_for_normal_and_unit_variance_student_t() -> None
     assert student[-1] == pytest.approx(1.991, abs=1e-3)
     assert normal[2] == student[2] == 0
     assert normal[0] == pytest.approx(-normal[-1])
+
+
+def test_skewed_student_t_without_skew_is_the_student_t() -> None:
+    """Hansen's skewed Student-t with skewness 0 is the unit-variance Student-t, so their
+    quantiles agree; with negative skewness the lower tail is longer than the upper one."""
+    assert standardized_quantiles(5.0, 0.0) == pytest.approx(standardized_quantiles(5.0))
+    left = standardized_quantiles(5.0, -0.3)
+    assert -left[0] > left[-1]
+
+
+def test_sarima_name_by_hand() -> None:
+    """Orders (2, 2) and seasonal (1, 0) with d = 1, D = 0 and a 12-month season; no drift is
+    named, a drift is the default and isn't."""
+    orders = {"p": 2, "q": 2, "P": 1, "Q": 0}
+
+    assert sarima_name(orders | {"trend": "n"}) == "SARIMA(2,1,2)x(1,0,0,12) no drift"
+    assert sarima_name(orders | {"trend": "c"}) == "SARIMA(2,1,2)x(1,0,0,12)"
 
 
 def test_pinball_loss_by_hand() -> None:
@@ -315,7 +357,7 @@ def test_sarimax_forecaster_ignores_everything_after_the_origin() -> None:
     x = rng.normal(size=80)
     y = np.concatenate([[0.0], 0.8 * x[:-1]]) + 0.1 * rng.normal(size=80)
     all_levels = np.column_stack([x.cumsum(), y.cumsum()])
-    ar1 = {"p": 1, "q": 0, "P": 0, "Q": 0}
+    ar1 = {"p": 1, "q": 0, "P": 0, "Q": 0, "trend": "c"}
     origin = 60
 
     forecaster = sarimax_forecaster(ar1, ar1, all_levels, 1, 3, {})

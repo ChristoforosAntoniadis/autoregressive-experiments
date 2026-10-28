@@ -54,7 +54,7 @@ from autoregressive_experiments.runlog import (
 
 app = typer.Typer()
 
-# Settings; each value's justification is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in configs/hyperparameters.json.
 # The level for every test and confidence band in the project.
 SIGNIFICANCE_LEVEL = HYPERPARAMETERS.tests.significance_level
 # Lags shown in the ACF / PACF analysis.
@@ -454,8 +454,8 @@ def nonseasonal_orders() -> list[tuple[int, int]]:
 
     Notes
     -----
-    A total-order budget, rather than separate caps on p and q, is the user's rule: it
-    covers pure AR, pure MA and mixed models of the same total complexity.
+    A total-order budget, rather than separate caps on p and q, covers pure AR, pure MA and
+    mixed models of the same total complexity.
     """
     budget = MAX_ORDER_SUM - DIFFERENCING_ORDER
     return [(p, q) for p in range(budget + 1) for q in range(budget + 1 - p)]
@@ -468,9 +468,11 @@ def fit_sarima(
     seasonal_p: int,
     seasonal_q: int,
     exog: np.ndarray | None = None,
+    trend: str = "c",
 ) -> SARIMAXResultsWrapper:
     """
-    ARMA(p, q)x(P, 0, Q, 12) with a constant, fitted on the first differences (so d = 1).
+    ARMA(p, q)x(P, 0, Q, 12), with a constant by default, fitted on the first differences (so
+    d = 1).
 
     Parameters
     ----------
@@ -487,6 +489,8 @@ def fit_sarima(
     exog : np.ndarray or None, default=None
         Extra regressors, shape (len(values), k), one row per month of `values` (the SARIMAX
         family of the forecast evaluation); None fits the plain SARIMA.
+    trend : str, default="c"
+        "c" for a constant (a drift in the levels), "n" for none; the tuning searches both.
 
     Returns
     -------
@@ -509,7 +513,7 @@ def fit_sarima(
         exog=exog,
         order=(p, 0, q),
         seasonal_order=(seasonal_p, 0, seasonal_q, SEASONAL_PERIOD),
-        trend="c",
+        trend=trend,
         enforce_stationarity=True,
         enforce_invertibility=True,
     ).fit(disp=False, maxiter=MAX_ITERATIONS)

@@ -1,49 +1,55 @@
 """
-The lag-feature ML family: Ridge, Lasso, random forest and histogram gradient boosting, each
+The lag-feature ML family: Ridge, Lasso, random forest, XGBoost and k-nearest neighbours, each
 predicting next month's change of one series from the last k monthly changes of both series.
 
 Each model is refitted at every forecast origin on that origin's data only, one model per
 series, and forecasts several months ahead recursively: each month's predicted changes of both
 series become the inputs for the next month, as a VAR does (a nonlinear VAR, in effect). The
 forecast changes are added onto the last level, as for SARIMA. The models work on changes, not
-levels, because both series are I(1) (step U1) and because trees can't predict outside the range
-they were trained on, which the test levels leave.
+levels, because both series are I(1) (step U1) and because trees and neighbours can't predict
+outside the range they were trained on, which the test levels leave.
 
-The lag counts are the VAR candidates (1, 3 and 5), so no new number is introduced; every other
-setting, with its justification, is in the ``ml`` section of ``configs/hyperparameters.json``.
+Every setting, the lag count k included, is chosen per model and series by the time-aware
+random search of ``tuning`` on the training split, from the search spaces in the ``ml`` section
+of ``configs/hyperparameters.json``, and then kept fixed. Features and target are standardized
+inside every fit, from the rows that fit sees only, so the penalties and tree thresholds in the
+search spaces are in standard-deviation units.
 
 Input: levels handed over by the forecast-evaluation harness (``forecast_evaluation``), which
-also selects, scores and reports these models.
+also selects, scores and reports these models; tuned settings from ``tuning``.
 
-Output: forecasters for that harness; nothing is written to disk.
+Output: model builders and forecasters; nothing is written to disk.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import numpy as np
-from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
-from sklearn.linear_model import LassoCV, RidgeCV
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.compose import TransformedTargetRegressor
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import Lasso, LinearRegression, Ridge
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
+from xgboost import XGBRegressor
 
 from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.features import lagged_exog
-from autoregressive_experiments.var_models import VAR_LAGS
 
-# Settings; each value's justification is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in configs/hyperparameters.json.
 SETTINGS = HYPERPARAMETERS.ml
-# The lag counts tried: the VAR candidates, so no new number is introduced.
-ML_LAGS = VAR_LAGS
-RIDGE, LASSO, FOREST, BOOSTING = "Ridge", "Lasso", "random forest", "gradient boosting"
-ML_MODELS = (RIDGE, LASSO, FOREST, BOOSTING)
-# (model, lags) -> the name the harness reports, e.g. "Ridge (3 lags)".
-ML_NAMES = {
-    (model, lags): f"{model} ({lags} lag{'' if lags == 1 else 's'})"
-    for model in ML_MODELS
-    for lags in ML_LAGS
+RIDGE, LASSO, FOREST, XGBOOST, KNN = "Ridge", "Lasso", "random forest", "XGBoost", "KNN"
+ML_MODELS = (RIDGE, LASSO, FOREST, XGBOOST, KNN)
+# Model -> its search space: setting name -> the values tried.
+ML_SPACES: dict[str, Mapping[str, Any]] = {
+    RIDGE: SETTINGS.ridge,
+    LASSO: SETTINGS.lasso,
+    FOREST: SETTINGS.random_forest,
+    XGBOOST: SETTINGS.xgboost,
+    KNN: SETTINGS.knn,
 }
+# The longest lag any search space tries; the tuning builds its features once with it.
+MAX_LAG = max(max(space["lags"]) for space in ML_SPACES.values())
 
 
 def lag_features(changes: np.ndarray, lags: int) -> np.ndarray:
@@ -71,175 +77,119 @@ def lag_features(changes: np.ndarray, lags: int) -> np.ndarray:
     return np.hstack([lagged_exog(changes[:, column], lags) for column in range(changes.shape[1])])
 
 
-def penalty_grid(model: str, features: np.ndarray, target: np.ndarray) -> np.ndarray:
+def lag_columns(lags: int, max_lag: int, series: int) -> list[int]:
     """
-    The penalties cross-validation chooses from: a log-spaced grid plus zero.
+    The columns of a lag_features(changes, max_lag) matrix that hold each series' first `lags`
+    lags, so one matrix serves every lag count.
 
     Parameters
     ----------
-    model : str
-        RIDGE or LASSO.
-    features : np.ndarray
-        The window's training features, shape (rows, k).
-    target : np.ndarray
-        The window's training targets, shape (rows,).
+    lags : int
+        Lags wanted per series, at most `max_lag`.
+    max_lag : int
+        The lag count the matrix was built with.
+    series : int
+        Number of series (column blocks of `max_lag` columns each).
 
     Returns
     -------
-    np.ndarray
-        penalty_points positive penalties, then 0 (plain least squares).
-
-    Notes
-    -----
-    Lasso: the largest penalty is the smallest one that zeroes every coefficient,
-    max |x_j' (y - mean y)| / rows on the standardized features (the value scikit-learn's own
-    path starts from), and the grid runs down to penalty_span of it. Ridge: penalty_span x rows
-    to rows / penalty_span, which with standardized features runs from almost no shrinkage to
-    near-zero coefficients. Zero is always added, so "no penalty" is a choice cross-validation
-    can make rather than an edge of the grid.
+    list of int
+        Column positions, series after series, most recent lag first: the same layout as
+        lag_features(changes, lags) on the same rows.
     """
-    decades = np.log10(SETTINGS.penalty_span)
-    if model == RIDGE:
-        positive = len(target) * np.logspace(decades, -decades, SETTINGS.penalty_points)
-    else:
-        scaled = StandardScaler().fit_transform(features)
-        largest = np.max(np.abs(scaled.T @ (target - target.mean()))) / len(target)
-        positive = largest * np.logspace(0, decades, SETTINGS.penalty_points)
-    return np.append(positive, 0.0)
+    return [block * max_lag + lag for block in range(series) for lag in range(lags)]
 
 
-def penalized_model(model: str, features: np.ndarray, target: np.ndarray) -> Pipeline:
+def build_model(model: str, settings: Mapping[str, Any]) -> TransformedTargetRegressor:
     """
-    Ridge or Lasso with standardized features and a penalty chosen by time-ordered
-    cross-validation.
-
-    Parameters
-    ----------
-    model : str
-        RIDGE or LASSO.
-    features : np.ndarray
-        The window's training features, shape (rows, k); they set the penalty grid.
-    target : np.ndarray
-        The window's training targets, shape (rows,).
-
-    Returns
-    -------
-    Pipeline
-        StandardScaler then RidgeCV or LassoCV, unfitted.
-
-    Notes
-    -----
-    The scaler learns the mean and SD from the training window it is fitted on, never from
-    later months. TimeSeriesSplit keeps every validation fold after its training fold, so the
-    penalty is chosen the way the whole evaluation works: on months after the fit. The grid is
-    penalty_grid(): log-spaced penalties plus zero.
-    """
-    folds = TimeSeriesSplit(n_splits=SETTINGS.cv_folds)
-    alphas = penalty_grid(model, features, target)
-    if model == RIDGE:
-        return make_pipeline(StandardScaler(), RidgeCV(alphas=alphas, cv=folds))
-    return make_pipeline(StandardScaler(), LassoCV(alphas=alphas, cv=folds))
-
-
-def boosting_model(features: np.ndarray, target: np.ndarray) -> HistGradientBoostingRegressor:
-    """
-    Histogram gradient boosting, its number of trees chosen on the end of the window.
-
-    Parameters
-    ----------
-    features : np.ndarray
-        Training features, shape (rows, k), oldest first.
-    target : np.ndarray
-        Training targets, shape (rows,), trillions.
-
-    Returns
-    -------
-    HistGradientBoostingRegressor
-        Fitted on all rows with the chosen number of trees (its n_iter_).
-
-    Notes
-    -----
-    Processing:
-    1. Fit on the first 1 - boosting_holdout_share of the rows with scikit-learn's early
-       stopping, scored on the held-out last rows: training stops once boosting_patience trees
-       in a row improve the holdout loss by less than boosting_tolerance.
-    2. Take the number of trees with the best holdout loss within that run.
-    3. Refit on all rows with exactly that many trees.
-
-    The holdout is the end of the window, in time order, passed as X_val / y_val: scikit-learn's
-    default draws a random holdout, which would let later months choose for earlier ones.
-    """
-    split = round(len(target) * (1 - SETTINGS.boosting_holdout_share))
-    options: dict[str, Any] = {
-        "learning_rate": SETTINGS.boosting_learning_rate,
-        "random_state": SETTINGS.random_seed,
-    }
-    probe = HistGradientBoostingRegressor(
-        max_iter=SETTINGS.boosting_max_iterations,
-        early_stopping=True,
-        n_iter_no_change=SETTINGS.boosting_patience,
-        tol=SETTINGS.boosting_tolerance,
-        **options,
-    )
-    probe.fit(features[:split], target[:split], X_val=features[split:], y_val=target[split:])
-    # validation_score_[i] is the holdout score (higher is better) after i trees; [0] is before
-    # any tree, so the index of the best score is the number of trees, at least 1.
-    trees = max(int(np.argmax(probe.validation_score_)), 1)
-    return HistGradientBoostingRegressor(max_iter=trees, early_stopping=False, **options).fit(
-        features, target
-    )
-
-
-def fit_model(model: str, features: np.ndarray, target: np.ndarray) -> Any:
-    """
-    Fit one ML model on one series' training rows.
+    An unfitted ML model with the given settings, standardizing its features and its target.
 
     Parameters
     ----------
     model : str
         One of ML_MODELS.
-    features : np.ndarray
-        Training features, shape (rows, k), oldest first.
-    target : np.ndarray
-        Training targets (the series' next-month changes), shape (rows,), trillions.
+    settings : Mapping of str to Any
+        The model's keyword arguments from its search space, plus "lags" (ignored here).
 
     Returns
     -------
-    Any
-        A fitted scikit-learn estimator (or pipeline) with predict().
+    TransformedTargetRegressor
+        StandardScaler then the model, wrapped so the target is standardized for the fit and
+        the predictions are returned in trillions.
 
     Raises
     ------
     ValueError
         If `model` isn't one of ML_MODELS.
+
+    Notes
+    -----
+    The scalers learn their means and SDs from the rows the model is fitted on, never from
+    later months. Standardizing the target makes the penalties (Ridge, Lasso), the pruning
+    thresholds (forest, XGBoost) and the regularization terms scale-free, so one search space
+    serves both series. Lasso with a zero penalty is fitted as a plain linear regression:
+    coordinate descent without a penalty converges poorly, and the solution is the same.
     """
-    if model in (RIDGE, LASSO):
-        return penalized_model(model, features, target).fit(features, target)
-    if model == FOREST:
-        forest = RandomForestRegressor(
-            n_estimators=SETTINGS.forest_trees, random_state=SETTINGS.random_seed, n_jobs=-1
-        )
-        return forest.fit(features, target)
-    if model == BOOSTING:
-        return boosting_model(features, target)
-    raise ValueError(f"unknown ML model {model!r}")
+    options = {key: value for key, value in settings.items() if key != "lags"}
+    base: Any
+    if model == RIDGE:
+        base = Ridge(**options)
+    elif model == LASSO:
+        base = LinearRegression() if options["alpha"] == 0 else Lasso(**options)
+    elif model == FOREST:
+        # One thread: with several, the trees' predictions are summed in the order the threads
+        # finish, which changes the last bit of a forecast from run to run.
+        base = RandomForestRegressor(**options, random_state=SETTINGS.random_seed, n_jobs=1)
+    elif model == XGBOOST:
+        base = XGBRegressor(**options, random_state=SETTINGS.random_seed, verbosity=0)
+    elif model == KNN:
+        base = KNeighborsRegressor(**options)
+    else:
+        raise ValueError(f"unknown ML model {model!r}")
+    return TransformedTargetRegressor(
+        regressor=make_pipeline(StandardScaler(), base), transformer=StandardScaler()
+    )
+
+
+def fit_model(
+    model: str, settings: Mapping[str, Any], changes: np.ndarray, column: int
+) -> TransformedTargetRegressor:
+    """
+    Fit one ML model for one series on all the changes given.
+
+    Parameters
+    ----------
+    model : str
+        One of ML_MODELS.
+    settings : Mapping of str to Any
+        Its tuned settings, including "lags".
+    changes : np.ndarray
+        Monthly changes of every series, shape (n, series), trillions, oldest first.
+    column : int
+        The series whose next change the model predicts.
+
+    Returns
+    -------
+    TransformedTargetRegressor
+        The fitted model; predict() takes lag_features rows with settings["lags"] lags.
+    """
+    lags = settings["lags"]
+    return build_model(model, settings).fit(lag_features(changes, lags), changes[lags:, column])
 
 
 def recursive_forecast(
-    models: list[Any], changes: np.ndarray, lags: int, steps: int
+    models: list[tuple[Any, int]], changes: np.ndarray, steps: int
 ) -> np.ndarray:
     """
     Forecast every series' changes `steps` months ahead, feeding each month's forecasts back.
 
     Parameters
     ----------
-    models : list of Any
-        One fitted model per series (column order of `changes`), each predicting its series'
-        next change from lag_features.
+    models : list of tuple of (Any, int)
+        One (fitted model, its lag count) per series, in the column order of `changes`; each
+        predicts its series' next change from a lag_features row with its own lag count.
     changes : np.ndarray
         Monthly changes up to the origin, shape (n, series), trillions, oldest first.
-    lags : int
-        The lag count the models were fitted with.
     steps : int
         Months to forecast.
 
@@ -251,26 +201,32 @@ def recursive_forecast(
     Notes
     -----
     Processing, for each month ahead:
-    1. Take the last `lags` changes of every series, actual or already forecast.
-    2. Lay them out as one lag_features row: each series' changes, most recent first.
-    3. Predict every series' next change and append it to the history.
+    1. For each model, take the last `lags` changes of every series, actual or already
+       forecast, and lay them out as one lag_features row: each series' changes, most recent
+       first.
+    2. Predict every series' next change and append them to the history.
 
     The row layout matches lag_features exactly, so each model sees inputs arranged as in
     training; from the second month on they include forecast changes, never actual future ones.
+    The series' models may use different lag counts, since each was tuned on its own series.
     """
-    history = [row for row in changes[-lags:]]
+    history = list(changes)
     path = []
     for _ in range(steps):
-        recent = np.array(history[-lags:])
-        # Each series' last `lags` changes, most recent first, series after series.
-        row = recent[::-1].T.reshape(1, -1)
-        step = np.array([float(model.predict(row)[0]) for model in models])
-        history.append(step)
+        step = []
+        for fitted, lags in models:
+            recent = np.array(history[-lags:])
+            # Each series' last `lags` changes, most recent first, series after series.
+            row = recent[::-1].T.reshape(1, -1)
+            step.append(float(fitted.predict(row)[0]))
+        history.append(np.array(step))
         path.append(step)
     return np.array(path)
 
 
-def ml_forecast(model: str, lags: int, history: np.ndarray, steps: int) -> dict[str, np.ndarray]:
+def ml_forecast(
+    model: str, settings: Sequence[Mapping[str, Any]], history: np.ndarray, steps: int
+) -> np.ndarray:
     """
     Fit one model per series on the history and forecast both series' levels.
 
@@ -278,8 +234,8 @@ def ml_forecast(model: str, lags: int, history: np.ndarray, steps: int) -> dict[
     ----------
     model : str
         One of ML_MODELS.
-    lags : int
-        Lag count (one of ML_LAGS).
+    settings : Sequence of Mapping of str to Any
+        Each series' tuned settings for this model, in column order.
     history : np.ndarray
         Levels of every series up to and including the origin, shape (months, series),
         trillions, oldest first.
@@ -288,36 +244,31 @@ def ml_forecast(model: str, lags: int, history: np.ndarray, steps: int) -> dict[
 
     Returns
     -------
-    dict of str to np.ndarray
-        "levels": forecast levels, shape (steps, series), trillions.
-        "trees": the number of boosting trees chosen per series, shape (series,); NaN for the
-        other models.
+    np.ndarray
+        Forecast levels, shape (steps, series), trillions.
 
     Notes
     -----
     Processing:
-    1. Difference the levels and build the lag features; the targets are the changes from
-       month `lags` on.
-    2. Fit one model per series.
+    1. Difference the levels.
+    2. Fit one model per series with that series' tuned settings.
     3. Forecast the changes recursively and add their running total to the last levels.
     """
     changes = np.diff(history, axis=0)
-    features = lag_features(changes, lags)
     models = [
-        fit_model(model, features, changes[lags:, column]) for column in range(changes.shape[1])
+        (fit_model(model, options, changes, column), options["lags"])
+        for column, options in enumerate(settings)
     ]
-    path = recursive_forecast(models, changes, lags, steps)
-    trees = np.array([float(getattr(fitted, "n_iter_", np.nan)) for fitted in models])
-    return {"levels": history[-1] + np.cumsum(path, axis=0), "trees": trees}
+    return history[-1] + np.cumsum(recursive_forecast(models, changes, steps), axis=0)
 
 
 def ml_forecaster(
     model: str,
-    lags: int,
+    settings: Sequence[Mapping[str, Any]],
     all_levels: np.ndarray,
     target: int,
-    cache: dict[tuple[str, int, int, int], dict[str, np.ndarray]],
-) -> Callable[[np.ndarray, int], dict[str, np.ndarray | float]]:
+    cache: dict[tuple[str, int, int], np.ndarray],
+) -> Callable[[np.ndarray, int], dict[str, np.ndarray]]:
     """
     A forecaster for one series of one ML model; the fit at each origin is shared between the
     two series through the cache, as for the VAR systems.
@@ -326,26 +277,25 @@ def ml_forecaster(
     ----------
     model : str
         One of ML_MODELS.
-    lags : int
-        Lag count (one of ML_LAGS).
+    settings : Sequence of Mapping of str to Any
+        Each series' tuned settings for this model, in VALUE_COLUMNS order.
     all_levels : np.ndarray
         Levels of both series over the whole sample, shape (months, 2), trillions, columns in
         VALUE_COLUMNS order. Only the months the harness hands over are ever used.
     target : int
         Column of `all_levels` this forecaster scores.
-    cache : dict of tuple of (str, int, int, int) to dict of str to np.ndarray
-        Shared, mutated store of ml_forecast results, keyed by (model, lags, months of history,
+    cache : dict of tuple of (str, int, int) to np.ndarray
+        Shared, mutated store of ml_forecast results, keyed by (model, months of history,
         steps).
 
     Returns
     -------
     callable
         A forecaster for the harness: (levels, steps) -> {"forecast": level path, shape
-        (steps,), trillions; "trees": the boosting trees chosen for this series, NaN for other
-        models}.
+        (steps,), trillions}.
     """
 
-    def forecast(levels: np.ndarray, steps: int) -> dict[str, np.ndarray | float]:
+    def forecast(levels: np.ndarray, steps: int) -> dict[str, np.ndarray]:
         """
         Forecast this series from the models fitted on both series so far.
 
@@ -359,8 +309,8 @@ def ml_forecaster(
 
         Returns
         -------
-        dict of str to np.ndarray or float
-            "forecast": the level path, shape (steps,), trillions; "trees": see ml_forecaster.
+        dict of str to np.ndarray
+            "forecast": the level path, shape (steps,), trillions.
 
         Raises
         ------
@@ -370,10 +320,9 @@ def ml_forecaster(
         history = all_levels[: len(levels)]
         # Leakage guard: both series end at the month the harness handed over.
         assert np.array_equal(history[:, target], levels)
-        key = (model, lags, len(levels), steps)
+        key = (model, len(levels), steps)
         if key not in cache:
-            cache[key] = ml_forecast(model, lags, history, steps)
-        result = cache[key]
-        return {"forecast": result["levels"][:, target], "trees": float(result["trees"][target])}
+            cache[key] = ml_forecast(model, settings, history, steps)
+        return {"forecast": cache[key][:, target]}
 
     return forecast

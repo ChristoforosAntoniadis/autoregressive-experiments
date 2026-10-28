@@ -3,7 +3,7 @@ Definitions of every configurable setting: one frozen dataclass per analysis ste
 settings it accepts, their types and the rule each value must satisfy.
 
 The values themselves live in ``hyperparameters.json`` beside this file, each with its
-justification; ``config_loader`` reads that file, checks it against these definitions and
+reasoning; ``config_loader`` reads that file, checks it against these definitions and
 builds the objects the modules import. Names, paths, colours, labels, model identities (such as
 GARCH(1,1) or a VAR on the differences, which the code's formulas assume) and the evaluation's
 fixed rules (such as selecting on one-month MASE) are code, not settings, and stay in their
@@ -23,10 +23,54 @@ from typing import Any
 # This module's folder; hyperparameters.json sits beside it.
 CONFIG_DIR = Path(__file__).resolve().parent
 HYPERPARAMETERS_PATH = CONFIG_DIR / "hyperparameters.json"
-# Keyword arguments ExponentialSmoothing may receive from the config; seasonal_periods is
-# added by the code from the seasonal period, so it isn't configured twice.
-SMOOTHING_OPTIONS = frozenset({"trend", "damped_trend", "seasonal"})
-SMOOTHING_RULE = f"at least one model; options only from {sorted(SMOOTHING_OPTIONS)}"
+# The settings each model's search space must name: exactly these keys, each with a list of
+# values to try (a single value fixes the setting).
+SPACES: dict[str, frozenset[str]] = {
+    "sarima": frozenset({"p", "q", "P", "Q", "trend"}),
+    "variance": frozenset({"p", "q", "dist", "break_adjusted"}),
+    "var": frozenset({"lags", "trend"}),
+    "vecm": frozenset({"lags", "deterministic"}),
+    "sma": frozenset({"window"}),
+    "exponential_smoothing": frozenset(
+        {"trend", "damped_trend", "seasonal", "use_boxcox", "initialization_method"}
+    ),
+    "sarimax": frozenset({"lags"}),
+    "combination": frozenset({"weight"}),
+    "ridge": frozenset({"lags", "alpha"}),
+    "lasso": frozenset({"lags", "alpha", "max_iter"}),
+    "random_forest": frozenset(
+        {
+            "lags",
+            "n_estimators",
+            "criterion",
+            "max_depth",
+            "min_samples_split",
+            "min_samples_leaf",
+            "min_weight_fraction_leaf",
+            "max_features",
+            "max_leaf_nodes",
+            "min_impurity_decrease",
+            "bootstrap",
+            "max_samples",
+            "ccp_alpha",
+        }
+    ),
+    "xgboost": frozenset(
+        {
+            "lags",
+            "n_estimators",
+            "learning_rate",
+            "max_depth",
+            "min_child_weight",
+            "subsample",
+            "colsample_bytree",
+            "gamma",
+            "reg_alpha",
+            "reg_lambda",
+        }
+    ),
+    "knn": frozenset({"lags", "n_neighbors", "weights", "p"}),
+}
 
 
 def setting(check: Callable[[Any], bool], rule: str) -> Any:
@@ -101,23 +145,47 @@ def orders(values: tuple[int, ...]) -> bool:
     return len(values) > 0 and min(values) >= 0 and all(a < b for a, b in pairwise(values))
 
 
-def smoothing_models(models: Mapping[str, Mapping[str, Any]]) -> bool:
+def space(name: str) -> Any:
     """
-    Whether every exponential-smoothing model uses only the options the code supports.
+    A required search-space field: an object naming exactly the model's settings, each with a
+    non-empty list of distinct values to try.
 
     Parameters
     ----------
-    models : Mapping of str to Mapping of str to Any
-        Model name -> ExponentialSmoothing keyword arguments.
+    name : str
+        The model's key in SPACES, e.g. "random_forest".
 
     Returns
     -------
-    bool
-        True when there is at least one model and each uses only SMOOTHING_OPTIONS keys.
+    Any
+        A dataclasses.field (see setting()) whose check accepts a mapping with exactly the
+        keys SPACES[name], each mapped to a non-empty list without repeats.
     """
-    return len(models) > 0 and all(
-        set(options) <= SMOOTHING_OPTIONS for options in models.values()
-    )
+    keys = SPACES[name]
+
+    def check(values: Mapping[str, Any]) -> bool:
+        """
+        Whether the space names exactly the expected settings with usable value lists.
+
+        Parameters
+        ----------
+        values : Mapping of str to Any
+            Setting name -> the list of values to try, as read from the JSON.
+
+        Returns
+        -------
+        bool
+            True when the keys are exactly `keys` and every value is a non-empty list of
+            distinct values.
+        """
+        return set(values) == keys and all(
+            isinstance(options, list)
+            and len(options) > 0
+            and len(set(map(repr, options))) == len(options)
+            for options in values.values()
+        )
+
+    return setting(check, f"exactly the settings {sorted(keys)}, each a non-empty list")
 
 
 @dataclass(frozen=True)
@@ -296,7 +364,7 @@ class VarModelSettings:
     Attributes
     ----------
     var_lags : tuple of int
-        Lag orders of the candidates (also the SARIMAX lag candidates).
+        Lag orders of the candidates checked in steps V4-V6.
     test_lags : tuple of int
         Portmanteau lags that decide the verdict.
     plot_lags : int
@@ -348,13 +416,6 @@ class ForecastEvaluationSettings:
         Months ahead that are scored.
     quantiles : tuple of float
         Forecast quantile levels: the 95% and 80% interval ends and the median.
-    moving_average_windows : tuple of int
-        Window lengths of the SMA baselines.
-    exponential_smoothing : Mapping of str to Mapping of str to Any
-        Model name -> ExponentialSmoothing options (seasonal_periods is added by the code);
-        read-only, like every setting.
-    combination_weight : float
-        Weight of the selected SARIMA in the SARIMA + naive combination.
     """
 
     horizons: tuple[int, ...] = setting(increasing, "distinct months >= 1, increasing")
@@ -367,57 +428,62 @@ class ForecastEvaluationSettings:
         ),
         "five increasing levels in (0, 1), symmetric around a 0.5 median",
     )
-    moving_average_windows: tuple[int, ...] = setting(
-        increasing, "distinct months >= 1, increasing"
-    )
-    exponential_smoothing: Mapping[str, Mapping[str, Any]] = setting(
-        smoothing_models, SMOOTHING_RULE
-    )
-    combination_weight: float = setting(lambda v: 0 < v < 1, "between 0 and 1")
+
+
+@dataclass(frozen=True)
+class TuningSettings:
+    """
+    The time-aware random search (tuning.py) and the econometric models' search spaces.
+
+    Attributes
+    ----------
+    folds : int
+        Expanding, time-ordered cross-validation folds inside the training split.
+    min_train_months : int
+        Months the first fold trains on, at least.
+    candidates : int
+        Settings drawn at random per model and series; smaller spaces are tried in full.
+    seed : int
+        Seed of those draws.
+    sarima, variance, var, vecm, sma, exponential_smoothing, sarimax, combination
+        Mapping of str to list: each model's settings and the values tried (variance applies
+        to GARCH, EGARCH and GJR-GARCH alike).
+    """
+
+    folds: int = setting(lambda v: v >= 2, "at least 2")
+    min_train_months: int = setting(lambda v: v >= 24, "at least 24 (two seasonal cycles)")
+    candidates: int = setting(lambda v: v >= 1, "at least 1")
+    seed: int = setting(lambda v: v >= 0, "at least 0")
+    sarima: Mapping[str, Any] = space("sarima")
+    variance: Mapping[str, Any] = space("variance")
+    var: Mapping[str, Any] = space("var")
+    vecm: Mapping[str, Any] = space("vecm")
+    sma: Mapping[str, Any] = space("sma")
+    exponential_smoothing: Mapping[str, Any] = space("exponential_smoothing")
+    sarimax: Mapping[str, Any] = space("sarimax")
+    combination: Mapping[str, Any] = space("combination")
 
 
 @dataclass(frozen=True)
 class MlSettings:
     """
-    The lag-feature ML family (ml_forecasting.py): Ridge, Lasso, random forest and histogram
-    gradient boosting on the last k monthly changes of both series.
+    The lag-feature ML family (ml_forecasting.py): each model's search space, tuned by
+    tuning.py, and the seed of the random models.
 
     Attributes
     ----------
-    cv_folds : int
-        Time-ordered cross-validation folds that choose the Ridge / Lasso penalty in each
-        origin's training window.
-    penalty_span : float
-        Ratio of the smallest to the largest positive penalty tried (Lasso: of the one that
-        zeroes every coefficient; Ridge: the grid runs from penalty_span x n to
-        n / penalty_span). A penalty of zero (plain least squares) is always tried too.
-    penalty_points : int
-        Penalties tried, log-spaced.
-    forest_trees : int
-        Trees in the random forest.
-    boosting_holdout_share : float
-        Share of each training window, at its end, that decides when boosting stops.
-    boosting_max_iterations : int
-        Cap on boosting iterations; early stopping picks fewer.
-    boosting_patience : int
-        Early stopping ends after this many trees without improvement on the holdout.
-    boosting_tolerance : float
-        The least holdout-loss improvement that counts.
-    boosting_learning_rate : float
-        Boosting's shrinkage per tree.
+    ridge, lasso, random_forest, xgboost, knn
+        Mapping of str to list: the model's settings (scikit-learn / XGBoost keyword names,
+        plus "lags") and the values tried.
     random_seed : int
-        Seed of the forest and the boosting.
+        Seed of the random forest and XGBoost.
     """
 
-    cv_folds: int = setting(lambda v: v >= 2, "at least 2")
-    penalty_span: float = setting(lambda v: 0 < v < 1, "between 0 and 1")
-    penalty_points: int = setting(lambda v: v >= 2, "at least 2")
-    forest_trees: int = setting(lambda v: v >= 1, "at least 1")
-    boosting_holdout_share: float = setting(lambda v: 0 < v < 1, "between 0 and 1")
-    boosting_max_iterations: int = setting(lambda v: v >= 1, "at least 1")
-    boosting_patience: int = setting(lambda v: v >= 1, "at least 1")
-    boosting_tolerance: float = setting(lambda v: v >= 0, "at least 0")
-    boosting_learning_rate: float = setting(lambda v: 0 < v <= 1, "above 0, at most 1")
+    ridge: Mapping[str, Any] = space("ridge")
+    lasso: Mapping[str, Any] = space("lasso")
+    random_forest: Mapping[str, Any] = space("random_forest")
+    xgboost: Mapping[str, Any] = space("xgboost")
+    knn: Mapping[str, Any] = space("knn")
     random_seed: int = setting(lambda v: v >= 0, "at least 0")
 
 
@@ -429,7 +495,7 @@ class Hyperparameters:
     Attributes
     ----------
     split, tests, diagnostics, residual_checks, volatility_checks, volatility_models,
-    var_diagnostics, var_models, var_analysis, forecast_evaluation, ml
+    var_diagnostics, var_models, var_analysis, forecast_evaluation, tuning, ml
         The sections, in pipeline order; see each class.
     """
 
@@ -443,4 +509,5 @@ class Hyperparameters:
     var_models: VarModelSettings
     var_analysis: VarAnalysisSettings
     forecast_evaluation: ForecastEvaluationSettings
+    tuning: TuningSettings
     ml: MlSettings

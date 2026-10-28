@@ -2,244 +2,319 @@
   "split": {
     "train_percent": {
       "value": 60,
-      "justification": "The project's rule for every model: 60 / 20 / 20 train / validation / test, in time order, never shuffled. Whole percentages, so the split boundaries use exact integer arithmetic."
+      "reasoning": "The project's rule for every model: 60 / 20 / 20 train / validation / test, in time order, never shuffled. Whole percentages, so the split boundaries use exact integer arithmetic."
     },
     "validation_percent": {
       "value": 20,
-      "justification": "Same rule: validation selects models; test takes the remaining 20% and is run once per model family."
+      "reasoning": "Same rule: validation selects models; test takes the remaining 20% and is run once per model family."
     }
   },
   "tests": {
     "significance_level": {
       "value": 0.05,
-      "justification": "The conventional 5% level, used by every test and confidence band so verdicts are comparable across steps. Johansen's critical-value tables exist only at 10%, 5% and 1%."
+      "reasoning": "The conventional 5% level, used by every test and confidence band so verdicts are comparable across steps. Johansen's critical-value tables exist only at 10%, 5% and 1%."
     }
   },
   "diagnostics": {
     "max_acf_lags": {
       "value": 36,
-      "justification": "Three years of monthly lags, so the seasonal lags 12, 24 and 36 all show in the ACF / PACF (step U2)."
+      "reasoning": "Three years of monthly lags, so the seasonal lags 12, 24 and 36 all show in the ACF / PACF (step U2)."
     },
     "max_order_sum": {
       "value": 5,
-      "justification": "The project's grid rule (2026-10-23): every (p, q) with p + d + q <= 5, a total-complexity budget that covers pure AR, pure MA and mixed models alike."
+      "reasoning": "The project's grid rule (2026-10-23): every (p, q) with p + d + q <= 5, a total-complexity budget that covers pure AR, pure MA and mixed models alike."
     },
     "differencing_order": {
       "value": 1,
-      "justification": "ADF and KPSS agree on train (step U1): both series are I(1), and one difference makes them stationary. Applied by fitting on the first differences."
+      "reasoning": "ADF and KPSS agree on train (step U1): both series are I(1), and one difference makes them stationary. Applied by fitting on the first differences."
     },
     "seasonal_ar_orders": {
       "value": [0, 1],
-      "justification": "No seasonal term or one: the training split holds about 14 years, so a second seasonal coefficient would rest on very few cycles. No seasonal differencing, since one regular difference already gives stationarity."
+      "reasoning": "No seasonal term or one: the training split holds about 14 years, so a second seasonal coefficient would rest on very few cycles. No seasonal differencing, since one regular difference already gives stationarity."
     },
     "seasonal_ma_orders": {
       "value": [0, 1],
-      "justification": "As for the seasonal AR orders: none or one seasonal MA term."
+      "reasoning": "As for the seasonal AR orders: none or one seasonal MA term."
     },
     "seasonal_period": {
       "value": 12,
-      "justification": "Monthly data: the seasonal cycle is one year."
+      "reasoning": "Monthly data: the seasonal cycle is one year."
     },
     "max_iterations": {
       "value": 200,
-      "justification": "Four times statsmodels' default of 50, so slow but sound likelihood fits finish. Fits that still don't converge are counted and reported, never hidden."
+      "reasoning": "Four times statsmodels' default of 50, so slow but sound likelihood fits finish. Fits that still don't converge are counted and reported, never hidden."
     },
     "adf_autolag": {
       "value": "AIC",
-      "justification": "statsmodels' default: the ADF lag length chosen by AIC (Said and Dickey 1984), so leftover serial correlation doesn't distort the test."
+      "reasoning": "statsmodels' default: the ADF lag length chosen by AIC (Said and Dickey 1984), so leftover serial correlation doesn't distort the test."
     },
     "kpss_nlags": {
       "value": "auto",
-      "justification": "The data-dependent bandwidth of Hobijn, Franses and Ooms (1998), statsmodels' recommended setting for the KPSS long-run variance."
+      "reasoning": "The data-dependent bandwidth of Hobijn, Franses and Ooms (1998), statsmodels' recommended setting for the KPSS long-run variance."
     },
     "pacf_method": {
       "value": "ywm",
-      "justification": "Yule-Walker with MLE scaling: its PACF never exceeds 1 in size, and it is what statsmodels' PACF plots use, so the report's table matches the figure."
+      "reasoning": "Yule-Walker with MLE scaling: its PACF never exceeds 1 in size, and it is what statsmodels' PACF plots use, so the report's table matches the figure."
     }
   },
   "residual_checks": {
     "test_lags": {
       "value": [6, 12, 24],
-      "justification": "Half a year, one year and two years: short-run, seasonal and longer autocorrelation left in the SARIMA residuals (step U4)."
+      "reasoning": "Half a year, one year and two years: short-run, seasonal and longer autocorrelation left in the SARIMA residuals (step U4)."
     },
     "aic_tie_margin": {
       "value": 2.0,
-      "justification": "Burnham and Anderson (2002): a model within 2 AIC of the best still has substantial support, so the runner-up is checked too."
+      "reasoning": "Burnham and Anderson (2002): a model within 2 AIC of the best still has substantial support, so the runner-up is checked too."
     },
     "plot_lags": {
       "value": 24,
-      "justification": "Display only: two years of lags in the ACF and Ljung-Box panels, up to the longest test lag."
+      "reasoning": "Display only: two years of lags in the ACF and Ljung-Box panels, up to the longest test lag."
     }
   },
   "volatility_checks": {
     "arch_test_lags": {
       "value": [1, 6, 12],
-      "justification": "Last month, half a year and one year: short-lived and persistent volatility clustering (step U5)."
+      "reasoning": "Last month, half a year and one year: short-lived and persistent volatility clustering (step U5)."
     },
     "plot_lags": {
       "value": 12,
-      "justification": "Display only: every ARCH-LM lag up to the longest test lag, one year."
+      "reasoning": "Display only: every ARCH-LM lag up to the longest test lag, one year."
     },
     "break_trim": {
       "value": 0.15,
-      "justification": "Andrews (1993): the standard 15% trimming when searching for a break at an unknown date, so neither regime's variance rests on a few months."
+      "reasoning": "Andrews (1993): the standard 15% trimming when searching for a break at an unknown date, so neither regime's variance rests on a few months."
     }
   },
   "volatility_models": {
     "simulations": {
       "value": 2000,
-      "justification": "EGARCH's multi-step variance has no closed form and is simulated. A variance estimated from 2,000 draws has a relative Monte Carlo error of about sqrt(2 / 2000) = 3% (normal shocks), small next to the forecast spread itself."
+      "reasoning": "EGARCH's multi-step variance has no closed form and is simulated. A variance estimated from 2,000 draws has a relative Monte Carlo error of about sqrt(2 / 2000) = 3% (normal shocks), small next to the forecast spread itself."
     },
     "simulation_seed": {
       "value": 0,
-      "justification": "Fixed so every rerun gives identical numbers; the value itself carries no meaning."
+      "reasoning": "Fixed so every rerun gives identical numbers; the value itself carries no meaning."
     },
     "bootstrap_replications": {
       "value": 999,
-      "justification": "Davison and Hinkley (1997, ch. 4): with 999 replications 0.05 x (999 + 1) = 50 simulated statistics lie in the tail, so the 5% test is exact, and the Monte Carlo error at p = 0.05 is sqrt(0.05 x 0.95 / 999) = 0.007."
+      "reasoning": "Davison and Hinkley (1997, ch. 4): with 999 replications 0.05 x (999 + 1) = 50 simulated statistics lie in the tail, so the 5% test is exact, and the Monte Carlo error at p = 0.05 is sqrt(0.05 x 0.95 / 999) = 0.007."
     },
     "bootstrap_seed": {
       "value": 0,
-      "justification": "Fixed so every rerun gives identical p-values; the value itself carries no meaning."
+      "reasoning": "Fixed so every rerun gives identical p-values; the value itself carries no meaning."
     },
     "burn_in": {
       "value": 500,
-      "justification": "Months simulated and dropped before each bootstrap series, so it starts from the model's stationary distribution: a shock's effect shrinks by the persistence each month, and 0.95^500 < 1e-11 for every persistence fitted here (all below 0.95)."
+      "reasoning": "Months simulated and dropped before each bootstrap series, so it starts from the model's stationary distribution: a shock's effect shrinks by the persistence each month, and 0.95^500 < 1e-11 for every persistence fitted here (all below 0.95)."
     }
   },
   "var_diagnostics": {
     "max_lags": {
       "value": 10,
-      "justification": "VAR lag orders 0..10 tried (step V2): at 10 lags each equation has 20 lag coefficients plus a constant, from 156 usable training months, about 7 observations per coefficient."
+      "reasoning": "VAR lag orders 0..10 tried (step V2): at 10 lags each equation has 20 lag coefficients plus a constant, from 156 usable training months, about 7 observations per coefficient."
     },
     "criteria": {
       "value": ["aic", "bic", "hqic"],
-      "justification": "The three standard criteria (Lütkepohl 2005): AIC targets forecast accuracy; BIC and HQIC pick the true order as the sample grows."
+      "reasoning": "The three standard criteria (Lütkepohl 2005): AIC targets forecast accuracy; BIC and HQIC pick the true order as the sample grows."
     },
     "primary_criterion": {
       "value": "bic",
-      "justification": "BIC drives the Johansen decision: it is consistent (picks the true order as the sample grows), which suits a question about the model's structure."
+      "reasoning": "BIC drives the Johansen decision: it is consistent (picks the true order as the sample grows), which suits a question about the model's structure."
     },
     "johansen_deterministic": {
       "value": 0,
-      "justification": "det_order = 0: a constant in the error-correction model, so the levels may drift, as both series trend up."
+      "reasoning": "det_order = 0: a constant in the error-correction model, so the levels may drift, as both series trend up."
     }
   },
   "var_models": {
     "var_lags": {
       "value": [1, 3, 5],
-      "justification": "1 (BIC) and 3 (AIC, HQIC) from step V2, and 5: the smallest order whose residuals pass the Portmanteau test (step V6), added by the rule to raise the lag order when residuals are autocorrelated. Also the SARIMAX lag candidates."
+      "reasoning": "1 (BIC) and 3 (AIC, HQIC) from step V2, and 5: the smallest order whose residuals pass the Portmanteau test (step V6), added by the rule to raise the lag order when residuals are autocorrelated."
     },
     "test_lags": {
       "value": [6, 12, 24],
-      "justification": "Half a year, one year and two years, as in the univariate residual checks (step U4)."
+      "reasoning": "Half a year, one year and two years, as in the univariate residual checks (step U4)."
     },
     "plot_lags": {
       "value": 24,
-      "justification": "Display only: the Portmanteau p-value at every lag the model allows, up to the longest test lag."
+      "reasoning": "Display only: the Portmanteau p-value at every lag the model allows, up to the longest test lag."
     },
     "vecm_rank": {
       "value": 1,
-      "justification": "The user's choice (2026-10-25): rank 1 even though Johansen found rank 0, so forecast accuracy, not the test alone, decides whether a long-run link helps. With two series, 1 is the only VECM rank."
+      "reasoning": "Rank 1 even though Johansen found rank 0, so forecast accuracy, not the test alone, decides whether a long-run link helps; the 2008 variance break can lower Johansen's power. With two series, 1 is the only VECM rank."
     },
     "unit_root_tolerance": {
       "value": 1e-06,
-      "justification": "An estimated unit root lands within numerical precision of 1, never exactly on it; 1e-6 is far below the distance of any genuine root here (the nearest, VECM(5)'s second root, is 0.952)."
+      "reasoning": "An estimated unit root lands within numerical precision of 1, never exactly on it; 1e-6 is far below the distance of any genuine root here (the nearest, VECM(5)'s second root, is 0.952)."
     }
   },
   "var_analysis": {
     "carried_lags": {
       "value": 5,
-      "justification": "The user's decision (2026-10-25, step V6): the smallest order whose residuals pass, for both VAR and VECM."
+      "reasoning": "The smallest order whose residuals pass the Portmanteau test (step V6) for both VAR and VECM; orders 1 to 4 fail."
     },
     "horizon": {
       "value": 24,
-      "justification": "Two years after the shock: long enough for the responses to settle (they do within about 8 months)."
+      "reasoning": "Two years after the shock: long enough for the responses to settle (they do within about 8 months)."
     },
     "report_horizons": {
       "value": [1, 6, 12, 24],
-      "justification": "The impact month, half a year, one year and the end of the response window."
+      "reasoning": "The impact month, half a year, one year and the end of the response window."
     },
     "band_z": {
       "value": 1.96,
-      "justification": "The standard normal's 97.5% quantile, rounded as usual: value +- 1.96 standard errors is a 95% band, matching the 5% significance level."
+      "reasoning": "The standard normal's 97.5% quantile, rounded as usual: value +- 1.96 standard errors is a 95% band, matching the 5% significance level."
     }
   },
   "forecast_evaluation": {
     "horizons": {
       "value": [1, 3, 6, 12],
-      "justification": "One month, a quarter, half a year and a year: from the next month to the annual horizon, the standard steps for monthly macro forecasts."
+      "reasoning": "One month, a quarter, half a year and a year: from the next month to the annual horizon, the standard steps for monthly macro forecasts."
     },
     "quantiles": {
       "value": [0.025, 0.1, 0.5, 0.9, 0.975],
-      "justification": "The median and the ends of the 80% and 95% central intervals, the two interval levels most used in forecast evaluation; coverage, width and pinball loss are scored on them."
+      "reasoning": "The median and the ends of the 80% and 95% central intervals, the two interval levels most used in forecast evaluation; coverage, width and pinball loss are scored on them."
+    }
+  },
+  "tuning": {
+    "folds": {
+      "value": 5,
+      "reasoning": "Five expanding, time-ordered folds (scikit-learn's TimeSeriesSplit) inside the 166 training changes: with min_train_months = 60 each fold tests (166 - 60) // 5 = 21 months, close to two seasonal cycles, so every candidate is scored on 105 one-month forecasts. Six folds would cut each fold to 17 months, under one and a half cycles; four would score fewer months in total (4 x 26 = 104) from later origins only."
     },
-    "moving_average_windows": {
-      "value": [3, 6, 12],
-      "justification": "The user's choice (2026-10-26): a quarter, half a year and a year."
+    "min_train_months": {
+      "value": 60,
+      "reasoning": "Five years before the first fold's test months (the first fold trains on 61): the largest model searched, a VAR with 8 lags and a trend (18 coefficients per equation), still has about 3 rows per coefficient (53 rows after the lags), and a seasonal term sees five yearly cycles."
+    },
+    "candidates": {
+      "value": 60,
+      "reasoning": "Random search (Bergstra and Bengio 2012): if the best 5% of a space counts as good, 60 independent draws include at least one of them with probability 1 - 0.95^60 = 0.954, however many settings the space has. Spaces with 60 or fewer settings are searched in full."
+    },
+    "seed": {
+      "value": 0,
+      "reasoning": "Fixed so every rerun draws the same candidates; the value itself carries no meaning."
+    },
+    "sarima": {
+      "value": {
+        "p": [0, 1, 2, 3, 4],
+        "q": [0, 1, 2, 3, 4],
+        "P": [0, 1],
+        "Q": [0, 1],
+        "trend": ["n", "c"]
+      },
+      "reasoning": "p and q under the same budget as step U3, p + d + q <= 5 (diagnostics.max_order_sum, d = 1): 15 pairs, now chosen by out-of-sample error instead of AIC. P and Q: none or one seasonal term, since the training split holds about 14 yearly cycles. trend: with a drift (a constant on the differences) or without; the drift learned during QE kept forecasting growth during QT, so 'no drift' must be a candidate. d = 1 and D = 0 are not tuned: the stationarity tests of step U1 set them. 120 settings, 60 drawn."
+    },
+    "variance": {
+      "value": {
+        "p": [1, 2],
+        "q": [1, 2],
+        "dist": ["normal", "t", "skewt"],
+        "break_adjusted": [false, true]
+      },
+      "reasoning": "Searched for GARCH, EGARCH and GJR-GARCH in turn, on the tuned SARIMA's residuals (EGARCH and GJR with one asymmetry term, o = 1). Orders 1 and 2: GARCH(1,1) is hard to beat (Hansen and Lunde 2005), and 2 allows longer memory. Errors normal, Student-t (fat tails) or skewed Student-t (Hansen 1994: fat and asymmetric tails). With or without step U5's variance break removed. 24 settings, all tried; scored by one-month pinball loss, since these models only shape the intervals."
+    },
+    "var": {
+      "value": {
+        "lags": [1, 2, 3, 4, 5, 6, 7, 8],
+        "trend": ["c", "ct"]
+      },
+      "reasoning": "Lags 1 to 8: step V2's criteria chose 1 (BIC) and 3 (AIC, HQIC), step V6's residual checks 5, and 8 leaves room above them while the first fold still has about 3 rows per coefficient. Deterministic terms: a constant (drift in the levels) or a constant and a linear trend. 16 settings, all tried."
+    },
+    "vecm": {
+      "value": {
+        "lags": [1, 2, 3, 4, 5, 6, 7, 8],
+        "deterministic": ["co", "ci", "lo", "li"]
+      },
+      "reasoning": "Lagged differences 1 to 8, as for the VAR. Deterministic terms: a constant outside (co) or inside (ci) the long-run relation, or a linear trend outside (lo) or inside (li); none ('n') is left out because both series trend upward. Cointegration rank 1 (var_models.vecm_rank). 32 settings, all tried."
+    },
+    "sma": {
+      "value": {
+        "window": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]
+      },
+      "reasoning": "Every window from 2 months to two years; a window of 1 is the naive forecast itself. 23 settings, all tried."
     },
     "exponential_smoothing": {
       "value": {
-        "single exp. smoothing": {},
-        "double exp. smoothing (Holt)": {
-          "trend": "add"
-        },
-        "double exp. smoothing, damped": {
-          "trend": "add",
-          "damped_trend": true
-        },
-        "triple exp. smoothing (Holt-Winters)": {
-          "trend": "add",
-          "seasonal": "add"
-        }
+        "trend": [null, "add", "mul"],
+        "damped_trend": [false, true],
+        "seasonal": [null, "add", "mul"],
+        "use_boxcox": [false, true],
+        "initialization_method": ["estimated", "heuristic"]
       },
-      "justification": "The user's request (2026-10-26): single, double (Holt) and triple (Holt-Winters) exponential smoothing via statsmodels, plus damped Holt (the user's choice after an explanation). Additive trend and season, since the series' monthly changes, not their ratios, are what the other models describe; the season length is the seasonal period."
+      "reasoning": "Every form of statsmodels' ExponentialSmoothing for positive monthly data: no, additive or multiplicative trend, damped or not (Gardner and McKenzie 1985; damping needs a trend), no, additive or multiplicative 12-month season, with or without a Box-Cox transform, and initial states estimated with the smoothing weights or set by the heuristic of Hyndman et al. (2008). 60 valid settings, all tried. The smoothing weights themselves are estimated by maximum likelihood at every refit."
     },
-    "combination_weight": {
-      "value": 0.5,
-      "justification": "Equal weights for the selected SARIMA and naive: estimated combination weights rarely beat equal ones out of sample (Clemen 1989; Smith and Wallis 2009, the 'forecast combination puzzle')."
+    "sarimax": {
+      "value": {
+        "lags": [1, 2, 3, 4, 5, 6, 7, 8]
+      },
+      "reasoning": "The other series' last 1 to 8 monthly changes as regressors, the VAR's lag range; the orders stay those of the series' tuned SARIMA, so comparing with SARIMA measures only what the other series adds. 8 settings, all tried."
+    },
+    "combination": {
+      "value": {
+        "weight": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+      },
+      "reasoning": "The tuned SARIMA's share in the SARIMA + naive average, from 0 (naive) to 1 (SARIMA) in steps of 0.1. Equal weights are notoriously hard to beat out of sample (Clemen 1989; Smith and Wallis 2009), and 0.5 is in the grid, so another weight is chosen only when cross-validation favours it. 11 settings, all tried."
     }
   },
   "ml": {
-    "cv_folds": {
-      "value": 5,
-      "justification": "The most folds that keep every time-ordered test fold at two years or more: the first origin's window has 161 to 165 rows (166 changes minus up to 5 lags), and TimeSeriesSplit's test folds hold rows // (folds + 1) = 26 months with 5 folds but 23 with 6, so each penalty is scored on at least two full seasonal cycles."
+    "ridge": {
+      "value": {
+        "lags": [1, 2, 3, 4, 5, 6, 7, 8],
+        "alpha": [0.0, 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0]
+      },
+      "reasoning": "Lags 1 to 8 of both series' changes, the VAR's range. Features and target are standardized inside every fit, so the penalty is scale-free: against a residual sum of squares of about n (50 to 160 training rows), 0.01 barely shrinks and 10,000 pulls every coefficient close to zero; 0 is plain least squares. 64 settings, 60 drawn."
     },
-    "penalty_span": {
-      "value": 0.001,
-      "justification": "Lasso: the positive penalties run from the value that zeroes every coefficient down to 0.1% of it (scikit-learn's and glmnet's default; Friedman, Hastie and Tibshirani 2010). Ridge gets the same span: with standardized features each column's sum of squares is n, so ridge shrinks a coefficient by about n / (n + alpha), and alpha from 0.001 n to 1000 n runs from almost no shrinkage (0.999) to near-zero coefficients (0.001). Zero (plain least squares) is added to both grids: on the validation origins cross-validation chose the least-shrinkage end in 18-24% of windows, so 'no penalty' must be a candidate it can choose, not an edge it piles up on."
+    "lasso": {
+      "value": {
+        "lags": [1, 2, 3, 4, 5, 6, 7, 8],
+        "alpha": [0.0, 0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1.0],
+        "max_iter": [10000]
+      },
+      "reasoning": "Lags as for Ridge. With standardized features and target the smallest penalty that zeroes every coefficient is the largest absolute correlation of a feature with the target, at most 1, so the grid runs from 1 (empty model) down to 0.0001 (almost least squares) in half-decade steps, plus 0 (least squares, fitted as a linear regression). max_iter is the coordinate-descent cap, fixed at ten times scikit-learn's default so the small penalties converge. 80 settings, 60 drawn."
     },
-    "penalty_points": {
-      "value": 100,
-      "justification": "scikit-learn's and glmnet's default path length: neighbouring penalties differ by a factor of 1.07 (Lasso, 3 decades) or 1.15 (Ridge, 6 decades), finer than cross-validation error can tell apart on 160 months."
+    "random_forest": {
+      "value": {
+        "lags": [1, 2, 3, 4, 5, 6, 7, 8],
+        "n_estimators": [100, 200, 300, 500, 800, 1000],
+        "criterion": ["squared_error", "absolute_error", "friedman_mse"],
+        "max_depth": [null, 3, 5, 8, 12],
+        "min_samples_split": [2, 5, 10, 20],
+        "min_samples_leaf": [1, 2, 4, 8],
+        "min_weight_fraction_leaf": [0.0],
+        "max_features": [1.0, "sqrt", "log2", 0.5, 0.3],
+        "max_leaf_nodes": [null, 8, 16, 32],
+        "min_impurity_decrease": [0.0, 0.001, 0.01],
+        "bootstrap": [true],
+        "max_samples": [null, 0.5, 0.7, 0.9],
+        "ccp_alpha": [0.0, 0.001, 0.01]
+      },
+      "reasoning": "Every setting of scikit-learn's RandomForestRegressor that changes the fitted forest. Trees: 100 to 1000 (gains flatten after a few hundred; Probst and Boulesteix 2018). criterion: the three regression losses that accept negative targets (Poisson needs non-negative ones, and the target is a monthly change). max_depth, min_samples_split, min_samples_leaf, max_leaf_nodes, min_impurity_decrease and ccp_alpha all limit tree size, from fully grown (scikit-learn's defaults) to a few splits, since 50 to 160 training rows support only small trees; the last two are in units of the standardized target's variance (1). max_features: all features (the regression default) down to 30%, the decorrelation Breiman (2001) recommends. bootstrap is fixed on, since max_samples (half the rows to all) needs it. min_weight_fraction_leaf is fixed at 0: with unweighted rows it only repeats min_samples_leaf. Not searched: verbose, warm_start and oob_score don't change the forest; n_jobs is fixed at 1 so reruns are identical to the last bit (with several threads the trees' predictions are summed in a varying order); random_state is random_seed below. Lags as for Ridge."
     },
-    "forest_trees": {
-      "value": 500,
-      "justification": "More trees never make a random forest worse, they only stabilize its average; gains flatten after a few hundred (Probst and Boulesteix 2018), and 500 is the classic default of Breiman and Cutler's randomForest. Other settings are scikit-learn's defaults: forests gain little from tuning (Probst, Boulesteix and Bischl 2019)."
+    "xgboost": {
+      "value": {
+        "lags": [1, 2, 3, 4, 5, 6, 7, 8],
+        "n_estimators": [100, 200, 300, 500, 800, 1000],
+        "learning_rate": [0.01, 0.03, 0.05, 0.1, 0.2, 0.3],
+        "max_depth": [2, 3, 4, 5, 6],
+        "min_child_weight": [1, 2, 4, 8],
+        "subsample": [0.5, 0.7, 0.85, 1.0],
+        "colsample_bytree": [0.5, 0.7, 1.0],
+        "gamma": [0.0, 0.01, 0.1, 0.5],
+        "reg_alpha": [0.0, 0.01, 0.1, 1.0],
+        "reg_lambda": [0.1, 1.0, 5.0, 10.0]
+      },
+      "reasoning": "XGBoost's tree-boosting settings. Learning rate from XGBoost's default 0.3 down to 0.01, the small steps Friedman (2001) recommends, against 100 to 1000 trees so slow learning gets enough of them. max_depth 2 to 6 (6 is the default; shallow trees suit 50 to 160 rows). min_child_weight counts rows here, since squared-error loss has a Hessian of 1 per row. subsample and colsample_bytree from half to all: stochastic gradient boosting (Friedman 2002). gamma, reg_alpha and reg_lambda are in units of the standardized target: from no pruning or shrinkage to strong, with the default lambda of 1 inside. Not searched: tree_method stays XGBoost's default 'hist', the objective squared error (the evaluation scores errors); n_jobs and verbosity don't change the model; random_state is random_seed below. Lags as for Ridge."
     },
-    "boosting_holdout_share": {
-      "value": 0.25,
-      "justification": "The last quarter of each training window, in time order, decides when boosting stops adding trees: 25:75 inside the window mirrors the project's 20:60 validation-to-train ratio. It is passed to scikit-learn's early stopping as the validation set (X_val / y_val); the built-in random holdout is not used, since it would let later months choose for earlier ones."
-    },
-    "boosting_max_iterations": {
-      "value": 1000,
-      "justification": "A cap only, never the reason training stops: with the early-stopping rule, the largest number of trees chosen on the validation origins was 184. The report states the largest number chosen at any origin and whether the cap was reached."
-    },
-    "boosting_patience": {
-      "value": 10,
-      "justification": "scikit-learn's default early-stopping patience: stop after 10 trees in a row bring no holdout improvement. Taking the lowest holdout loss anywhere up to the cap instead chased tiny late dips after long plateaus (up to 1000 trees, e.g. 996 instead of 17, on the validation origins)."
-    },
-    "boosting_tolerance": {
-      "value": 1e-07,
-      "justification": "scikit-learn's default: an improvement in holdout loss smaller than this doesn't count, so numerical noise can't keep training going."
-    },
-    "boosting_learning_rate": {
-      "value": 0.1,
-      "justification": "scikit-learn's default shrinkage. With early stopping choosing the number of trees, a smaller rate mainly trades many more trees for a small accuracy gain (Friedman 2001)."
+    "knn": {
+      "value": {
+        "lags": [1, 2, 3, 4, 5, 6, 7, 8],
+        "n_neighbors": [1, 2, 3, 5, 7, 10, 15, 20, 30],
+        "weights": ["uniform", "distance"],
+        "p": [1, 2]
+      },
+      "reasoning": "Standardized features, so every lag counts equally in the distance. Neighbours from 1 (memorizes the training rows) to 30, over half of the smallest fold's 53 training rows, where predictions approach the average change. Equal or inverse-distance weights; Manhattan (p = 1) or Euclidean (p = 2) distance. Lags as for Ridge. 288 settings, 60 drawn."
     },
     "random_seed": {
       "value": 0,
-      "justification": "Fixed so every rerun gives identical forests and boosting; the value itself carries no meaning."
+      "reasoning": "Fixed so every rerun gives identical forests and boosted trees; the value itself carries no meaning."
     }
   }
 }

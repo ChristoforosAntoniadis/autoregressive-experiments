@@ -2,11 +2,11 @@
 VAR / VECM estimation and checks, steps V4 to V6: fit the candidate systems, check they're
 stable, and check their residuals carry no autocorrelation left.
 
-Candidates (the user's decisions): VARs on the first differences, with a constant, and a rank-1
+Candidates: VARs on the first differences, with a constant, and a rank-1
 VECM on the levels with a constant, even though Johansen found no cointegration (step V3), so
 forecast accuracy can decide later whether a long-run link helps. Lag orders 1 (BIC) and 3 (AIC,
-HQIC) come from step V2; both leave autocorrelated residuals, so by the roadmap's rule the order
-was raised to 5, the smallest that passes. Only candidates that are stable and pass the residual
+HQIC) come from step V2; both leave autocorrelated residuals, so the order was raised (the usual
+remedy) to 5, the smallest that passes. Only candidates that are stable and pass the residual
 checks are carried forward to the evaluation: VAR(5) and VECM(5).
 
 - V4: estimate each candidate on the training split (OLS per equation for the VARs, Johansen's
@@ -62,7 +62,7 @@ from autoregressive_experiments.runlog import begin_phase, finish_run, start_run
 
 app = typer.Typer()
 
-# Settings; each value's justification is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in configs/hyperparameters.json.
 # Lag orders of the VAR / VECM candidates.
 VAR_LAGS = HYPERPARAMETERS.var_models.var_lags
 # Portmanteau lags that decide the verdict.

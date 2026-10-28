@@ -63,7 +63,7 @@ from autoregressive_experiments.runlog import begin_phase, finish_run, start_run
 
 app = typer.Typer()
 
-# Settings; each value's justification is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in configs/hyperparameters.json.
 # Lags (months) for the reported ARCH-LM tests.
 ARCH_TEST_LAGS = HYPERPARAMETERS.volatility_checks.arch_test_lags
 # Lags shown in the figure's ARCH-LM panel (every lag from 1).

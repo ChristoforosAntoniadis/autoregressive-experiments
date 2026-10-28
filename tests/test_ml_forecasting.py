@@ -6,11 +6,13 @@ import numpy as np
 import pytest
 
 from autoregressive_experiments.ml_forecasting import (
-    BOOSTING,
+    FOREST,
     LASSO,
     RIDGE,
-    SETTINGS,
+    XGBOOST,
+    build_model,
     fit_model,
+    lag_columns,
     lag_features,
     ml_forecaster,
     recursive_forecast,
@@ -86,6 +88,18 @@ def test_lag_features_by_hand() -> None:
     assert rows.tolist() == [[2.0, 1.0, 20.0, 10.0], [3.0, 2.0, 30.0, 20.0]]
 
 
+def test_lag_columns_pick_fewer_lags_out_of_a_wider_matrix() -> None:
+    """With 3 lags per series the columns are x1 x2 x3 y1 y2 y3; 2 lags are columns 0, 1, 3, 4,
+    which on the same months equal the 2-lag matrix (it starts a month earlier, so one row
+    later lines up)."""
+    changes = np.arange(20.0).reshape(10, 2)
+
+    columns = lag_columns(2, 3, 2)
+
+    assert columns == [0, 1, 3, 4]
+    assert np.array_equal(lag_features(changes, 3)[:, columns], lag_features(changes, 2)[1:])
+
+
 def test_recursive_forecast_feeds_each_month_back_by_hand() -> None:
     """One lag; x' = 0.5 x and y' = x (each series' next change from last month's x).
 
@@ -93,37 +107,63 @@ def test_recursive_forecast_feeds_each_month_back_by_hand() -> None:
     works if month 1's forecasts were fed back as month 2's inputs.
     """
     # Feature columns with one lag: [x lag 1, y lag 1].
-    models = [LinearRule([0.5, 0.0]), LinearRule([1.0, 0.0])]
+    models = [(LinearRule([0.5, 0.0]), 1), (LinearRule([1.0, 0.0]), 1)]
 
-    path = recursive_forecast(models, np.array([[9.0, 9.0], [2.0, 7.0]]), 1, 2)
+    path = recursive_forecast(models, np.array([[9.0, 9.0], [2.0, 7.0]]), 2)
 
     assert path.tolist() == [[1.0, 2.0], [0.5, 1.0]]
 
 
-def test_ridge_recovers_the_simulated_rule() -> None:
-    """On 400 simulated months with one lag, Ridge's one-month predictions follow the true
-    rule (y' = 0.8 x, x' = 0.5 x) within the noise."""
-    changes = np.diff(simulated_system(400), axis=0)
-    features = lag_features(changes, 1)
+def test_recursive_forecast_lets_each_series_use_its_own_lags() -> None:
+    """x' = x1 + 0.5 x2 (2 lags: columns x1 x2 y1 y2), y' = y1 (1 lag: columns x1 y1).
 
-    fitted = [fit_model(RIDGE, features, changes[1:, column]) for column in range(2)]
+    From changes (1, 10), (2, 20): x' = 2 + 0.5 x 1 = 2.5, y' = 20; then x'' = 2.5 + 0.5 x 2
+    = 3.5, y'' = 20.
+    """
+    models = [(LinearRule([1.0, 0.5, 0.0, 0.0]), 2), (LinearRule([0.0, 1.0]), 1)]
+
+    path = recursive_forecast(models, np.array([[1.0, 10.0], [2.0, 20.0]]), 2)
+
+    assert path.tolist() == [[2.5, 20.0], [3.5, 20.0]]
+
+
+def test_ridge_recovers_the_simulated_rule() -> None:
+    """On 400 simulated months with one lag and no penalty, Ridge's one-month predictions follow
+    the true rule (y' = 0.8 x, x' = 0.5 x) within the noise, in the data's own units although
+    the fit standardizes features and target."""
+    changes = np.diff(simulated_system(400), axis=0)
+    settings = {"lags": 1, "alpha": 0.0}
+
+    fitted = [fit_model(RIDGE, settings, changes, column) for column in range(2)]
 
     probe = np.array([[1.0, 0.0], [-2.0, 0.0]])
     assert fitted[0].predict(probe) == pytest.approx([0.5, -1.0], abs=0.15)
     assert fitted[1].predict(probe) == pytest.approx([0.8, -1.6], abs=0.05)
 
 
-def test_boosting_is_reproducible_and_stops_before_the_cap() -> None:
-    """Two fits on the same data give identical predictions (fixed seed, time-ordered
-    holdout), and early stopping picks fewer trees than the cap."""
-    changes = np.diff(simulated_system(200), axis=0)
-    features = lag_features(changes, 3)
+def test_lasso_without_a_penalty_is_least_squares() -> None:
+    """Lasso with alpha 0 is fitted as a linear regression, so it matches Ridge with alpha 0:
+    both are plain least squares."""
+    changes = np.diff(simulated_system(120), axis=0)
+    features, target = lag_features(changes, 2), changes[2:, 1]
 
-    first = fit_model(BOOSTING, features, changes[3:, 1])
-    second = fit_model(BOOSTING, features, changes[3:, 1])
+    lasso = build_model(LASSO, {"lags": 2, "alpha": 0.0, "max_iter": 10}).fit(features, target)
+    ridge = build_model(RIDGE, {"lags": 2, "alpha": 0.0}).fit(features, target)
 
-    assert np.array_equal(first.predict(features), second.predict(features))
-    assert 1 <= first.n_iter_ < SETTINGS.boosting_max_iterations
+    assert lasso.predict(features) == pytest.approx(ridge.predict(features), abs=1e-9)
+
+
+def test_forest_and_xgboost_are_reproducible() -> None:
+    """Two fits on the same data give identical predictions (fixed seed)."""
+    changes = np.diff(simulated_system(150), axis=0)
+    features, target = lag_features(changes, 3), changes[3:, 1]
+    forest = {"lags": 3, "n_estimators": 50, "max_features": 0.5, "max_samples": 0.7}
+    boosting = {"lags": 3, "n_estimators": 50, "subsample": 0.7, "colsample_bytree": 0.5}
+
+    for model, settings in ((FOREST, forest), (XGBOOST, boosting)):
+        first = build_model(model, settings).fit(features, target).predict(features)
+        second = build_model(model, settings).fit(features, target).predict(features)
+        assert np.array_equal(first, second)
 
 
 def test_ml_forecaster_ignores_everything_after_the_origin() -> None:
@@ -131,13 +171,18 @@ def test_ml_forecaster_ignores_everything_after_the_origin() -> None:
     doesn't match the harness's levels trips the leakage guard."""
     levels = simulated_system(120)
     origin = 90
-    forecaster = ml_forecaster(LASSO, 3, levels, 1, {})
+    # Each series has its own tuned lags, as after the tuning.
+    settings = [
+        {"lags": 3, "alpha": 0.01, "max_iter": 10000},
+        {"lags": 2, "alpha": 0.01, "max_iter": 10000},
+    ]
+    forecaster = ml_forecaster(LASSO, settings, levels, 1, {})
 
     before = forecaster(levels[: origin + 1, 1], 6)["forecast"]
     changed = levels.copy()
     changed[origin + 1 :] += 100.0
-    after = ml_forecaster(LASSO, 3, changed, 1, {})(changed[: origin + 1, 1], 6)["forecast"]
+    after = ml_forecaster(LASSO, settings, changed, 1, {})(changed[: origin + 1, 1], 6)
 
-    assert np.array_equal(before, after)
+    assert np.array_equal(before, after["forecast"])
     with pytest.raises(AssertionError):
         forecaster(levels[: origin + 1, 0], 6)

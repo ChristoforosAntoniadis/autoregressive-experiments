@@ -57,7 +57,7 @@ from autoregressive_experiments.runlog import begin_phase, finish_run, start_run
 
 app = typer.Typer()
 
-# Settings; each value's justification is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in configs/hyperparameters.json.
 # Lag orders tried in V2: 0..MAX_VAR_LAGS months.
 MAX_VAR_LAGS = HYPERPARAMETERS.var_diagnostics.max_lags
 CRITERIA = HYPERPARAMETERS.var_diagnostics.criteria

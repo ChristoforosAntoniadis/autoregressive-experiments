@@ -19,8 +19,10 @@ dependencies = [
     "arch==8.0.0",
     # Already installed with statsmodels; pinned because the Diebold-Mariano test imports it.
     "scipy==1.18.1",
-    # The lag-feature ML family: Ridge, Lasso, random forest, histogram gradient boosting.
+    # The lag-feature ML family (Ridge, Lasso, random forest, KNN) and the tuning's folds.
     "scikit-learn==1.9.1",
+    # The lag-feature ML family's gradient boosting.
+    "xgboost==3.4.1",
     "kagglehub==1.0.3",
     "loguru==0.7.3",
     "typer==0.27.3",

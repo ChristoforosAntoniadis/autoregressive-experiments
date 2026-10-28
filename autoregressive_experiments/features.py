@@ -34,7 +34,7 @@ app = typer.Typer()
 # The month-end date column and the two series the project models, in trillions USD.
 DATE_COLUMN = "date"
 VALUE_COLUMNS = ["fed_total_assets_T", "monetary_base_T"]
-# Settings; each value's justification is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in configs/hyperparameters.json.
 # Whole percentages rather than fractions, so split_boundaries can use exact integer
 # arithmetic. Test takes the rest.
 TRAIN_PERCENT = HYPERPARAMETERS.split.train_percent

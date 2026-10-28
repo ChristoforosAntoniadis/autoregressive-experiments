@@ -96,7 +96,7 @@ ASYMMETRIC_MODELS: dict[str, dict[str, Any]] = {
     EGARCH_T: {"vol": "EGARCH", "p": 1, "o": 1, "q": 1, "dist": "t"},
     GJR_T: {"vol": "GARCH", "p": 1, "o": 1, "q": 1, "dist": "t"},
 }
-# Settings; each value's justification is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in configs/hyperparameters.json.
 # EGARCH has no closed-form multi-step variance forecast, so it is simulated, with a fixed
 # seed so every rerun gives identical numbers.
 SIMULATIONS = HYPERPARAMETERS.volatility_models.simulations
@@ -327,10 +327,7 @@ def garch_variance_path(
     residuals: np.ndarray | pd.Series, variant: str, steps: int
 ) -> tuple[np.ndarray, float]:
     """
-    Forecast shock variances for the next months from the chosen GARCH variant.
-
-    Used by the forecast evaluation (U6) at every rolling origin, so the variance model is
-    refitted on the residuals available at that origin only.
+    Forecast shock variances for the next months from a named GARCH variant.
 
     Parameters
     ----------
@@ -350,13 +347,51 @@ def garch_variance_path(
 
     Notes
     -----
+    A named front end to variance_forecast(), for the variants of steps U5b and U5c.
+    """
+    variances, shape = variance_forecast(
+        residuals, variance_spec(variant), variant.endswith(BREAK_SUFFIX), steps
+    )
+    return variances, float(shape[0]) if len(shape) else np.inf
+
+
+def variance_forecast(
+    residuals: np.ndarray | pd.Series, spec: dict[str, Any], break_adjusted: bool, steps: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Forecast shock variances for the next months from any arch variance model.
+
+    Used by the forecast evaluation at every rolling origin, so the variance model is
+    refitted on the residuals available at that origin only.
+
+    Parameters
+    ----------
+    residuals : np.ndarray or pd.Series
+        The SARIMA residuals up to the forecast origin, shape (n,), in trillions.
+    spec : dict of str to Any
+        Keyword arguments for arch_model(): "vol", "p", "o", "q" and "dist".
+    break_adjusted : bool
+        Whether to fit on the residuals with step U5's variance break removed.
+    steps : int
+        The forecast horizon in months.
+
+    Returns
+    -------
+    tuple of (np.ndarray, np.ndarray)
+        The forecast shock variances for months 1..steps after the origin, shape (steps,),
+        in trillions squared; and the error distribution's shape parameters as arch orders
+        them (none for normal, [nu] for Student-t, [eta, lambda] for skewed Student-t).
+
+    Notes
+    -----
     Processing:
-    1. For a break-adjusted variant, divide the residuals by their regime scales and keep
+    1. For a break-adjusted model, divide the residuals by their regime scales and keep
        the latest (post-break) regime's scale.
     2. Fit the variance model with arch (zero mean, rescaled).
     3. Forecast the variance path: analytic for GARCH and GJR; for EGARCH beyond one step,
        by simulation (EGARCH works on log variance, so its multi-step forecast has no closed
-       form). The simulation uses SIMULATIONS paths drawn from a generator seeded with
+       form). The simulation uses SIMULATIONS paths whose standardized shocks are drawn by
+       inverting the fitted error distribution at uniforms from a generator seeded with
        SIMULATION_SEED, created afresh at each call, so the same inputs always give the
        same path.
     4. Undo arch's rescaling (divide by c^2) and multiply by the latest regime's scale
@@ -365,14 +400,14 @@ def garch_variance_path(
     """
     values = np.asarray(residuals, dtype=float)
     regime_scale = 1.0
-    if variant.endswith(BREAK_SUFFIX):
+    if break_adjusted:
         scales = regime_scales(values, variance_break(values))
         # scales[-1]: the forecasts are for months after the sample, in its last regime.
         values, regime_scale = values / scales, scales[-1]
-    spec = variance_spec(variant)
     fit = arch_model(values, mean="Zero", rescale=True, **spec).fit(disp="off")
-    # Normal models have no "nu" parameter; inf is the Student-t limit that equals the normal.
-    nu = float(fit.params.get("nu", np.inf))
+    distribution = fit.model.distribution
+    # The distribution's parameters come last in arch's parameter vector.
+    shape = fit.params.to_numpy()[len(fit.params) - distribution.num_params :]
     # Extra keyword arguments for fit.forecast(); empty means arch's analytic forecast.
     options: dict[str, Any] = {}
     # One step ahead, EGARCH's variance is known exactly from the fit, so analytic is fine.
@@ -381,15 +416,14 @@ def garch_variance_path(
         options = {
             "method": "simulation",
             "simulations": SIMULATIONS,
-            # Seeded unit-variance Student-t shocks; arch ignores random_state here.
-            # A t variable with nu degrees of freedom has variance nu / (nu - 2); the factor
-            # sqrt((nu - 2) / nu) scales it to variance 1, as arch's standardized shocks need.
-            "rng": lambda size: generator.standard_t(nu, size) * np.sqrt((nu - 2) / nu),
+            # Seeded shocks from the fitted, unit-variance error distribution (inverse CDF of
+            # uniforms); arch ignores random_state here.
+            "rng": lambda size: distribution.ppf(generator.uniform(size=size), shape),
         }
     # reindex=False returns only the last origin's row; [-1] takes it as a (steps,) array.
     variances = fit.forecast(horizon=steps, reindex=False, **options).variance.to_numpy()[-1]
     # Back from arch's rescaled units, and onto the latest (post-break) regime's scale.
-    return variances / fit.scale**2 * regime_scale**2, nu
+    return variances / fit.scale**2 * regime_scale**2, shape
 
 
 def half_life(persistence: float) -> float:

@@ -38,36 +38,38 @@ def write_config(tmp_path: Path, change: Any) -> Path:
     return path
 
 
-def test_the_project_config_loads_with_a_justification_for_every_setting() -> None:
-    """The committed file passes every check, and each setting has its justification: one per
+def test_the_project_config_loads_with_reasoning_for_every_setting() -> None:
+    """The committed file passes every check, and each setting has its reasoning: one per
     field of every section."""
     loader = ConfigLoader()
     hyperparameters = loader.load()
 
     settings = sum(len(fields(getattr(hyperparameters, f.name))) for f in fields(Hyperparameters))
-    assert len(loader.justifications) == settings
+    assert len(loader.reasoning) == settings
     # Spot checks: JSON lists arrive as tuples, a JSON 2.0 as the float 2.0.
     assert hyperparameters.tests.significance_level == 0.05
     assert hyperparameters.forecast_evaluation.horizons == (1, 3, 6, 12)
     assert hyperparameters.residual_checks.aic_tie_margin == 2.0
+    # Search spaces stay as JSON gave them: lists, with null as None.
+    assert hyperparameters.ml.random_forest["max_depth"][0] is None
 
 
 @pytest.mark.parametrize(
     ("description", "change", "message"),
     [
         (
-            "a missing justification",
-            lambda c: c["split"]["train_percent"].pop("justification"),
+            "missing reasoning",
+            lambda c: c["split"]["train_percent"].pop("reasoning"),
             "split.train_percent: needs exactly the keys",
         ),
         (
-            "an empty justification",
-            lambda c: c["split"]["train_percent"].update(justification="  "),
-            "split.train_percent: the justification is missing or empty",
+            "empty reasoning",
+            lambda c: c["split"]["train_percent"].update(reasoning="  "),
+            "split.train_percent: the reasoning is missing or empty",
         ),
         (
             "an unknown setting",
-            lambda c: c["split"].update(test_percent={"value": 20, "justification": "x"}),
+            lambda c: c["split"].update(test_percent={"value": 20, "reasoning": "x"}),
             "split: unknown setting 'test_percent'",
         ),
         ("a missing section", lambda c: c.pop("var_models"), "missing section 'var_models'"),
@@ -90,6 +92,16 @@ def test_the_project_config_loads_with_a_justification_for_every_setting() -> No
             "lags out of order",
             lambda c: c["var_models"]["var_lags"].update(value=[3, 1, 5]),
             "var_models.var_lags: (3, 1, 5) breaks the rule",
+        ),
+        (
+            "a search space missing a setting",
+            lambda c: c["ml"]["random_forest"]["value"].pop("max_depth"),
+            "ml.random_forest: ",
+        ),
+        (
+            "a search space with no values to try",
+            lambda c: c["tuning"]["sma"]["value"].update(window=[]),
+            "tuning.sma: ",
         ),
         (
             "no months left for test",
@@ -116,9 +128,9 @@ def test_the_loader_reports_every_problem_at_once(tmp_path: Path) -> None:
     """Two broken settings give one error listing both, not just the first."""
 
     def two_mistakes(config: dict[str, Any]) -> None:
-        """Break one value's type and remove another's justification."""
+        """Break one value's type and remove another's reasoning."""
         config["diagnostics"]["max_iterations"]["value"] = "many"
-        config["tests"]["significance_level"].pop("justification")
+        config["tests"]["significance_level"].pop("reasoning")
 
     with pytest.raises(ValueError) as error:
         ConfigLoader(write_config(tmp_path, two_mistakes)).load()

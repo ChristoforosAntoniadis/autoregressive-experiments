@@ -1,52 +1,49 @@
 """
-Forecast evaluation (step U6, then the VAR / VECM systems): how accurate are the models out of
-sample, do they beat naive forecasts, does modelling the two series jointly beat modelling them
-alone, and are the forecast intervals honest?
+Forecast evaluation (step U6, then every other family): how accurate are the models out of
+sample, do they beat naive forecasts, does any other approach beat SARIMA, and are the forecast
+intervals honest?
 
-The systems, VAR(5) on the differences and VECM(5) on the levels (carried forward from step
-V6), are refitted on both series up to each origin and forecast both; their intervals are normal,
-from the system's forecast-error covariance (GARCH is univariate here). Each system is also
-tested against the series' selected SARIMA with Diebold-Mariano.
+Every model's settings were tuned beforehand by ``tuning``, a time-aware random search on the
+training split, and are read from ``models/tuned_hyperparameters.json``; they stay fixed here.
 
 Rolling origin with an expanding window, on validation and then on test: at every month from the
 end of the previous split onwards, each model is refitted on all data up to that month and
 forecasts up to 12 months ahead; only forecasts whose target falls inside the split are scored.
-Each monthly origin is one fold (56 per split). Model orders come from the training split and the
-selected model per series and family (SARIMA, system, smoothing, ML, SARIMAX) from validation
-(lowest one-month MASE); test is run once, with all models, and nothing changes after it. Errors
-are measured on the levels (trillions), so MAPE stays well defined: the levels are always
-positive, while the differences cross zero.
+Each monthly origin is one fold (56 per split). The model reported per series and family
+(SARIMA, system, smoothing, ML, SARIMAX, combination) is chosen on validation (lowest one-month
+MASE); test is run once, with all models, and nothing changes after it. Errors are measured on
+the levels (trillions), so MAPE stays well defined: the levels are always positive, while the
+differences cross zero.
 
-Models: the SARIMA models that pass the residual checks (fitted on the first differences, their
-forecasts added back onto the last level), and three baselines: naive (no change), drift (the
-average monthly change so far) and seasonal naive (each month changes as it did a year earlier).
-Smoothing baselines: simple moving averages of the last 3, 6 and 12 levels, and single, double
-(Holt, plain and damped) and triple (Holt-Winters) exponential smoothing on the levels. A
-combination: the equal-weight average of the selected SARIMA and naive. SARIMAX: the selected
-SARIMA plus the other series' last 1, 3 or 5 monthly changes as regressors; for forecast months
-whose regressors aren't known yet, the other series' own selected-SARIMA forecasts stand in.
-Lag-feature ML (ml_forecasting): Ridge, Lasso, random forest and gradient boosting on the
-last 1, 3 or 5 monthly changes of both series, forecasting recursively. Smoothing, the
+Models, each with its tuned settings: SARIMA fitted on the first differences (its forecasts added
+back onto the last level); three baselines: naive (no change), drift (the average monthly change
+so far) and seasonal naive (each month changes as it did a year earlier); the systems, a VAR on
+the differences and a VECM on the levels, refitted on both series up to each origin and
+forecasting both, with normal intervals from the system's forecast-error covariance; smoothing:
+a simple moving average and exponential smoothing on the levels; the SARIMA + naive weighted
+average; SARIMAX: the tuned SARIMA plus the other series' last monthly changes as regressors (for
+forecast months whose regressors aren't known yet, the other series' own SARIMA forecasts stand
+in); lag-feature ML (ml_forecasting): Ridge, Lasso, random forest, XGBoost and k-nearest
+neighbours on the last monthly changes of both series, forecasting recursively. Smoothing, the
 combination, SARIMAX and ML give point forecasts only.
 
 Point accuracy per split, series, model and horizon: MAE, MSE, RMSE (trillions, trillions
 squared), MAPE (%) and MASE (MAE divided by the training split's in-sample MAE of the one-month
 naive forecast; below 1 beats it), plus a Diebold-Mariano test against naive (absolute and squared
 error losses), so "beats naive" means more than a lucky sample. Every non-SARIMA model is also
-tested against the series' selected SARIMA the same way.
+tested against the series' SARIMA the same way.
 
 Forecast quantiles (2.5, 10, 50, 90 and 97.5%) come from each model's own forecast distribution
 on the levels: the SARIMA's error weights, summed over the horizon, with either a constant shock
-variance or the forecast variance path of a volatility model, refitted at every origin: the
-GARCH variant chosen in step U5b, or the EGARCH and GJR-GARCH variants of step U5c; normal
-quantiles for constant variance, unit-variance Student-t for the volatility models. Naive gets
-random-walk quantiles as the reference. Scored by 80% and 95% interval coverage and width, the
-share of actuals below each quantile, and pinball (quantile) loss. The volatility models only
-change these intervals, never the point forecasts. Refits that fail to converge are counted and
-listed.
+variance or the forecast variance path of its tuned GARCH, EGARCH or GJR-GARCH, refitted at every
+origin; normal quantiles for constant variance, and the tuned error distribution (normal,
+Student-t or skewed Student-t) for the volatility models. Naive gets random-walk quantiles as the
+reference. Scored by 80% and 95% interval coverage and width, the share of actuals below each
+quantile, and pinball (quantile) loss. The volatility models only change these intervals, never
+the point forecasts. Refits that fail to converge are counted and listed.
 
-Input: ``data/interim/fed_balance_sheet_cleaned.csv`` and, through ``residual_checks``, the
-first differences and ``reports/information_criteria_candidates.csv``.
+Input: ``data/interim/fed_balance_sheet_cleaned.csv`` and ``models/tuned_hyperparameters.json``
+(written by ``make tune``).
 
 Output, in ``reports/``:
 
@@ -54,19 +51,20 @@ Output, in ``reports/``:
   interval tables, and the refits that failed to converge
 - ``forecast_metrics.csv`` and ``forecast_intervals.csv``: every number behind those tables
 - ``figures/forecast_evaluation.png``: per series, each family's selected model's MAE relative to
-  naive by horizon on validation and on test, and the actual path against the selected SARIMA's,
-  the best other family's and the naive one-month forecasts
-- ``figures/ml_evaluation.png``: per series and split, each ML model's best lag count (chosen
-  on validation) against naive, the selected SARIMA and the selected smoothing model
-- ``figures/forecast_intervals.png``: per series and split, the selected SARIMA's 80% and 95%
-  interval coverage by horizon, with constant variance, GARCH, EGARCH and GJR-GARCH, against the
-  targets
+  naive by horizon on validation and on test, and the actual path against the SARIMA's, the best
+  other family's and the naive one-month forecasts
+- ``figures/ml_evaluation.png``: per series and split, each ML model against naive, the SARIMA
+  and the selected smoothing model
+- ``figures/forecast_intervals.png``: per series and split, the SARIMA's 80% and 95% interval
+  coverage by horizon, with constant variance, GARCH, EGARCH and GJR-GARCH, against the targets
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+import json
 from pathlib import Path
 from typing import Any
 
+from arch.univariate import SkewStudent
 from loguru import logger
 import matplotlib.dates as mdates
 from matplotlib.figure import Figure
@@ -79,16 +77,15 @@ from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from statsmodels.tsa.vector_ar.vecm import VECM
 import typer
 
-from autoregressive_experiments.asymmetric_garch import EGARCH_T, GJR_T, asymmetric_check
 from autoregressive_experiments.config import (
     FIGURES_DIR,
     INTERIM_DATA_DIR,
-    PROCESSED_DATA_DIR,
+    MODELS_DIR,
     REPORTS_DIR,
 )
 from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.diagnostics import (
-    CANDIDATES_PATH,
+    DIFFERENCING_ORDER,
     SEASONAL_PERIOD,
     SIGNIFICANCE_LEVEL,
     VALUE_COLUMNS,
@@ -101,7 +98,7 @@ from autoregressive_experiments.features import (
     split_boundaries,
     split_by_time,
 )
-from autoregressive_experiments.ml_forecasting import ML_MODELS, ML_NAMES, ml_forecaster
+from autoregressive_experiments.ml_forecasting import ML_MODELS, ml_forecaster
 from autoregressive_experiments.residual_checks import (
     BASELINE,
     MUTED_INK,
@@ -110,8 +107,6 @@ from autoregressive_experiments.residual_checks import (
     SERIES_PALETTE,
     SURFACE,
     apply_chart_style,
-    checked_models,
-    model_label,
 )
 from autoregressive_experiments.runlog import (
     Progress,
@@ -119,61 +114,56 @@ from autoregressive_experiments.runlog import (
     finish_run,
     start_run_log,
 )
-from autoregressive_experiments.var_analysis import CARRIED_LAGS
-from autoregressive_experiments.var_models import VAR_LAGS, VECM_RANK
-from autoregressive_experiments.volatility_models import garch_variance_path
+from autoregressive_experiments.var_models import VECM_RANK
+from autoregressive_experiments.volatility_models import variance_forecast
 
 app = typer.Typer()
 
-# Settings; each value's justification is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in configs/hyperparameters.json.
 # Forecast horizons that are scored, in months ahead; every model forecasts up to the longest.
 HORIZONS = HYPERPARAMETERS.forecast_evaluation.horizons
 MAX_HORIZON = max(HORIZONS)
 METRICS = ("MAE", "MSE", "RMSE", "MAPE", "MASE")
 # Diebold-Mariano statistic and p-value per loss, against naive; the DM_SARIMA_* twins hold the
-# same test against the series' selected SARIMA.
+# same test against the series' SARIMA.
 DM_COLUMNS = ("DM_absolute", "DM_absolute_p", "DM_squared", "DM_squared_p")
 DM_SARIMA_COLUMNS = tuple(column.replace("DM", "DM_SARIMA") for column in DM_COLUMNS)
 NAIVE = "naive"
 BASELINES = (NAIVE, "drift", "seasonal naive")
-# The systems carried forward from step V6; each forecasts both series at once.
-SYSTEMS = (f"VAR({CARRIED_LAGS})", f"VECM({CARRIED_LAGS})")
 # The standard normal's 97.5% quantile (about 1.96): a normal 95% interval is mean +- this x SD.
 NORMAL_95 = stats.norm.ppf(0.975)
-# Smoothing baselines: simple moving averages of the last k levels, and exponential smoothing
-# via statsmodels' holtwinters.ExponentialSmoothing.
-MOVING_AVERAGE_WINDOWS = HYPERPARAMETERS.forecast_evaluation.moving_average_windows
-# Model name -> keyword arguments for ExponentialSmoothing; no trend or season means single. A
-# seasonal model gets the project's season length, so it isn't configured twice.
-EXPONENTIAL_SMOOTHING: dict[str, dict[str, Any]] = {
-    name: dict(options) | ({"seasonal_periods": SEASONAL_PERIOD} if "seasonal" in options else {})
-    for name, options in HYPERPARAMETERS.forecast_evaluation.exponential_smoothing.items()
-}
-SMOOTHING = (*(f"SMA({window})" for window in MOVING_AVERAGE_WINDOWS), *EXPONENTIAL_SMOOTHING)
-# A weighted average of the selected SARIMA and naive forecasts; COMBINATION_WEIGHT is the
-# SARIMA's share.
+# The tuned models' keys in the tuned-settings file (ML models use their ML_MODELS names).
+SARIMA, VAR_MODEL, VECM_MODEL, SARIMAX = "SARIMA", "VAR", "VECM", "SARIMAX"
+SMA, EXPONENTIAL = "SMA", "exponential smoothing"
 COMBINATION = "SARIMA + naive average"
-COMBINATION_WEIGHT = HYPERPARAMETERS.forecast_evaluation.combination_weight
-# SARIMAX: the series' selected SARIMA plus the other series' lagged monthly changes as
-# regressors. The candidate lag counts are the VAR candidates' orders, so no new number is
-# introduced; validation picks one per series.
-SARIMAX_LAGS = VAR_LAGS
-SARIMAX_NAMES = {
-    lags: f"SARIMAX ({lags} exog lag{'' if lags == 1 else 's'})" for lags in SARIMAX_LAGS
+# Interval variants: constant variance, then the volatility models tuned on the SARIMA's
+# residuals; key -> the model's name in the tuned-settings file.
+VARIANCES = ("constant", "garch", "egarch", "gjr")
+VOLATILITY_MODELS = {"garch": "GARCH", "egarch": "EGARCH", "gjr": "GJR-GARCH"}
+# arch's settings that make each volatility model what it is; the tuning chooses p, q, the
+# error distribution and the break adjustment. o = 1 adds one asymmetric (leverage) term, and
+# arch's GJR is its GARCH volatility with o > 0.
+VOLATILITY_SPECS: dict[str, dict[str, Any]] = {
+    "GARCH": {"vol": "GARCH", "o": 0},
+    "EGARCH": {"vol": "EGARCH", "o": 1},
+    "GJR-GARCH": {"vol": "GARCH", "o": 1},
 }
 SPLITS = ("validation", "test")
 # Ordered low to high: interval_scores unpacks them as 95% low, 80% low, median, 80% high,
 # 95% high.
 QUANTILES = HYPERPARAMETERS.forecast_evaluation.quantiles
-# Interval variants: constant variance, U5b's GARCH, and U5c's EGARCH and GJR-GARCH.
-VARIANCES = ("constant", "garch", "egarch", "gjr")
 VARIANCE_NAMES = {
     "constant": "constant variance",
     "garch": "with GARCH",
     "egarch": "with EGARCH",
     "gjr": "with GJR-GARCH",
 }
+# Width of the model-name column in the report's tables.
+NAME_WIDTH = 36
 
+TUNED_PATH = MODELS_DIR / "tuned_hyperparameters.json"
+# Written by tuning.py; the report points to it.
+TUNING_REPORT_PATH = REPORTS_DIR / "tuning.txt"
 REPORT_PATH = REPORTS_DIR / "forecast_evaluation.txt"
 METRICS_PATH = REPORTS_DIR / "forecast_metrics.csv"
 INTERVALS_PATH = REPORTS_DIR / "forecast_intervals.csv"
@@ -189,6 +179,14 @@ BASELINE_STYLES: dict[str, tuple[str, float]] = {
     "drift": (MUTED_INK, 1.2),
     "seasonal naive": (BASELINE, 1.2),
 }
+# A forecaster takes the levels up to an origin and a step count, and returns "forecast" (the
+# level path) plus, optionally, "sd_constant" / "sd_<volatility>" paths, the error
+# distribution's "nu_<volatility>" / "lambda_<volatility>", and "converged". The levels are a 1-D
+# array in trillions, oldest first, ending at the origin month; every path in the returned dict
+# has one value per step (horizons 1..steps). The bare dict keeps the alias simple; each
+# forecaster states its own, narrower return type.
+Forecaster = Callable[[np.ndarray, int], dict]
+
 # Slots 1-4 (validated together) for the interval variants in the interval figure; zip stops
 # at the 4 variants.
 VARIANCE_COLORS = dict(zip(VARIANCES, SERIES_PALETTE))
@@ -196,13 +194,6 @@ VARIANCE_COLORS = dict(zip(VARIANCES, SERIES_PALETTE))
 FAMILY_COLORS = dict(
     zip(("SARIMA", "system", "smoothing", "combination", "SARIMAX"), SERIES_PALETTE)
 )
-
-# A forecaster takes the levels up to an origin and a step count, and returns "forecast" (the
-# level path) plus, optionally, "sd_constant" / "sd_garch" paths, "nu_garch" and "converged".
-# The levels are a 1-D array in trillions, oldest first, ending at the origin month; every path
-# in the returned dict has one value per step (horizons 1..steps). The bare dict keeps the
-# alias as it was; each forecaster states its own, narrower return type.
-Forecaster = Callable[[np.ndarray, int], dict]
 
 
 def naive_forecast(levels: np.ndarray, steps: int) -> dict[str, np.ndarray]:
@@ -308,6 +299,102 @@ def seasonal_naive_forecast(
     return {"forecast": levels[-1] + np.cumsum(last_changes[:steps])}
 
 
+def load_tuned(path: Path = TUNED_PATH) -> dict[str, dict[str, dict[str, Any]]]:
+    """
+    The tuned settings of every model and series, as written by tuning.py.
+
+    Parameters
+    ----------
+    path : Path, default=TUNED_PATH
+        The tuned-settings file.
+
+    Returns
+    -------
+    dict of str to dict of str to dict of str to Any
+        Series -> model key (SARIMA, GARCH, ..., the ML model names) -> its settings.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the file doesn't exist yet; the message says to run the tuning first.
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"{repo_path(path)} is missing: run make tune first")
+    tuned: dict[str, dict[str, dict[str, Any]]] = json.loads(path.read_text(encoding="utf-8"))
+    return tuned
+
+
+def sarima_name(settings: Mapping[str, Any]) -> str:
+    """
+    Report name of a SARIMA from its settings, e.g. "SARIMA(2,1,2)x(1,0,0,12)".
+
+    Parameters
+    ----------
+    settings : Mapping of str to Any
+        The orders "p", "q", "P", "Q" and the "trend" ("c" drift, "n" none).
+
+    Returns
+    -------
+    str
+        The orders in the usual notation (d fixed at 1, D at 0), with " no drift" appended
+        when the model has no constant.
+    """
+    orders = f"({settings['p']},{DIFFERENCING_ORDER},{settings['q']})"
+    seasonal = f"({settings['P']},0,{settings['Q']},{SEASONAL_PERIOD})"
+    return f"SARIMA{orders}x{seasonal}" + ("" if settings["trend"] == "c" else " no drift")
+
+
+def model_names(tuned: Mapping[str, Mapping[str, Any]]) -> dict[str, str]:
+    """
+    Report name of every tuned point-forecast model of one series.
+
+    Parameters
+    ----------
+    tuned : Mapping of str to Mapping of str to Any
+        The series' tuned settings, model key -> settings (one entry of load_tuned()).
+
+    Returns
+    -------
+    dict of str to str
+        Model key -> the name its rows carry in the metrics, e.g. VAR_MODEL -> "VAR(5)".
+        The settings that don't fit in a name are listed in the tuning report.
+    """
+    var, vecm, lags = tuned[VAR_MODEL], tuned[VECM_MODEL], tuned[SARIMAX]["lags"]
+    return {
+        SARIMA: sarima_name(tuned[SARIMA]),
+        VAR_MODEL: f"VAR({var['lags']})" + (" with trend" if var["trend"] == "ct" else ""),
+        VECM_MODEL: f"VECM({vecm['lags']}), {vecm['deterministic']}",
+        SMA: f"SMA({tuned[SMA]['window']})",
+        EXPONENTIAL: EXPONENTIAL,
+        SARIMAX: f"SARIMAX ({lags} exog lag{'' if lags == 1 else 's'})",
+        **{model: model for model in ML_MODELS},
+    }
+
+
+def volatility_spec(model: str, settings: Mapping[str, Any]) -> dict[str, Any]:
+    """
+    arch's keyword arguments for one tuned volatility model.
+
+    Parameters
+    ----------
+    model : str
+        "GARCH", "EGARCH" or "GJR-GARCH" (a key of VOLATILITY_SPECS).
+    settings : Mapping of str to Any
+        Its tuned "p", "q" and "dist" (and "break_adjusted", not used here).
+
+    Returns
+    -------
+    dict of str to Any
+        "vol", "p", "o", "q" and "dist" for arch_model().
+    """
+    return {
+        **VOLATILITY_SPECS[model],
+        "p": settings["p"],
+        "q": settings["q"],
+        "dist": settings["dist"],
+    }
+
+
 def moving_average_forecaster(window: int) -> Forecaster:
     """
     Every horizon gets the average of the last `window` levels.
@@ -344,25 +431,25 @@ def moving_average_forecaster(window: int) -> Forecaster:
         Notes
         -----
         On a trending series the average of past levels lags behind the last level, so this
-        baseline is expected to do worse than naive; it is here because the user asked for the
-        smoothing family.
+        baseline is expected to do worse than naive; it is here as the simplest member of the
+        smoothing family, the reference the others improve on.
         """
         return {"forecast": np.full(steps, np.mean(levels[-window:]))}
 
     return forecast
 
 
-def exponential_smoothing_forecaster(settings: dict[str, Any]) -> Forecaster:
+def exponential_smoothing_forecaster(settings: Mapping[str, Any]) -> Forecaster:
     """
     statsmodels' ExponentialSmoothing on the levels, refitted (parameters re-estimated) at
-    every origin: single (no settings), Holt (additive trend, optionally damped), or
-    Holt-Winters (additive trend and season).
+    every origin, in the tuned form.
 
     Parameters
     ----------
-    settings : dict of str to Any
-        Keyword arguments for ExponentialSmoothing, one value of EXPONENTIAL_SMOOTHING, such as
-        {"trend": "add", "damped_trend": True}. Empty for single exponential smoothing.
+    settings : Mapping of str to Any
+        The tuned keyword arguments for ExponentialSmoothing: "trend", "damped_trend",
+        "seasonal", "use_boxcox" and "initialization_method". A seasonal model gets the
+        project's season length, so it isn't configured twice.
 
     Returns
     -------
@@ -370,6 +457,9 @@ def exponential_smoothing_forecaster(settings: dict[str, Any]) -> Forecaster:
         A forecaster for the harness: given the levels up to an origin and a step count, it
         returns {"forecast": the level path, shape (steps,), trillions}. Point forecast only.
     """
+    options = dict(settings) | (
+        {"seasonal_periods": SEASONAL_PERIOD} if settings["seasonal"] else {}
+    )
 
     def forecast(levels: np.ndarray, steps: int) -> dict[str, np.ndarray]:
         """
@@ -390,20 +480,21 @@ def exponential_smoothing_forecaster(settings: dict[str, Any]) -> Forecaster:
         Notes
         -----
         Fitted on the levels, not the differences: the trend component plays the role that
-        differencing plays for SARIMA. initialization_method="estimated" estimates the initial
-        level (and trend, season) together with the smoothing parameters, so each refit uses
-        only the data up to the origin.
+        differencing plays for SARIMA. The smoothing weights (and, when "estimated", the initial
+        states) are re-estimated from the data up to the origin only.
         """
-        fitted = ExponentialSmoothing(levels, initialization_method="estimated", **settings).fit()
+        fitted = ExponentialSmoothing(levels, **options).fit()
         return {"forecast": np.asarray(fitted.forecast(steps))}
 
     return forecast
 
 
-def combine_forecasts(forecasts: pd.DataFrame, first: str, second: str, name: str) -> pd.DataFrame:
+def combine_forecasts(
+    forecasts: pd.DataFrame, first: str, second: str, name: str, weight: float
+) -> pd.DataFrame:
     """
-    Rows for `name`: the weighted average of two models' forecasts (COMBINATION_WEIGHT on
-    the first), same origin and horizon. Point forecasts only; no intervals.
+    Rows for `name`: the weighted average of two models' forecasts (`weight` on the first),
+    same origin and horizon. Point forecasts only; no intervals.
 
     Parameters
     ----------
@@ -417,6 +508,8 @@ def combine_forecasts(forecasts: pd.DataFrame, first: str, second: str, name: st
         Name of the second model to average (naive).
     name : str
         Model name for the new rows (COMBINATION).
+    weight : float
+        The first model's share, between 0 and 1 (tuned).
 
     Returns
     -------
@@ -431,8 +524,7 @@ def combine_forecasts(forecasts: pd.DataFrame, first: str, second: str, name: st
     1. Keep each model's rows and the key columns plus "forecast".
     2. Inner-join them on origin, horizon, target and actual, so the two forecasts in a row
        are for the same month made at the same origin.
-    3. Average the two forecasts, COMBINATION_WEIGHT on the first and the rest on the
-       second.
+    3. Average the two forecasts, `weight` on the first and the rest on the second.
 
     Built from forecasts already made, so the combination adds no refits and can't see more
     data than its two parts did.
@@ -443,10 +535,7 @@ def combine_forecasts(forecasts: pd.DataFrame, first: str, second: str, name: st
         on=keys,
         suffixes=("_first", "_second"),
     )
-    average = (
-        COMBINATION_WEIGHT * pair["forecast_first"]
-        + (1 - COMBINATION_WEIGHT) * pair["forecast_second"]
-    )
+    average = weight * pair["forecast_first"] + (1 - weight) * pair["forecast_second"]
     return pair[keys].assign(model=name, forecast=average)
 
 
@@ -494,20 +583,22 @@ def level_variances(psi: np.ndarray, shock_variances: np.ndarray) -> np.ndarray:
     )
 
 
-def sarima_forecaster(model: dict[str, Any], variants: dict[str, str]) -> Forecaster:
+def sarima_forecaster(
+    model: Mapping[str, Any], volatility: Mapping[str, Mapping[str, Any]]
+) -> Forecaster:
     """
-    Refit the model on the history's first differences; add its forecasts to the last level;
-    give the level's spread with a constant shock variance and with each volatility model's
-    variance path (variants maps "garch" / "egarch" / "gjr" to the chosen variant names).
+    Refit the SARIMA on the history's first differences; add its forecasts to the last level;
+    give the level's spread with a constant shock variance and with each tuned volatility
+    model's variance path.
 
     Parameters
     ----------
-    model : dict of str to Any
-        One checked SARIMA model from residual_checks.checked_models; uses its orders "p", "q",
-        "P" and "Q" (d = 1 is fixed by fitting on the first differences, D = 0).
-    variants : dict of str to str
-        Volatility key ("garch", "egarch", "gjr") -> the variance-model name to refit at every
-        origin, as chosen on the training residuals in steps U5b and U5c.
+    model : Mapping of str to Any
+        The tuned SARIMA: orders "p", "q", "P", "Q" and "trend" (d = 1 is fixed by fitting on
+        the first differences, D = 0).
+    volatility : Mapping of str to Mapping of str to Any
+        Volatility key ("garch", "egarch", "gjr") -> that model's tuned settings ("p", "q",
+        "dist", "break_adjusted"), refitted at every origin.
 
     Returns
     -------
@@ -533,9 +624,10 @@ def sarima_forecaster(model: dict[str, Any], variants: dict[str, str]) -> Foreca
             "sd_constant": level forecast-error SD with a constant shock variance, shape
             (steps,), trillions.
             "converged": whether the SARIMA's likelihood optimizer reported convergence.
-            "sd_<key>" and "nu_<key>" for each key of `variants`: the level SD path with that
-            volatility model's variance forecasts (shape (steps,), trillions), and its
-            Student-t degrees of freedom (inf for normal shocks).
+            "sd_<key>", "nu_<key>" and "lambda_<key>" for each key of `volatility`: the level
+            SD path with that model's variance forecasts (shape (steps,), trillions), and its
+            error distribution's degrees of freedom (inf for normal) and skewness (NaN unless
+            skewed Student-t).
 
         Notes
         -----
@@ -551,7 +643,12 @@ def sarima_forecaster(model: dict[str, Any], variants: dict[str, str]) -> Foreca
         approach, as in U5b).
         """
         fitted = fit_sarima(
-            pd.Series(np.diff(levels)), model["p"], model["q"], model["P"], model["Q"]
+            pd.Series(np.diff(levels)),
+            model["p"],
+            model["q"],
+            model["P"],
+            model["Q"],
+            trend=model["trend"],
         )
         # impulse_responses returns psi_0..psi_steps (steps + 1 values, possibly 2-D); keep the
         # first `steps`, the weights needed for h = 1..steps.
@@ -565,11 +662,15 @@ def sarima_forecaster(model: dict[str, Any], variants: dict[str, str]) -> Foreca
             "sd_constant": np.sqrt(level_variances(psi, constant)),
             "converged": bool(fitted.mle_retvals.get("converged", False)),
         }
-        # One spread path per volatility model (U5b's GARCH, U5c's EGARCH and GJR).
-        for key, variant in variants.items():
-            variances, nu = garch_variance_path(residuals, variant, steps)
+        for key, settings in volatility.items():
+            spec = volatility_spec(VOLATILITY_MODELS[key], settings)
+            variances, shape = variance_forecast(
+                residuals, spec, settings["break_adjusted"], steps
+            )
             output[f"sd_{key}"] = np.sqrt(level_variances(psi, variances))
-            output[f"nu_{key}"] = nu
+            # Normal: no shape; Student-t: [nu]; skewed Student-t: [nu (arch's eta), lambda].
+            output[f"nu_{key}"] = float(shape[0]) if len(shape) else np.inf
+            output[f"lambda_{key}"] = float(shape[1]) if len(shape) > 1 else np.nan
         return output
 
     return forecast
@@ -617,15 +718,20 @@ def system_level_variances(psi: np.ndarray, sigma: np.ndarray) -> np.ndarray:
     return np.diagonal(covariances, axis1=1, axis2=2)
 
 
-def system_forecast(kind: str, history: np.ndarray, steps: int) -> tuple[np.ndarray, np.ndarray]:
+def system_forecast(
+    kind: str, settings: Mapping[str, Any], history: np.ndarray, steps: int
+) -> tuple[np.ndarray, np.ndarray]:
     """
-    Fit VAR(5) on the differences or VECM(5) on the levels of both series; return the level
+    Fit a VAR on the differences or a VECM on the levels of both series; return the level
     forecasts and their standard deviations, each of shape (steps, series).
 
     Parameters
     ----------
     kind : str
-        SYSTEMS[0] for the VAR; anything else (SYSTEMS[1]) fits the VECM.
+        VAR_MODEL or VECM_MODEL.
+    settings : Mapping of str to Any
+        The tuned settings: "lags" and, for the VAR, "trend" ("c" or "ct"); for the VECM,
+        "deterministic" ("co", "ci", "lo" or "li").
     history : np.ndarray
         Levels of both series up to and including the origin, shape (months, series), trillions,
         oldest first, columns in VALUE_COLUMNS order.
@@ -641,25 +747,31 @@ def system_forecast(kind: str, history: np.ndarray, steps: int) -> tuple[np.ndar
     Notes
     -----
     Processing, VAR:
-    1. Difference the levels, fit a VAR with CARRIED_LAGS lags and a constant by OLS.
-    2. Forecast the differences from the last CARRIED_LAGS of them and add their running total
-       to the last levels.
+    1. Difference the levels, fit a VAR with the tuned lags and deterministic terms by OLS.
+    2. Forecast the differences from their last `lags` values and add their running total to
+       the last levels.
     3. Spread: system_level_variances from the error-weight matrices psi_0..psi_(steps-1)
        (ma_rep returns steps + 1 of them) and the shock covariance.
 
     Processing, VECM:
-    1. Fit a VECM on the levels with CARRIED_LAGS lagged differences, cointegration rank
-       VECM_RANK and a constant outside the long-run relation ("co").
+    1. Fit a VECM on the levels with the tuned lagged differences and deterministic terms, and
+       cointegration rank VECM_RANK.
     2. Take statsmodels' level forecasts and 95% intervals and convert the interval's upper
        half-width back into a standard deviation.
     """
-    if kind == SYSTEMS[0]:
+    lags = settings["lags"]
+    if kind == VAR_MODEL:
         differences = np.diff(history, axis=0)
-        fitted = VAR(differences).fit(CARRIED_LAGS, trend="c")
-        path = fitted.forecast(differences[-CARRIED_LAGS:], steps)
+        fitted = VAR(differences).fit(lags, trend=settings["trend"])
+        path = fitted.forecast(differences[-lags:], steps)
         spread = np.sqrt(system_level_variances(fitted.ma_rep(steps)[:steps], fitted.sigma_u))
         return history[-1] + np.cumsum(path, axis=0), spread
-    fitted = VECM(history, k_ar_diff=CARRIED_LAGS, coint_rank=VECM_RANK, deterministic="co").fit()
+    fitted = VECM(
+        history,
+        k_ar_diff=lags,
+        coint_rank=VECM_RANK,
+        deterministic=settings["deterministic"],
+    ).fit()
     mean, _, upper = fitted.predict(steps, alpha=0.05)
     # statsmodels gives normal 95% level intervals; recover the standard deviation from them.
     return mean, (upper - mean) / NORMAL_95
@@ -667,9 +779,10 @@ def system_forecast(kind: str, history: np.ndarray, steps: int) -> tuple[np.ndar
 
 def system_forecaster(
     kind: str,
+    settings: Mapping[str, Any],
     all_levels: np.ndarray,
     target: int,
-    cache: dict[tuple[str, int, int], tuple[np.ndarray, np.ndarray]],
+    cache: dict[tuple[str, str, int, int], tuple[np.ndarray, np.ndarray]],
 ) -> Forecaster:
     """
     A forecaster for one series of a system. The harness passes that series' levels up to
@@ -679,15 +792,18 @@ def system_forecaster(
     Parameters
     ----------
     kind : str
-        Which system, one of SYSTEMS.
+        Which system, VAR_MODEL or VECM_MODEL.
+    settings : Mapping of str to Any
+        Its tuned settings for this series (see system_forecast).
     all_levels : np.ndarray
         Levels of both series over the whole sample, shape (months, series), trillions, columns
         in VALUE_COLUMNS order. Only the months the harness hands over are ever used.
     target : int
         Column of `all_levels` this forecaster scores (the series' position in VALUE_COLUMNS).
-    cache : dict of tuple of (str, int, int) to tuple of (np.ndarray, np.ndarray)
-        Shared, mutated store of system_forecast results, keyed by (kind, months of history,
-        steps); the same dict is passed to both series' forecasters.
+    cache : dict of tuple of (str, str, int, int) to tuple of (np.ndarray, np.ndarray)
+        Shared, mutated store of system_forecast results, keyed by (kind, settings as JSON,
+        months of history, steps); the same dict is passed to both series' forecasters, which
+        share a fit when their tuned settings agree.
 
     Returns
     -------
@@ -724,17 +840,17 @@ def system_forecaster(
         Processing:
         1. Cut both series to the length the harness handed over.
         2. Check that this series' column equals the handed-over levels (leakage guard).
-        3. Fit and forecast the system once per (kind, origin, steps); the second series reuses
-           the cached result.
+        3. Fit and forecast the system once per (kind, settings, origin, steps); the second
+           series reuses the cached result when its settings are the same.
         4. Return this series' column.
         """
         history = all_levels[: len(levels)]
         # Leakage guard: the system sees exactly the months the harness handed over.
         assert np.array_equal(history[:, target], levels)
         # len(levels) identifies the origin: both series' histories end at the same month.
-        key = (kind, len(levels), steps)
+        key = (kind, json.dumps(settings, sort_keys=True), len(levels), steps)
         if key not in cache:
-            cache[key] = system_forecast(kind, history, steps)
+            cache[key] = system_forecast(kind, settings, history, steps)
         mean, spread = cache[key]
         return {"forecast": mean[:, target], "sd_constant": spread[:, target]}
 
@@ -742,33 +858,34 @@ def system_forecaster(
 
 
 def sarimax_forecaster(
-    model: dict[str, Any],
-    other_model: dict[str, Any],
+    model: Mapping[str, Any],
+    other_model: Mapping[str, Any],
     all_levels: np.ndarray,
     target: int,
     lags: int,
     plans: dict[tuple[int, int, int], np.ndarray],
 ) -> Forecaster:
     """
-    A forecaster for the SARIMAX family: one series' selected SARIMA plus the other series'
-    last `lags` monthly changes as regressors.
+    A forecaster for the SARIMAX family: one series' tuned SARIMA plus the other series' last
+    `lags` monthly changes as regressors.
 
     Parameters
     ----------
-    model : dict of str to Any
-        This series' selected SARIMA (orders "p", "q", "P", "Q"), as in sarima_forecaster.
-    other_model : dict of str to Any
-        The other series' selected SARIMA, which forecasts that series' future changes.
+    model : Mapping of str to Any
+        This series' tuned SARIMA (orders "p", "q", "P", "Q" and "trend"), as in
+        sarima_forecaster.
+    other_model : Mapping of str to Any
+        The other series' tuned SARIMA, which forecasts that series' future changes.
     all_levels : np.ndarray
         Levels of both series over the whole sample, shape (months, 2), trillions, columns in
         VALUE_COLUMNS order. Only the months the harness hands over are ever used.
     target : int
         Column of `all_levels` this forecaster scores; the other column is 1 - target.
     lags : int
-        How many of the other series' past changes enter as regressors (one of SARIMAX_LAGS).
+        How many of the other series' past changes enter as regressors (tuned).
     plans : dict of tuple of (int, int, int) to np.ndarray
         Shared, mutated store of the other series' forecast changes, keyed by (its column,
-        months of history, steps), so the three lag candidates fit it once per origin.
+        months of history, steps), so it is fitted once per origin.
 
     Returns
     -------
@@ -805,7 +922,7 @@ def sarimax_forecaster(
         Processing:
         1. Cut both series to the handed-over length and check this series against it
            (leakage guard, as in system_forecaster).
-        2. Forecast the other series' changes with its selected SARIMA, once per origin.
+        2. Forecast the other series' changes with its tuned SARIMA, once per origin.
         3. Fit the SARIMAX on this series' changes from month `lags` on, with the lag matrix of
            the other series' changes as regressors.
         4. Regressors for the forecast months: the lag matrix of the other series' actual
@@ -829,6 +946,7 @@ def sarimax_forecaster(
                 other_model["q"],
                 other_model["P"],
                 other_model["Q"],
+                trend=other_model["trend"],
             )
             plans[key] = np.asarray(other_fit.forecast(steps))
         fitted = fit_sarima(
@@ -838,6 +956,7 @@ def sarimax_forecaster(
             model["P"],
             model["Q"],
             exog=lagged_exog(other_changes, lags),
+            trend=model["trend"],
         )
         # The forecast months' regressors; the extended series' last forecast change is never
         # used, since a row only holds changes before its own month.
@@ -1139,15 +1258,17 @@ def dm_verdict(statistic: float, p_value: float) -> str:
     return f"{'better' if statistic < 0 else 'worse'} p={p_value:.3f}"
 
 
-def standardized_quantiles(nu: float) -> np.ndarray:
+def standardized_quantiles(nu: float, skew: float = np.nan) -> np.ndarray:
     """
-    QUANTILES of a zero-mean, unit-variance shock: normal, or Student-t rescaled to unit
-    variance (arch's parametrization).
+    QUANTILES of a zero-mean, unit-variance shock: normal, Student-t or skewed Student-t, each
+    rescaled to unit variance (arch's parametrization).
 
     Parameters
     ----------
     nu : float
-        Student-t degrees of freedom (> 2); inf (or NaN) for normal shocks.
+        Degrees of freedom (> 2); inf (or NaN) for normal shocks.
+    skew : float, default=NaN
+        Skewness lambda of Hansen's skewed Student-t, in (-1, 1); NaN for the symmetric ones.
 
     Returns
     -------
@@ -1158,16 +1279,22 @@ def standardized_quantiles(nu: float) -> np.ndarray:
     -----
     A Student-t with nu degrees of freedom has variance nu / (nu - 2); multiplying by
     sqrt((nu - 2) / nu) gives it unit variance, so the forecast SD keeps its meaning and only
-    the tails change. Any non-finite nu, including the NaN of a model without that volatility
-    column, falls back to normal.
+    the tails change. arch's skewed Student-t is already standardized to unit variance. Any
+    non-finite nu, including the NaN of a model without that volatility column, falls back to
+    normal.
     """
     if not np.isfinite(nu):
         return stats.norm.ppf(QUANTILES)
+    if np.isfinite(skew):
+        return np.asarray(SkewStudent().ppf(np.array(QUANTILES), np.array([nu, skew])))
     return stats.t.ppf(QUANTILES, nu) * np.sqrt((nu - 2) / nu)
 
 
 def quantile_forecasts(
-    forecast: np.ndarray | pd.Series, spread: np.ndarray | pd.Series, nu: np.ndarray
+    forecast: np.ndarray | pd.Series,
+    spread: np.ndarray | pd.Series,
+    nu: np.ndarray,
+    skew: np.ndarray,
 ) -> np.ndarray:
     """
     One row of QUANTILES per forecast: the point forecast plus the spread times the shock's
@@ -1180,7 +1307,9 @@ def quantile_forecasts(
     spread : np.ndarray or pd.Series
         Their level forecast-error standard deviations, same shape, trillions.
     nu : np.ndarray
-        Student-t degrees of freedom per forecast (inf for normal), same shape.
+        Degrees of freedom per forecast (inf for normal), same shape.
+    skew : np.ndarray
+        Skewness lambda per forecast (NaN unless skewed Student-t), same shape.
 
     Returns
     -------
@@ -1189,7 +1318,7 @@ def quantile_forecasts(
     """
     # shortcut: a sum of Student-t shocks isn't exactly Student-t; treating the level error as
     # one is the usual approximation. Upgrade to simulated paths if the tails miscalibrate.
-    offsets = np.vstack([standardized_quantiles(value) for value in nu])
+    offsets = np.vstack([standardized_quantiles(a, b) for a, b in zip(nu, skew)])
     return np.asarray(forecast)[:, None] + np.asarray(spread)[:, None] * offsets
 
 
@@ -1263,8 +1392,8 @@ def interval_table(forecasts: pd.DataFrame) -> pd.DataFrame:
     ----------
     forecasts : pd.DataFrame
         Rolling forecasts of one series and split (rolling_forecasts' columns), with an
-        "sd_<variance>" column for every variant some model produced, and "nu_<variance>" for
-        the volatility models.
+        "sd_<variance>" column for every variant some model produced, and "nu_<variance>" and
+        "lambda_<variance>" for the volatility models.
 
     Returns
     -------
@@ -1277,8 +1406,8 @@ def interval_table(forecasts: pd.DataFrame) -> pd.DataFrame:
     Processing:
     1. For each variance variant whose "sd_<variance>" column exists, keep the rows that have
        it (models without intervals, such as smoothing, are NaN there and drop out).
-    2. Per model and scored horizon, build the quantiles: Student-t with the rows' nu where a
-       "nu_<variance>" column exists (rows without it give NaN, i.e. normal), normal otherwise.
+    2. Per model and scored horizon, build the quantiles from the rows' error distribution
+       ("nu_<variance>", "lambda_<variance>"; missing columns or NaN mean normal or symmetric).
     3. Score them with interval_scores.
     """
     rows = []
@@ -1291,12 +1420,11 @@ def interval_table(forecasts: pd.DataFrame) -> pd.DataFrame:
             if horizon not in HORIZONS:
                 continue
             # Constant variance has no nu column: all-inf means normal quantiles throughout.
-            nu = (
-                group[f"nu_{variance}"]
-                if f"nu_{variance}" in group
-                else np.full(len(group), np.inf)
+            nu = group.get(f"nu_{variance}", pd.Series(np.inf, index=group.index))
+            skew = group.get(f"lambda_{variance}", pd.Series(np.nan, index=group.index))
+            quantiles = quantile_forecasts(
+                group["forecast"], group[spread_column], nu.to_numpy(), skew.to_numpy()
             )
-            quantiles = quantile_forecasts(group["forecast"], group[spread_column], np.asarray(nu))
             rows.append(
                 {
                     "model": model,
@@ -1353,8 +1481,8 @@ def accuracy_report(
         One split's metrics: "series", "model", "horizon", "n", the METRICS columns, and the
         DM_COLUMNS and DM_SARIMA_COLUMNS (NaN where the test wasn't run).
     selected_by_family : dict of str to dict of str to str
-        Family ("SARIMA", "system", "smoothing", "combination", "SARIMAX") -> series -> selected
-        model.
+        Family ("SARIMA", "system", "smoothing", "SARIMAX", "ML", "combination") -> series ->
+        selected model.
 
     Returns
     -------
@@ -1381,13 +1509,14 @@ def accuracy_report(
             naive_mase = table.loc[table["model"] == NAIVE, "MASE"].iloc[0]
             lines.append(f"  {horizon}-month horizon ({table['n'].iloc[0]} forecasts)")
             lines.append(
-                f"    {'model':<30}{'MAE':>9}{'MSE':>11}{'RMSE':>9}{'MAPE %':>9}{'MASE':>8}"
+                f"    {'model':<{NAME_WIDTH}}{'MAE':>9}{'MSE':>11}{'RMSE':>9}"
+                f"{'MAPE %':>9}{'MASE':>8}"
                 f"   {'DM vs naive (abs)':<20}{'DM vs naive (sq)':<20}"
                 f"{'DM vs SARIMA (abs)':<20}{'DM vs SARIMA (sq)':<20}"
             )
             for row in table.itertuples():
                 lines.append(
-                    f"    {row.model:<30}{row.MAE:9.4f}{row.MSE:11.6f}{row.RMSE:9.4f}"
+                    f"    {row.model:<{NAME_WIDTH}}{row.MAE:9.4f}{row.MSE:11.6f}{row.RMSE:9.4f}"
                     f"{row.MAPE:9.2f}{row.MASE:8.3f}"
                     f"   {dm_verdict(row.DM_absolute, row.DM_absolute_p):<20}"
                     f"{dm_verdict(row.DM_squared, row.DM_squared_p):<20}"
@@ -1431,7 +1560,7 @@ def interval_report(intervals: pd.DataFrame) -> list[str]:
             table = series_intervals[series_intervals["horizon"] == horizon].sort_values("pinball")
             lines.append(f"    {horizon}-month horizon")
             lines.append(
-                f"      {'model':<30}{'variance':<10}{'cov 80%':>8}{'cov 95%':>8}"
+                f"      {'model':<{NAME_WIDTH}}{'variance':<10}{'cov 80%':>8}{'cov 95%':>8}"
                 f"{'width 80%':>11}{'width 95%':>11}{'pinball':>9}"
                 "   below 2.5 / 10 / 50 / 90 / 97.5%"
             )
@@ -1439,7 +1568,8 @@ def interval_report(intervals: pd.DataFrame) -> list[str]:
             for row in table.to_dict("records"):
                 below = " / ".join(f"{row[f'below_{100 * q:g}']:.2f}" for q in QUANTILES)
                 lines.append(
-                    f"      {row['model']:<30}{row['variance']:<10}{row['coverage_80']:8.2f}"
+                    f"      {row['model']:<{NAME_WIDTH}}{row['variance']:<10}"
+                    f"{row['coverage_80']:8.2f}"
                     f"{row['coverage_95']:8.2f}{row['width_80']:11.4f}{row['width_95']:11.4f}"
                     f"{row['pinball']:9.4f}   {below}"
                 )
@@ -1478,55 +1608,50 @@ def evaluation_report(
     -----
     Processing:
     1. Write the method paragraphs (setup, systems, smoothing, combination, metrics, DM tests,
-       intervals, the COVID decision).
+       intervals, the COVID months).
     2. Per split: the accuracy tables, the interval tables, and the refits that failed to
        converge, with their total.
     3. Point to the CSVs and figures, as project-relative paths.
     """
     lines = [
-        (
-            "Out-of-sample forecast evaluation: SARIMA, VAR / VECM, smoothing baselines, and the "
-            "SARIMA + naive average"
-        ),
+        "Out-of-sample forecast evaluation of every model family, with tuned settings",
         (
             "Rolling origin, expanding window: each model is refitted at every monthly origin on "
             f"all data up to it (data start {periods['start']}); each origin is one fold. "
-            "Orders come from training; the selected model per series and family (SARIMA, "
-            "system, smoothing, ML, SARIMAX) from validation (lowest one-month MASE), fixed "
-            "before test. "
-            "Each family's test is run once, with all its models."
+            "Every model's settings were tuned beforehand by time-aware random search on the "
+            f"training split (see {repo_path(TUNING_REPORT_PATH)}) and are fixed here; the "
+            "model reported per series and family (SARIMA, system, smoothing, SARIMAX, ML, "
+            "combination) is chosen on validation (lowest one-month MASE), before test. Each "
+            "family's test is run once, with all its models."
         ),
         (
-            f"Systems: {SYSTEMS[0]} on the differences and {SYSTEMS[1]} (rank {VECM_RANK}) on "
-            "the levels, fitted on both series up to each origin and forecasting both; normal "
-            "intervals from the system's forecast-error covariance (no GARCH)."
+            "Systems: a VAR on the differences and a VECM (rank "
+            f"{VECM_RANK}) on the levels, fitted on both series up to each origin and "
+            "forecasting both; normal intervals from the system's forecast-error covariance (no "
+            "GARCH)."
         ),
         (
-            "Smoothing: SMA(k) forecasts the average of the last k levels; single, double "
-            "(Holt, plain and damped) and triple (Holt-Winters, 12-month season) exponential "
-            "smoothing, statsmodels' ExponentialSmoothing on the levels, re-estimated at every "
-            "origin. Point forecasts only."
+            "Smoothing: SMA(k) forecasts the average of the last k levels; exponential "
+            "smoothing is statsmodels' ExponentialSmoothing on the levels in its tuned form, "
+            "re-estimated at every origin. Point forecasts only."
         ),
         (
-            f"{COMBINATION}: the equal-weight average of the series' selected SARIMA and the "
-            "naive (no-change) forecast, from the same origins. Point forecasts only."
+            f"{COMBINATION}: the tuned weighted average of the series' SARIMA and the naive "
+            "(no-change) forecast, from the same origins. Point forecasts only."
         ),
         (
-            "SARIMAX: the series' selected SARIMA (same orders) plus the other series' last "
-            f"{', '.join(map(str, SARIMAX_LAGS))} monthly changes as regressors (the VAR orders "
-            "of steps V2 and V6), so DM vs SARIMA measures what the other series adds. Forecast "
-            "months whose regressors aren't known yet use the other series' own selected-SARIMA "
-            "forecasts from the same origin. Point forecasts only: the intervals would treat "
-            "those planned regressors as known."
+            "SARIMAX: the series' tuned SARIMA (same orders) plus the other series' last monthly "
+            "changes as regressors (lag count tuned), so DM vs SARIMA measures what the other "
+            "series adds. Forecast months whose regressors aren't known yet use the other "
+            "series' own SARIMA forecasts from the same origin. Point forecasts only: the "
+            "intervals would treat those planned regressors as known."
         ),
         (
-            "Lag-feature ML: Ridge and Lasso (standardized features, penalty by time-ordered "
-            "cross-validation in each window), random forest and histogram gradient boosting "
-            "(trees chosen on the window's last quarter, in time order), each predicting next "
-            "month's change of one series from the last "
-            f"{', '.join(map(str, SARIMAX_LAGS))} changes of both series, refitted at every "
-            "origin and forecasting recursively. Point forecasts only. Settings and their "
-            "justifications: autoregressive_experiments/configs/hyperparameters.json."
+            "Lag-feature ML: Ridge, Lasso, random forest, XGBoost and k-nearest neighbours, "
+            "each predicting next month's change of one series from the last changes of both "
+            "series (lag count tuned), standardized inside every fit, refitted at every origin "
+            "and forecasting recursively. Point forecasts only. Search spaces and their "
+            "reasoning: autoregressive_experiments/configs/hyperparameters.json."
         ),
         (
             "Point errors are on the levels: MAE, RMSE in trillions; MSE in trillions squared; "
@@ -1541,16 +1666,19 @@ def evaluation_report(
             "with the Harvey-Leybourne-Newbold correction and h - 1 autocovariance lags. "
             f"'better' / 'worse' when significant at {SIGNIFICANCE_LEVEL:.0%}, otherwise the "
             "p-value. DM vs SARIMA: the same test, each non-SARIMA model against the series' "
-            "selected SARIMA: does any other approach beat it?"
+            "SARIMA: does any other approach beat it?"
         ),
         (
             "Intervals: quantiles of each model's forecast distribution on the levels, with a "
-            "constant shock variance, U5b's GARCH, or U5c's EGARCH / GJR-GARCH (each refitted "
+            "constant shock variance or the tuned GARCH, EGARCH or GJR-GARCH (each refitted "
             "at every origin; EGARCH's multi-step variances simulated with a fixed seed); normal "
-            "for constant variance, unit-variance Student-t otherwise; naive uses random-walk "
-            "quantiles. Pinball = mean quantile loss over the 5 quantiles."
+            "for constant variance, the tuned error distribution otherwise; naive uses "
+            "random-walk quantiles. Pinball = mean quantile loss over the 5 quantiles."
         ),
-        "The COVID months (2020) are in validation and are kept, by the user's decision.",
+        (
+            "The COVID months (2020) are in validation and are kept: dropping data after seeing "
+            "the errors would bias the comparison."
+        ),
         "",
     ]
     for split in SPLITS:
@@ -1849,7 +1977,7 @@ def intervals_figure(intervals: pd.DataFrame, selected: dict[str, str]) -> Figur
 def ml_figure(metrics: pd.DataFrame, selected_by_family: dict[str, dict[str, str]]) -> Figure:
     """
     One row per series, one column per split: each ML model's MAE relative to naive by horizon,
-    against the selected SARIMA and the selected smoothing model.
+    against the SARIMA and the selected smoothing model.
 
     Parameters
     ----------
@@ -1866,15 +1994,13 @@ def ml_figure(metrics: pd.DataFrame, selected_by_family: dict[str, dict[str, str
 
     Notes
     -----
-    Processing, per series:
-    1. For each ML model type, pick its lag count on validation (lowest one-month MASE, the
-       harness's rule), so the lines show what each model type can do without looking at test.
-    2. Per split, draw each pick's MASE divided by naive's at the same horizon, with the
-       selected SARIMA and the selected smoothing model for comparison.
-    3. Filled points are significantly different from naive (DM, absolute loss, 5%).
+    Processing, per series and split:
+    1. Draw each ML model's MASE divided by naive's at the same horizon, with the SARIMA and
+       the selected smoothing model for comparison.
+    2. Filled points are significantly different from naive (DM, absolute loss, 5%).
 
-    Palette slots 1-4 go to the four ML model types and slot 5 to SARIMA; the smoothing model
-    is drawn in the baseline grey, as a reference.
+    Palette slots 1-5 go to the five ML models; the SARIMA and the smoothing model are drawn
+    in the secondary and muted greys, as references.
     """
     apply_chart_style()
     figure, axes = plt.subplots(
@@ -1885,20 +2011,8 @@ def ml_figure(metrics: pd.DataFrame, selected_by_family: dict[str, dict[str, str
         facecolor=SURFACE,
     )
     for row, column in enumerate(VALUE_COLUMNS):
-        validation = metrics[
-            (metrics["series"] == column)
-            & (metrics["split"] == "validation")
-            & (metrics["horizon"] == 1)
-        ].set_index("model")["MASE"]
-        picks = {
-            model: min(
-                (name for (kind, _), name in ML_NAMES.items() if kind == model),
-                key=lambda name: validation[name],
-            )
-            for model in ML_MODELS
-        }
-        styles = {name: (color, 2.0) for name, color in zip(picks.values(), SERIES_PALETTE)}
-        styles[selected_by_family["SARIMA"][column]] = (SERIES_PALETTE[4], 2.0)
+        styles = {name: (color, 2.0) for name, color in zip(ML_MODELS, SERIES_PALETTE)}
+        styles[selected_by_family["SARIMA"][column]] = (SECONDARY_INK, 1.5)
         styles[selected_by_family["smoothing"][column]] = (MUTED_INK, 1.5)
         for split, axis in zip(SPLITS, axes[row]):
             axis.set_facecolor(SURFACE)
@@ -1927,8 +2041,8 @@ def ml_figure(metrics: pd.DataFrame, selected_by_family: dict[str, dict[str, str
             axis.set_xlabel("Horizon (months)")
             axis.set_ylabel("MAE relative to naive")
             axis.set_title(
-                f"{series_title(column)}, {split}: each ML model (lags chosen on validation)\n"
-                "vs the selected SARIMA and smoothing model; below 1: more accurate than naive\n"
+                f"{series_title(column)}, {split}: each tuned ML model\n"
+                "vs the SARIMA and the smoothing pick; below 1: more accurate than naive\n"
                 "filled point: significantly different from naive (Diebold-Mariano, 5%)",
                 loc="left",
                 fontsize=10,
@@ -1943,70 +2057,52 @@ def ml_figure(metrics: pd.DataFrame, selected_by_family: dict[str, dict[str, str
 @app.command()
 def main(
     levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv",
-    differences_path: Path = PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv",
-    candidates_path: Path = CANDIDATES_PATH,
+    tuned_path: Path = TUNED_PATH,
 ) -> None:
     """
-    Run the rolling-origin evaluation on validation and test and write the report, CSVs and
-    figures.
+    Run the rolling-origin evaluation of the tuned models on validation and test and write the
+    report, CSVs and figures.
 
     Parameters
     ----------
     levels_path : Path, default=INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv"
         Cleaned monthly levels of both series, trillions.
-    differences_path : Path, default=PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv"
-        Their first differences, used to fit and check the SARIMA candidates on train.
-    candidates_path : Path, default=CANDIDATES_PATH
-        The SARIMA information-criteria table from step U3.
+    tuned_path : Path, default=TUNED_PATH
+        Every model's tuned settings, from tuning.py.
 
     Returns
     -------
     None
-        Writes REPORT_PATH, METRICS_PATH, INTERVALS_PATH, FIGURE_PATH and
-        INTERVALS_FIGURE_PATH, and prints the report.
+        Writes REPORT_PATH, METRICS_PATH, INTERVALS_PATH, FIGURE_PATH, INTERVALS_FIGURE_PATH
+        and ML_FIGURE_PATH, and prints the report.
 
     Raises
     ------
     FileNotFoundError
-        If an input file is missing (raised by residual_checks.checked_models).
+        If an input file is missing (the tuned settings: run make tune first).
 
     Notes
     -----
     Processing:
-    1. Fit and check the recommended SARIMA models on train; keep those that pass.
-    2. For each passing model, choose its GARCH, EGARCH and GJR-GARCH variants on its training
-       residuals.
-    3. Split the levels 60 / 20 / 20 in time order; the validation origins start at train's
-       last month, the test origins at validation's last month.
-    4. Compute each series' MASE scale on train.
-    5. For each split and series, run every forecaster (SARIMAs, systems, baselines,
-       smoothing, lag-feature ML) from every origin, and score the point forecasts, DM
-       against naive, the intervals and the failed refits.
-    6. Select each family's model per series on validation (lowest one-month MASE).
-    7. Add the SARIMA + naive average from the forecasts already made, and score it.
-    8. Run the SARIMAX candidates (built on the selected SARIMAs) from the same origins, score
-       them with DM against naive, and select one per series on validation.
-    9. Test every non-SARIMA model against the series' selected SARIMA with DM.
-    10. Write the CSVs, the report and the three figures.
+    1. Read the tuned settings; split the levels 60 / 20 / 20 in time order; the validation
+       origins start at train's last month, the test origins at validation's last month.
+    2. Compute each series' MASE scale on train.
+    3. For each split and series, run every tuned forecaster (SARIMA with its volatility
+       models, systems, baselines, smoothing, SARIMAX, ML) from every origin, and score the
+       point forecasts, DM against naive, the intervals and the failed refits.
+    4. Add the SARIMA + naive average, with its tuned weight, from the forecasts already made,
+       and score it.
+    5. Select each family's model per series on validation (lowest one-month MASE).
+    6. Test every non-SARIMA model against the series' SARIMA with DM.
+    7. Write the CSVs, the report and the three figures.
 
     Selection uses validation only, and the test rows are scored by the same code, so the
     test numbers can't influence any choice.
     """
     start_run_log("evaluate")
-    begin_phase("Fit and check the SARIMA models; choose their volatility variants")
-    checked, _ = checked_models(levels_path, differences_path, candidates_path)
-    passed = [result for result in checked if result["passed"]]
-    # Each model's volatility variants, chosen on the training residuals: U5b's GARCH (final,
-    # unchanged) and U5c's EGARCH and GJR-GARCH.
-    volatility_variants: dict[tuple[str, str], dict[str, str]] = {}
-    for result in passed:
-        # Only the BIC-chosen variants are needed here, so the bootstrap checks are skipped.
-        checks = asymmetric_check(result["residuals"], replications=0)
-        volatility_variants[(result["series"], model_label(result))] = {
-            "garch": checks["reference"],
-            "egarch": checks[EGARCH_T]["variant"],
-            "gjr": checks[GJR_T]["variant"],
-        }
+    begin_phase("Read the tuned settings and the data")
+    tuned = load_tuned(tuned_path)
+    names = {column: model_names(tuned[column]) for column in VALUE_COLUMNS}
     levels = pd.read_csv(levels_path, parse_dates=[DATE_COLUMN])
     levels = levels.sort_values(DATE_COLUMN).reset_index(drop=True)
     splits = split_by_time(levels, split_boundaries(levels))
@@ -2030,42 +2126,56 @@ def main(
         for column in VALUE_COLUMNS
     }
     all_levels = levels[list(VALUE_COLUMNS)].to_numpy(dtype=float)
-    # One fit per system and origin, shared by both series' forecasters.
-    system_fits: dict[tuple[str, int, int], tuple[np.ndarray, np.ndarray]] = {}
-    # One fit per ML model, lag count and origin, shared the same way.
-    ml_fits: dict[tuple[str, int, int, int], dict[str, np.ndarray]] = {}
+    # One fit per system, settings and origin, shared by both series' forecasters.
+    system_fits: dict[tuple[str, str, int, int], tuple[np.ndarray, np.ndarray]] = {}
+    # One fit pair per ML model and origin, shared the same way.
+    ml_fits: dict[tuple[str, int, int], np.ndarray] = {}
+    # The other series' SARIMA forecasts for SARIMAX's planned regressors, once per origin.
+    plans: dict[tuple[int, int, int], np.ndarray] = {}
     # Split -> model -> origins whose refit failed.
     failures: dict[str, dict[str, list[str]]]
     all_forecasts, all_metrics, all_intervals, failures = [], [], [], {}
     for split, (first_origin, last_target) in windows.items():
-        begin_phase(f"{split.capitalize()}: SARIMA, systems, baselines, smoothing and ML")
+        begin_phase(f"{split.capitalize()}: every tuned model")
         failures[split] = {}
         for target, column in enumerate(VALUE_COLUMNS):
+            settings, name = tuned[column], names[column]
+            other = tuned[VALUE_COLUMNS[1 - target]]
             values = levels[column].to_numpy(dtype=float)
             forecasters: dict[str, Forecaster] = {
-                model_label(m): sarima_forecaster(m, volatility_variants[(column, model_label(m))])
-                for m in passed
-                if m["series"] == column
-            }
-            forecasters |= {
-                kind: system_forecaster(kind, all_levels, target, system_fits) for kind in SYSTEMS
-            }
-            forecasters |= {
+                name[SARIMA]: sarima_forecaster(
+                    settings[SARIMA],
+                    {key: settings[model] for key, model in VOLATILITY_MODELS.items()},
+                ),
                 NAIVE: naive_forecast,
                 "drift": drift_forecast,
                 "seasonal naive": seasonal_naive_forecast,
+                name[SMA]: moving_average_forecaster(settings[SMA]["window"]),
+                name[EXPONENTIAL]: exponential_smoothing_forecaster(settings[EXPONENTIAL]),
+                name[SARIMAX]: sarimax_forecaster(
+                    settings[SARIMA],
+                    other[SARIMA],
+                    all_levels,
+                    target,
+                    settings[SARIMAX]["lags"],
+                    plans,
+                ),
             }
             forecasters |= {
-                f"SMA({window})": moving_average_forecaster(window)
-                for window in MOVING_AVERAGE_WINDOWS
+                name[kind]: system_forecaster(
+                    kind, settings[kind], all_levels, target, system_fits
+                )
+                for kind in (VAR_MODEL, VECM_MODEL)
             }
             forecasters |= {
-                name: exponential_smoothing_forecaster(settings)
-                for name, settings in EXPONENTIAL_SMOOTHING.items()
-            }
-            forecasters |= {
-                name: ml_forecaster(model, lags, all_levels, target, ml_fits)
-                for (model, lags), name in ML_NAMES.items()
+                model: ml_forecaster(
+                    model,
+                    [tuned[series][model] for series in VALUE_COLUMNS],
+                    all_levels,
+                    target,
+                    ml_fits,
+                )
+                for model in ML_MODELS
             }
             forecasts = rolling_forecasts(
                 dates,
@@ -2075,6 +2185,11 @@ def main(
                 forecasters,
                 f"{split} | {series_title(column)}",
             )
+            # The weighted average of the SARIMA and naive, from the forecasts just made.
+            combined = combine_forecasts(
+                forecasts, name[SARIMA], NAIVE, COMBINATION, settings["combination"]["weight"]
+            )
+            forecasts = pd.concat([forecasts, combined], ignore_index=True)
             labels = {"split": split, "series": column}
             all_forecasts.append(forecasts.assign(**labels))
             all_metrics.append(
@@ -2083,122 +2198,41 @@ def main(
                 .assign(**labels)
             )
             all_intervals.append(interval_table(forecasts).assign(**labels))
-            # Extend rather than replace: the series could share a SARIMA label.
             for model, months in convergence_failures(forecasts).items():
                 failures[split].setdefault(model, []).extend(months)
 
     forecasts = pd.concat(all_forecasts, ignore_index=True)
     metrics = pd.concat(all_metrics, ignore_index=True)
     intervals = pd.concat(all_intervals, ignore_index=True)
-    # Selection per family, on validation only: earlier families' choices are unchanged by new
-    # families joining the harness.
-    validation_one_month = metrics[(metrics["split"] == "validation") & (metrics["horizon"] == 1)]
-    model = validation_one_month["model"]
-    # SARIMA is whatever isn't a baseline, system or smoothing model: the labels vary by order.
+    # Each family's members, by model key; the series' names differ (SARIMA orders, lags).
     families = {
-        "SARIMA": ~model.isin([*BASELINES, *SYSTEMS, *SMOOTHING, *ML_NAMES.values()]),
-        "system": model.isin(SYSTEMS),
-        "smoothing": model.isin(SMOOTHING),
-        "ML": model.isin(ML_NAMES.values()),
+        "SARIMA": (SARIMA,),
+        "system": (VAR_MODEL, VECM_MODEL),
+        "smoothing": (SMA, EXPONENTIAL),
+        "SARIMAX": (SARIMAX,),
+        "ML": ML_MODELS,
     }
+    validation_one_month = metrics[
+        (metrics["split"] == "validation") & (metrics["horizon"] == 1)
+    ].set_index(["series", "model"])["MASE"]
+    # Selection per family, on validation only.
     selected_by_family: dict[str, dict[str, str]] = {
         family: {
-            column: group.sort_values("MASE")["model"].iloc[0]
-            for column, group in validation_one_month[mask].groupby("series")
+            column: min(
+                (names[column][key] for key in keys),
+                key=lambda model: validation_one_month[(column, model)],
+            )
+            for column in VALUE_COLUMNS
         }
-        for family, mask in families.items()
+        for family, keys in families.items()
     }
-    selected = selected_by_family["SARIMA"]
-    # The average of the validation-selected SARIMA and naive, from the forecasts already made.
-    combined = []
-    for (split, column), group in forecasts.groupby(["split", "series"]):
-        labels = {"split": split, "series": column}
-        rows = combine_forecasts(group, selected[column], NAIVE, COMBINATION)
-        combined.append(rows.assign(**labels))
-        # dm_against needs the reference (naive) next to the new rows.
-        pool = pd.concat([group[group["model"] == NAIVE], rows])
-        metrics = pd.concat(
-            [
-                metrics,
-                metrics_table(rows, scales[column])
-                .merge(dm_against(pool, NAIVE), on=["model", "horizon"], how="left")
-                .assign(**labels),
-            ],
-            ignore_index=True,
-        )
-    forecasts = pd.concat([forecasts, *combined], ignore_index=True)
     selected_by_family["combination"] = {column: COMBINATION for column in VALUE_COLUMNS}
-
-    # SARIMAX builds on the selected SARIMA, so it runs after the selection above, from the same
-    # origins; the other series' future changes come from its own selected SARIMA.
-    by_label = {(m["series"], model_label(m)): m for m in passed}
-    plans: dict[tuple[int, int, int], np.ndarray] = {}
-    sarimax_rows = []
-    for split, (first_origin, last_target) in windows.items():
-        begin_phase(f"{split.capitalize()}: SARIMAX")
-        for target, column in enumerate(VALUE_COLUMNS):
-            other_column = VALUE_COLUMNS[1 - target]
-            sarimax_forecasters = {
-                name: sarimax_forecaster(
-                    by_label[(column, selected[column])],
-                    by_label[(other_column, selected[other_column])],
-                    all_levels,
-                    target,
-                    lags,
-                    plans,
-                )
-                for lags, name in SARIMAX_NAMES.items()
-            }
-            values = levels[column].to_numpy(dtype=float)
-            rows = rolling_forecasts(
-                dates,
-                values,
-                first_origin,
-                last_target,
-                sarimax_forecasters,
-                f"SARIMAX | {split} | {series_title(column)}",
-            )
-            labels = {"split": split, "series": column}
-            sarimax_rows.append(rows.assign(**labels))
-            # dm_against needs the reference (naive) next to the new rows.
-            naive_rows = forecasts[
-                (forecasts["split"] == split)
-                & (forecasts["series"] == column)
-                & (forecasts["model"] == NAIVE)
-            ]
-            metrics = pd.concat(
-                [
-                    metrics,
-                    metrics_table(rows, scales[column])
-                    .merge(
-                        dm_against(pd.concat([naive_rows, rows]), NAIVE),
-                        on=["model", "horizon"],
-                        how="left",
-                    )
-                    .assign(**labels),
-                ],
-                ignore_index=True,
-            )
-            for model_name, months in convergence_failures(rows).items():
-                failures[split].setdefault(model_name, []).extend(months)
-    forecasts = pd.concat([forecasts, *sarimax_rows], ignore_index=True)
-    sarimax_one_month = metrics[
-        (metrics["split"] == "validation")
-        & (metrics["horizon"] == 1)
-        & metrics["model"].isin(SARIMAX_NAMES.values())
-    ]
-    selected_by_family["SARIMAX"] = {
-        column: group.sort_values("MASE")["model"].iloc[0]
-        for column, group in sarimax_one_month.groupby("series")
-    }
+    selected = selected_by_family["SARIMA"]
     begin_phase("DM tests against SARIMA, report and figures")
-    # Does any other approach beat univariate SARIMA? Each one against the selected SARIMA.
-    others = [*SYSTEMS, *SMOOTHING, COMBINATION, *SARIMAX_NAMES.values(), *ML_NAMES.values()]
+    # Does any other approach beat univariate SARIMA? Each one against the series' SARIMA.
     against_sarima = [
         dm_against(
-            group[group["model"].isin([*others, selected[column]])],
-            selected[column],
-            prefix="DM_SARIMA",
+            group[~group["model"].isin(BASELINES)], selected[column], prefix="DM_SARIMA"
         ).assign(split=split, series=column)
         for (split, column), group in forecasts.groupby(["split", "series"])
     ]
@@ -2220,17 +2254,6 @@ def main(
         for split in SPLITS
     }
     report = evaluation_report(results, periods, scales, selected_by_family)
-    # The boosting cap must never bind: early stopping, not the cap, should end training.
-    trees = forecasts["trees"].max()
-    cap = HYPERPARAMETERS.ml.boosting_max_iterations
-    report += (
-        f"\nGradient boosting: at most {trees:.0f} trees chosen at any origin; the cap of {cap} "
-        + (
-            "was never reached.\n"
-            if trees < cap
-            else "WAS REACHED: the cap, not early stopping, ended training.\n"
-        )
-    )
     REPORT_PATH.write_text(report, encoding="utf-8")
     print(report)
 

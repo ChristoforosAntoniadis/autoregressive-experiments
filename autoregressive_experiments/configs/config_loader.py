@@ -6,14 +6,14 @@ entry against the definitions in ``configurables`` and returns them as one typed
 `Hyperparameters` object. Every module takes its settings from `HYPERPARAMETERS`, loaded once
 on import.
 
-Each entry in the file is an object with exactly two keys: "value" and "justification". A
-setting without a justification is rejected: every choice must say why it was made (a
+Each entry in the file is an object with exactly two keys: "value" and "reasoning". A
+setting without reasoning is rejected: every choice must say why it was made (a
 reference, a calculation or an earlier step's result).
 
 Input: ``autoregressive_experiments/configs/hyperparameters.json`` (or another path given to
 `ConfigLoader`).
 
-Output: the validated `Hyperparameters` object and each setting's justification. Nothing is
+Output: the validated `Hyperparameters` object and each setting's reasoning. Nothing is
 written to disk.
 """
 
@@ -32,7 +32,7 @@ from autoregressive_experiments.configs.configurables import (
 )
 
 # The two keys every entry must have, and no others.
-ENTRY_KEYS = frozenset({"value", "justification"})
+ENTRY_KEYS = frozenset({"value", "reasoning"})
 # How far the impulse-response band's z may sit from the exact normal quantile of the
 # significance level: 1.96 vs 1.95996 for 5% (the conventional rounding passes).
 BAND_Z_TOLERANCE = 0.01
@@ -45,7 +45,7 @@ class ConfigLoader:
     This class is responsible for:
     - reading the JSON file
     - checking that every section and setting exists, and that no unknown one does
-    - checking that every entry has a value and a non-empty justification
+    - checking that every entry has a value and non-empty reasoning
     - converting each value to its declared type (JSON lists become tuples)
     - checking each value against its rule, and the rules that link settings
 
@@ -53,8 +53,8 @@ class ConfigLoader:
     ----------
     path : Path
         The config file to read.
-    justifications : dict of tuple of (str, str) to str
-        (section, setting) -> its justification, filled by load().
+    reasoning : dict of tuple of (str, str) to str
+        (section, setting) -> its reasoning, filled by load().
 
     Notes
     -----
@@ -72,7 +72,7 @@ class ConfigLoader:
             The JSON config file.
         """
         self.path = path
-        self.justifications: dict[tuple[str, str], str] = {}
+        self.reasoning: dict[tuple[str, str], str] = {}
 
     def load(self) -> Hyperparameters:
         """
@@ -91,7 +91,7 @@ class ConfigLoader:
             If the file's top level isn't an object.
         ValueError
             If anything in the file is missing, unknown, of the wrong type, breaks its rule or
-            lacks a justification; the message lists every problem found.
+            lacks reasoning; the message lists every problem found.
 
         Notes
         -----
@@ -157,15 +157,15 @@ class ConfigLoader:
             where = f"{section}.{key}"
             entry = entries.get(key)
             if not isinstance(entry, dict) or set(entry) != ENTRY_KEYS:
-                errors.append(f"{where}: needs exactly the keys 'value' and 'justification'")
+                errors.append(f"{where}: needs exactly the keys 'value' and 'reasoning'")
                 failed = True
                 continue
-            justification = entry["justification"]
-            if not isinstance(justification, str) or not justification.strip():
-                errors.append(f"{where}: the justification is missing or empty")
+            reasoning = entry["reasoning"]
+            if not isinstance(reasoning, str) or not reasoning.strip():
+                errors.append(f"{where}: the reasoning is missing or empty")
                 failed = True
             else:
-                self.justifications[(section, key)] = justification
+                self.reasoning[(section, key)] = reasoning
             try:
                 value = convert(entry["value"], hints[key])
             except TypeError as error:

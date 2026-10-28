@@ -76,7 +76,13 @@ asymmetric-garch: export MPLBACKEND = Agg
 asymmetric-garch:
 	$(PYTHON_INTERPRETER) -m $(PACKAGE).asymmetric_garch
 
-## Score every model's rolling-origin forecasts on validation and test (no plot windows)
+## Tune every model's settings by time-aware random search on train (no plot windows)
+.PHONY: tune
+tune: export MPLBACKEND = Agg
+tune:
+	$(PYTHON_INTERPRETER) -m $(PACKAGE).tuning
+
+## Score every tuned model's rolling-origin forecasts on validation and test (needs make tune)
 .PHONY: evaluate
 evaluate: export MPLBACKEND = Agg
 evaluate:
@@ -100,9 +106,9 @@ var-analysis: export MPLBACKEND = Agg
 var-analysis:
 	$(PYTHON_INTERPRETER) -m $(PACKAGE).var_analysis
 
-## Run the whole pipeline: features, plots, univariate steps, VAR steps, evaluation
+## Run the whole pipeline: features, plots, univariate steps, VAR steps, tuning, evaluation
 .PHONY: all
-all: features plots diagnostics residuals volatility garch asymmetric-garch var var-checks var-analysis evaluate
+all: features plots diagnostics residuals volatility garch asymmetric-garch var var-checks var-analysis tune evaluate
 
 ## Run the test suite
 .PHONY: test
