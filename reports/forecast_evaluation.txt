@@ -1,8 +1,9 @@
 Out-of-sample forecast evaluation: SARIMA, VAR / VECM, smoothing baselines, and the SARIMA + naive average
-Rolling origin, expanding window: each model is refitted at every monthly origin on all data up to it (data start 2002-12); each origin is one fold. Orders come from training; the selected model per series and family (SARIMA, system, smoothing) from validation (lowest one-month MASE), fixed before test. Each family's test is run once, with all its models.
+Rolling origin, expanding window: each model is refitted at every monthly origin on all data up to it (data start 2002-12); each origin is one fold. Orders come from training; the selected model per series and family (SARIMA, system, smoothing, SARIMAX) from validation (lowest one-month MASE), fixed before test. Each family's test is run once, with all its models.
 Systems: VAR(5) on the differences and VECM(5) (rank 1) on the levels, fitted on both series up to each origin and forecasting both; normal intervals from the system's forecast-error covariance (no GARCH).
 Smoothing: SMA(k) forecasts the average of the last k levels; single, double (Holt, plain and damped) and triple (Holt-Winters, 12-month season) exponential smoothing, statsmodels' ExponentialSmoothing on the levels, re-estimated at every origin. Point forecasts only.
 SARIMA + naive average: the equal-weight average of the series' selected SARIMA and the naive (no-change) forecast, from the same origins. Point forecasts only.
+SARIMAX: the series' selected SARIMA (same orders) plus the other series' last 1, 3, 5 monthly changes as regressors (the VAR orders of steps V2 and V6), so DM vs SARIMA measures what the other series adds. Forecast months whose regressors aren't known yet use the other series' own selected-SARIMA forecasts from the same origin. Point forecasts only: the intervals would treat those planned regressors as known.
 Point errors are on the levels: MAE, RMSE in trillions; MSE in trillions squared; MAPE in %; MASE = MAE / the training split's in-sample MAE of the one-month naive forecast (scales: fed_total_assets_T 0.0337, monetary_base_T 0.0402).
 DM vs naive: Diebold-Mariano test of equal expected loss against the naive forecast, absolute-error loss (matches MAE) and squared-error loss (matches MSE), with the Harvey-Leybourne-Newbold correction and h - 1 autocovariance lags. 'better' / 'worse' when significant at 5%, otherwise the p-value. DM vs SARIMA: the same test, each non-SARIMA model against the series' selected SARIMA: does any other approach beat it?
 Intervals: quantiles of each model's forecast distribution on the levels, with a constant shock variance, U5b's GARCH, or U5c's EGARCH / GJR-GARCH (each refitted at every origin; EGARCH's multi-step variances simulated with a fixed seed); normal for constant variance, unit-variance Student-t otherwise; naive uses random-walk quantiles. Pinball = mean quantile loss over the 5 quantiles.
@@ -10,7 +11,7 @@ The COVID months (2020) are in validation and are kept, by the user's decision.
 
 ===== VALIDATION: targets 2016-11 to 2021-06 =====
 
-fed_total_assets_T  (selected on validation: SARIMA SARIMA(2,1,2), system VECM(5), smoothing double exp. smoothing, damped, combination SARIMA + naive average)
+fed_total_assets_T  (selected on validation: SARIMA SARIMA(2,1,2), system VECM(5), smoothing double exp. smoothing, damped, combination SARIMA + naive average, SARIMAX SARIMAX (5 exog lags))
   1-month horizon (56 forecasts)
     model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    DM vs SARIMA (abs)  DM vs SARIMA (sq)   
     SARIMA + naive average           0.0827   0.050406   0.2245     1.49   2.455   better p=0.036      p=0.17              p=0.46              p=0.93              
@@ -18,9 +19,12 @@ fed_total_assets_T  (selected on validation: SARIMA SARIMA(2,1,2), system VECM(5
     double exp. smoothing, damped    0.0914   0.056256   0.2372     1.57   2.714   p=0.65              p=0.67              p=0.97              p=0.15              
     SARIMA(0,1,4)                    0.0923   0.050288   0.2243     1.63   2.741   p=0.72              p=0.56              -                   -                   
     VECM(5)                          0.0949   0.051998   0.2280     1.65   2.818   p=0.86              p=0.55              p=0.57              p=0.83              
+    SARIMAX (5 exog lags)            0.0950   0.053517   0.2313     1.67   2.820   p=0.88              p=0.64              p=0.57              p=0.67              
     VAR(5)                           0.0960   0.051155   0.2262     1.69   2.851   p=0.93              p=0.52              p=0.47              p=0.89              
+    SARIMAX (1 exog lag)             0.0962   0.052789   0.2298     1.70   2.856   p=0.95              p=0.55              p=0.46              p=0.63              
     naive                            0.0970   0.064283   0.2535     1.70   2.881   -                   -                   -                   -                   
     single exp. smoothing            0.0970   0.064283   0.2535     1.70   2.881   p=0.05              p=0.17              p=0.56              p=0.50              
+    SARIMAX (3 exog lags)            0.0989   0.055538   0.2357     1.73   2.936   p=0.89              p=0.69              p=0.33              p=0.39              
     triple exp. smoothing (Holt-Winters)   0.1000   0.067953   0.2607     1.68   2.970   p=0.86              p=0.87              p=0.53              p=0.15              
     drift                            0.1002   0.061730   0.2485     1.83   2.976   p=0.27              p=0.07              -                   -                   
     double exp. smoothing (Holt)     0.1018   0.070466   0.2655     1.72   3.022   p=0.79              p=0.77              p=0.45              p=0.12              
@@ -34,9 +38,12 @@ fed_total_assets_T  (selected on validation: SARIMA SARIMA(2,1,2), system VECM(5
     SARIMA + naive average           0.2688   0.359010   0.5992     4.59   7.982   p=0.67              p=0.25              p=0.39              p=0.97              
     naive                            0.2734   0.387161   0.6222     4.57   8.118   -                   -                   -                   -                   
     single exp. smoothing            0.2734   0.387161   0.6222     4.57   8.118   p=0.08              p=0.23              p=0.79              p=0.36              
+    SARIMAX (5 exog lags)            0.2744   0.367323   0.6061     4.69   8.147   p=0.98              p=0.73              p=0.86              p=0.76              
+    SARIMAX (3 exog lags)            0.2761   0.356482   0.5971     4.75   8.198   p=0.93              p=0.39              p=0.88              p=0.85              
     SARIMA(2,1,2)                    0.2785   0.358536   0.5988     4.84   8.268   p=0.79              p=0.36              -                   -                   
     double exp. smoothing, damped    0.2806   0.500601   0.7075     4.51   8.331   p=0.90              p=0.42              p=0.97              p=0.36              
     drift                            0.2844   0.367268   0.6060     5.00   8.445   p=0.54              p=0.25              -                   -                   
+    SARIMAX (1 exog lag)             0.2875   0.357651   0.5980     4.97   8.537   p=0.61              p=0.36              p=0.10              p=0.96              
     SARIMA(0,1,4)                    0.2891   0.391996   0.6261     5.02   8.582   p=0.53              p=0.87              -                   -                   
     VECM(5)                          0.3022   0.440594   0.6638     5.00   8.971   p=0.64              p=0.52              p=0.66              p=0.30              
     VAR(5)                           0.3059   0.412492   0.6423     5.13   9.082   p=0.58              p=0.74              p=0.57              p=0.40              
@@ -52,8 +59,11 @@ fed_total_assets_T  (selected on validation: SARIMA SARIMA(2,1,2), system VECM(5
     SARIMA + naive average           0.5335   0.912767   0.9554     8.97  15.840   p=0.96              p=0.29              p=0.33              p=0.43              
     naive                            0.5351   0.974150   0.9870     8.75  15.888   -                   -                   -                   -                   
     single exp. smoothing            0.5351   0.974150   0.9870     8.75  15.888   p=0.18              p=0.24              p=0.70              p=0.34              
+    SARIMAX (3 exog lags)            0.5401   0.877420   0.9367     9.29  16.034   p=0.93              p=0.33              p=0.13              p=0.99              
+    SARIMAX (5 exog lags)            0.5436   0.881020   0.9386     9.28  16.141   p=0.86              p=0.33              p=0.55              p=0.95              
     drift                            0.5515   0.900005   0.9487     9.56  16.375   p=0.78              p=0.36              -                   -                   
     SARIMA(2,1,2)                    0.5535   0.877086   0.9365     9.52  16.434   p=0.70              p=0.34              -                   -                   
+    SARIMAX (1 exog lag)             0.5554   0.874005   0.9349     9.55  16.490   p=0.67              p=0.33              p=0.09              p=0.21              
     double exp. smoothing, damped    0.5731   1.334615   1.1553     9.12  17.016   p=0.67              p=0.41              p=0.87              p=0.36              
     SARIMA(0,1,4)                    0.5746   0.929760   0.9642     9.88  17.060   p=0.41              p=0.56              -                   -                   
     SMA(3)                           0.6104   1.162113   1.0780     9.87  18.124   p=0.19              p=0.24              p=0.55              p=0.26              
@@ -69,9 +79,12 @@ fed_total_assets_T  (selected on validation: SARIMA SARIMA(2,1,2), system VECM(5
     model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    DM vs SARIMA (abs)  DM vs SARIMA (sq)   
     naive                            1.0767   2.768160   1.6638    16.73  31.966   -                   -                   -                   -                   
     single exp. smoothing            1.0767   2.768160   1.6638    16.73  31.966   p=0.37              p=0.40              p=0.81              p=0.53              
+    SARIMAX (5 exog lags)            1.0856   2.427763   1.5581    18.11  32.230   p=0.96              p=0.51              p=0.21              p=0.42              
     SARIMA + naive average           1.0891   2.591048   1.6097    17.55  32.335   p=0.90              p=0.48              p=0.71              p=0.58              
+    SARIMAX (3 exog lags)            1.1178   2.455445   1.5670    18.60  33.188   p=0.81              p=0.52              p=0.69              p=0.25              
     SARIMA(2,1,2)                    1.1205   2.466311   1.5704    18.70  33.268   p=0.81              p=0.53              -                   -                   
     drift                            1.1340   2.505042   1.5827    18.96  33.669   p=0.74              p=0.55              -                   -                   
+    SARIMAX (1 exog lag)             1.1391   2.513192   1.5853    18.95  33.821   p=0.71              p=0.56              p=0.41              p=0.44              
     SARIMA(0,1,4)                    1.1466   2.497575   1.5804    19.11  34.041   p=0.67              p=0.55              -                   -                   
     SMA(3)                           1.1504   3.039989   1.7436    17.74  34.155   p=0.38              p=0.41              p=0.91              p=0.47              
     double exp. smoothing, damped    1.1540   3.659880   1.9131    17.60  34.262   p=0.44              p=0.41              p=0.90              p=0.43              
@@ -84,13 +97,16 @@ fed_total_assets_T  (selected on validation: SARIMA SARIMA(2,1,2), system VECM(5
     double exp. smoothing (Holt)     1.5547   9.560474   3.0920    22.91  46.159   p=0.38              p=0.41              p=0.54              p=0.41              
     Lowest MAE: naive (nothing beats naive)
 
-monetary_base_T  (selected on validation: SARIMA SARIMA(0,1,1), system VAR(5), smoothing single exp. smoothing, combination SARIMA + naive average)
+monetary_base_T  (selected on validation: SARIMA SARIMA(0,1,1), system VAR(5), smoothing single exp. smoothing, combination SARIMA + naive average, SARIMAX SARIMAX (1 exog lag))
   1-month horizon (56 forecasts)
     model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    DM vs SARIMA (abs)  DM vs SARIMA (sq)   
     SARIMA(0,1,1)                    0.0866   0.021728   0.1474     2.06   2.153   p=0.10              p=0.15              -                   -                   
     SARIMA + naive average           0.0883   0.024758   0.1573     2.08   2.196   p=0.05              p=0.08              p=0.69              p=0.33              
+    SARIMAX (1 exog lag)             0.0894   0.021628   0.1471     2.08   2.223   p=0.48              p=0.53              p=0.82              p=0.99              
     SARIMA(0,1,1)x(1,0,1,12)         0.0902   0.022927   0.1514     2.15   2.243   p=0.25              p=0.20              -                   -                   
+    SARIMAX (3 exog lags)            0.0929   0.025017   0.1582     2.13   2.309   p=0.64              p=0.68              p=0.63              p=0.78              
     SARIMA(1,1,1)x(1,0,1,12)         0.0930   0.024810   0.1575     2.20   2.314   p=0.39              p=0.25              -                   -                   
+    SARIMAX (5 exog lags)            0.0974   0.027612   0.1662     2.22   2.423   p=0.90              p=0.81              p=0.45              p=0.65              
     drift                            0.0989   0.030175   0.1737     2.30   2.459   p=0.93              p=0.12              -                   -                   
     VAR(5)                           0.0989   0.029957   0.1731     2.25   2.461   p=0.99              p=0.93              p=0.41              p=0.52              
     naive                            0.0991   0.031425   0.1773     2.29   2.465   -                   -                   -                   -                   
@@ -108,10 +124,13 @@ monetary_base_T  (selected on validation: SARIMA SARIMA(0,1,1), system VAR(5), s
     model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    DM vs SARIMA (abs)  DM vs SARIMA (sq)   
     SARIMA + naive average           0.2309   0.154516   0.3931     5.11   5.742   p=0.65              p=0.13              p=0.96              p=0.38              
     SARIMA(0,1,1)                    0.2312   0.149875   0.3871     5.18   5.751   p=0.83              p=0.20              -                   -                   
+    SARIMAX (1 exog lag)             0.2334   0.218554   0.4675     5.17   5.803   p=0.97              p=0.46              p=0.90              p=0.36              
     naive                            0.2345   0.164563   0.4057     5.13   5.831   -                   -                   -                   -                   
     single exp. smoothing            0.2345   0.164563   0.4057     5.13   5.831   p=0.55              p=0.09              p=0.83              p=0.20              
     drift                            0.2383   0.153555   0.3919     5.35   5.927   p=0.76              p=0.23              -                   -                   
     SARIMA(0,1,1)x(1,0,1,12)         0.2390   0.156943   0.3962     5.34   5.943   p=0.73              p=0.38              -                   -                   
+    SARIMAX (5 exog lags)            0.2427   0.254840   0.5048     5.29   6.035   p=0.86              p=0.43              p=0.78              p=0.37              
+    SARIMAX (3 exog lags)            0.2431   0.253861   0.5038     5.32   6.045   p=0.82              p=0.41              p=0.69              p=0.35              
     SARIMA(1,1,1)x(1,0,1,12)         0.2477   0.171335   0.4139     5.53   6.161   p=0.46              p=0.63              -                   -                   
     triple exp. smoothing (Holt-Winters)   0.2681   0.309176   0.5560     5.97   6.666   p=0.70              p=0.43              p=0.63              p=0.39              
     VAR(5)                           0.2682   0.286863   0.5356     5.81   6.670   p=0.61              p=0.39              p=0.54              p=0.33              
@@ -130,7 +149,10 @@ monetary_base_T  (selected on validation: SARIMA SARIMA(0,1,1), system VAR(5), s
     drift                            0.3947   0.332766   0.5769     8.92   9.817   p=0.97              p=0.37              -                   -                   
     naive                            0.3962   0.369675   0.6080     8.69   9.854   -                   -                   -                   -                   
     single exp. smoothing            0.3962   0.369675   0.6080     8.69   9.854   worse p=0.022       p=0.13              p=0.91              p=0.31              
+    SARIMAX (1 exog lag)             0.3979   0.352280   0.5935     8.90   9.896   p=0.96              p=0.70              p=0.76              p=0.54              
     SARIMA(0,1,1)x(1,0,1,12)         0.4011   0.336556   0.5801     9.01   9.975   p=0.87              p=0.38              -                   -                   
+    SARIMAX (3 exog lags)            0.4056   0.375302   0.6126     9.01  10.086   p=0.76              p=0.92              p=0.65              p=0.47              
+    SARIMAX (5 exog lags)            0.4063   0.415625   0.6447     8.98  10.104   p=0.76              p=0.62              p=0.72              p=0.43              
     SARIMA(1,1,1)x(1,0,1,12)         0.4119   0.352906   0.5941     9.23  10.244   p=0.56              p=0.54              -                   -                   
     SMA(3)                           0.4412   0.428713   0.6548     9.66  10.971   p=0.08              p=0.14              p=0.33              p=0.21              
     double exp. smoothing, damped    0.4495   0.520665   0.7216     9.75  11.179   p=0.48              p=0.39              p=0.55              p=0.34              
@@ -144,6 +166,9 @@ monetary_base_T  (selected on validation: SARIMA SARIMA(0,1,1), system VAR(5), s
     Lowest MAE: SARIMA + naive average (beats naive by 1% in MAE)
   12-month horizon (45 forecasts)
     model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    DM vs SARIMA (abs)  DM vs SARIMA (sq)   
+    SARIMAX (5 exog lags)            0.6815   0.789765   0.8887    15.48  16.947   p=0.79              p=0.54              better p=0.036      p=0.31              
+    SARIMAX (3 exog lags)            0.6947   0.778506   0.8823    15.80  17.278   p=0.86              p=0.55              p=0.49              p=0.13              
+    SARIMAX (1 exog lag)             0.7013   0.783204   0.8850    15.97  17.441   p=0.90              p=0.56              p=0.46              p=0.15              
     SARIMA + naive average           0.7124   0.871721   0.9337    15.83  17.716   p=0.93              p=0.56              p=0.92              p=0.67              
     naive                            0.7183   0.948518   0.9739    15.59  17.863   -                   -                   -                   -                   
     single exp. smoothing            0.7183   0.948518   0.9739    15.59  17.863   p=0.36              p=0.41              p=1.00              p=0.61              
@@ -160,7 +185,7 @@ monetary_base_T  (selected on validation: SARIMA SARIMA(0,1,1), system VAR(5), s
     VECM(5)                          0.9010   2.644580   1.6262    18.96  22.407   p=0.27              p=0.41              p=0.52              p=0.42              
     triple exp. smoothing (Holt-Winters)   1.0434   3.219485   1.7943    21.71  25.948   p=0.22              p=0.38              p=0.41              p=0.40              
     double exp. smoothing (Holt)     1.0494   3.338273   1.8271    21.81  26.098   p=0.24              p=0.38              p=0.42              p=0.40              
-    Lowest MAE: SARIMA + naive average (beats naive by 1% in MAE)
+    Lowest MAE: SARIMAX (5 exog lags) (beats naive by 5% in MAE)
 
   Forecast intervals (targets: 80% and 95% coverage; below_q should be close to q)
   fed_total_assets_T
@@ -287,21 +312,24 @@ monetary_base_T  (selected on validation: SARIMA SARIMA(0,1,1), system VAR(5), s
       VAR(5)                        constant      0.42    0.73     0.9827     1.5029   0.2584   0.02 / 0.31 / 0.58 / 0.73 / 0.76
       VECM(5)                       constant      0.40    0.69     0.9581     1.4653   0.2975   0.07 / 0.33 / 0.58 / 0.73 / 0.76
 
-  Refits that failed to converge: SARIMA(0,1,1): 2019-06
-  (1 failed refits in total for this split)
+  Refits that failed to converge: SARIMA(0,1,1): 2019-06; SARIMAX (1 exog lag): 2019-08; SARIMAX (3 exog lags): 2017-08, 2017-06, 2019-06
+  (5 failed refits in total for this split)
 
 ===== TEST: targets 2021-07 to 2026-02 =====
 
-fed_total_assets_T  (selected on validation: SARIMA SARIMA(2,1,2), system VECM(5), smoothing double exp. smoothing, damped, combination SARIMA + naive average)
+fed_total_assets_T  (selected on validation: SARIMA SARIMA(2,1,2), system VECM(5), smoothing double exp. smoothing, damped, combination SARIMA + naive average, SARIMAX SARIMAX (5 exog lags))
   1-month horizon (56 forecasts)
     model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    DM vs SARIMA (abs)  DM vs SARIMA (sq)   
     double exp. smoothing, damped    0.0471   0.007544   0.0869     0.60   1.398   better p=0.003      p=0.83              better p=0.001      p=0.13              
     double exp. smoothing (Holt)     0.0494   0.009079   0.0953     0.62   1.466   better p=0.019      p=0.82              better p=0.028      p=0.92              
     triple exp. smoothing (Holt-Winters)   0.0520   0.008699   0.0933     0.65   1.544   better p=0.037      p=0.89              p=0.12              p=0.77              
+    SARIMAX (1 exog lag)             0.0587   0.008864   0.0941     0.75   1.743   p=0.08              p=0.83              better p=0.030      p=0.59              
+    SARIMAX (3 exog lags)            0.0600   0.009391   0.0969     0.76   1.782   p=0.15              p=0.74              p=0.65              p=0.42              
     VAR(5)                           0.0600   0.008702   0.0933     0.76   1.782   p=0.10              p=0.85              p=0.69              p=0.68              
     VECM(5)                          0.0602   0.008634   0.0929     0.77   1.786   p=0.10              p=0.87              p=0.72              p=0.60              
     SARIMA(0,1,4)                    0.0610   0.008975   0.0947     0.78   1.812   p=0.14              p=0.80              -                   -                   
     SARIMA(2,1,2)                    0.0614   0.008969   0.0947     0.78   1.822   p=0.14              p=0.81              -                   -                   
+    SARIMAX (5 exog lags)            0.0638   0.009357   0.0967     0.82   1.893   p=0.27              p=0.71              p=0.44              p=0.52              
     SARIMA + naive average           0.0649   0.007552   0.0869     0.83   1.928   p=0.06              p=0.65              p=0.35              p=0.48              
     naive                            0.0727   0.008158   0.0903     0.92   2.159   -                   -                   -                   -                   
     single exp. smoothing            0.0727   0.008158   0.0903     0.92   2.159   worse p=0.000       worse p=0.006       p=0.14              p=0.81              
@@ -316,6 +344,8 @@ fed_total_assets_T  (selected on validation: SARIMA SARIMA(2,1,2), system VECM(5
     double exp. smoothing, damped    0.0997   0.028647   0.1693     1.25   2.959   better p=0.014      p=0.44              better p=0.002      p=0.08              
     double exp. smoothing (Holt)     0.1113   0.047428   0.2178     1.39   3.305   p=0.12              p=0.94              p=0.06              p=0.90              
     triple exp. smoothing (Holt-Winters)   0.1630   0.056343   0.2374     2.07   4.838   p=0.62              p=0.70              p=0.45              p=0.82              
+    SARIMAX (1 exog lag)             0.1708   0.047269   0.2174     2.16   5.071   p=0.54              p=0.81              p=0.08              p=0.24              
+    SARIMAX (3 exog lags)            0.1731   0.048907   0.2212     2.23   5.139   p=0.65              p=0.74              p=0.34              p=0.73              
     VAR(5)                           0.1756   0.053096   0.2304     2.27   5.214   p=0.75              p=0.49              p=0.48              p=0.78              
     VECM(5)                          0.1780   0.051401   0.2267     2.32   5.285   p=0.86              p=0.57              p=0.48              p=0.96              
     naive                            0.1819   0.044539   0.2110     2.32   5.401   -                   -                   -                   -                   
@@ -323,6 +353,7 @@ fed_total_assets_T  (selected on validation: SARIMA SARIMA(2,1,2), system VECM(5
     SARIMA + naive average           0.1826   0.045343   0.2129     2.34   5.420   p=0.94              p=0.87              p=0.57              p=0.35              
     SARIMA(2,1,2)                    0.1875   0.051151   0.2262     2.41   5.565   p=0.75              p=0.55              -                   -                   
     SARIMA(0,1,4)                    0.1897   0.052772   0.2297     2.44   5.633   p=0.67              p=0.47              -                   -                   
+    SARIMAX (5 exog lags)            0.1897   0.058331   0.2415     2.49   5.633   p=0.78              p=0.39              p=0.91              p=0.51              
     seasonal naive                   0.2115   0.070977   0.2664     2.66   6.278   p=0.60              p=0.39              -                   -                   
     drift                            0.2285   0.066329   0.2575     2.96   6.785   worse p=0.020       worse p=0.040       -                   -                   
     SMA(3)                           0.2377   0.076737   0.2770     3.04   7.057   worse p=0.000       worse p=0.002       p=0.09              p=0.19              
@@ -337,8 +368,11 @@ fed_total_assets_T  (selected on validation: SARIMA SARIMA(2,1,2), system VECM(5
     naive                            0.3364   0.149786   0.3870     4.36   9.988   -                   -                   -                   -                   
     single exp. smoothing            0.3364   0.149786   0.3870     4.36   9.988   worse p=0.000       worse p=0.014       p=0.12              p=0.15              
     VAR(5)                           0.3485   0.184189   0.4292     4.58  10.347   p=0.82              p=0.53              p=0.05              p=0.31              
+    SARIMAX (3 exog lags)            0.3625   0.187965   0.4335     4.74  10.762   p=0.65              p=0.49              p=0.16              p=0.43              
     SARIMA + naive average           0.3716   0.174097   0.4172     4.85  11.033   p=0.16              p=0.27              p=0.08              p=0.07              
+    SARIMAX (1 exog lag)             0.3757   0.195536   0.4422     4.85  11.154   p=0.47              p=0.37              p=0.22              p=0.40              
     VECM(5)                          0.3850   0.194551   0.4411     5.09  11.431   p=0.37              p=0.37              p=0.14              p=0.21              
+    SARIMAX (5 exog lags)            0.3883   0.222922   0.4721     5.18  11.529   p=0.48              p=0.34              p=0.68              p=0.83              
     SMA(3)                           0.3982   0.204433   0.4521     5.17  11.823   worse p=0.000       worse p=0.010       p=0.82              p=0.88              
     seasonal naive                   0.4014   0.235978   0.4858     5.07  11.918   p=0.68              p=0.60              -                   -                   
     SARIMA(2,1,2)                    0.4111   0.212475   0.4609     5.39  12.205   p=0.12              p=0.15              -                   -                   
@@ -358,7 +392,10 @@ fed_total_assets_T  (selected on validation: SARIMA SARIMA(2,1,2), system VECM(5
     seasonal naive                   0.7476   0.821925   0.9066     9.51  22.197   p=0.82              p=0.66              -                   -                   
     SARIMA + naive average           0.7595   0.682621   0.8262    10.28  22.549   worse p=0.005       worse p=0.039       better p=0.000      better p=0.006      
     SMA(6)                           0.7802   0.729403   0.8541    10.57  23.163   worse p=0.008       worse p=0.008       p=0.23              p=0.26              
+    SARIMAX (3 exog lags)            0.8079   0.828253   0.9101    10.88  23.987   p=0.13              p=0.16              p=0.17              p=0.22              
     VAR(5)                           0.8299   0.853591   0.9239    11.23  24.640   worse p=0.025       p=0.12              p=0.08              p=0.29              
+    SARIMAX (1 exog lag)             0.8406   0.881266   0.9388    11.29  24.956   p=0.07              p=0.10              p=0.49              p=0.61              
+    SARIMAX (5 exog lags)            0.8650   0.930548   0.9646    11.81  25.682   p=0.06              p=0.12              p=0.80              p=0.96              
     SARIMA(2,1,2)                    0.8852   0.923350   0.9609    11.98  26.283   worse p=0.001       worse p=0.016       -                   -                   
     SARIMA(0,1,4)                    0.8938   0.945373   0.9723    12.10  26.538   worse p=0.001       worse p=0.021       -                   -                   
     drift                            0.9335   1.018756   1.0093    12.66  27.716   worse p=0.001       worse p=0.017       -                   -                   
@@ -366,7 +403,7 @@ fed_total_assets_T  (selected on validation: SARIMA SARIMA(2,1,2), system VECM(5
     VECM(5)                          0.9384   1.006492   1.0032    12.64  27.862   worse p=0.000       worse p=0.001       p=0.18              p=0.06              
     Lowest MAE: double exp. smoothing, damped (beats naive by 28% in MAE)
 
-monetary_base_T  (selected on validation: SARIMA SARIMA(0,1,1), system VAR(5), smoothing single exp. smoothing, combination SARIMA + naive average)
+monetary_base_T  (selected on validation: SARIMA SARIMA(0,1,1), system VAR(5), smoothing single exp. smoothing, combination SARIMA + naive average, SARIMAX SARIMAX (1 exog lag))
   1-month horizon (56 forecasts)
     model                               MAE        MSE     RMSE   MAPE %    MASE   DM vs naive (abs)   DM vs naive (sq)    DM vs SARIMA (abs)  DM vs SARIMA (sq)   
     SARIMA + naive average           0.0704   0.009790   0.0989     1.23   1.751   p=0.06              p=0.09              p=0.32              p=0.64              
@@ -377,9 +414,12 @@ monetary_base_T  (selected on validation: SARIMA SARIMA(0,1,1), system VAR(5), s
     single exp. smoothing            0.0766   0.011173   0.1057     1.34   1.906   p=0.10              p=0.11              p=0.70              p=0.50              
     VAR(5)                           0.0771   0.010744   0.1037     1.35   1.916   p=0.95              p=0.78              p=0.61              p=0.57              
     triple exp. smoothing (Holt-Winters)   0.0772   0.011598   0.1077     1.35   1.919   p=0.94              p=0.81              p=0.68              p=0.37              
+    SARIMAX (1 exog lag)             0.0787   0.011310   0.1063     1.38   1.958   p=0.75              p=0.93              p=0.28              p=0.19              
     drift                            0.0788   0.012094   0.1100     1.38   1.960   p=0.41              p=0.14              -                   -                   
     VECM(5)                          0.0796   0.011319   0.1064     1.39   1.979   p=0.68              p=0.93              p=0.34              p=0.31              
+    SARIMAX (5 exog lags)            0.0803   0.011888   0.1090     1.41   1.997   p=0.56              p=0.63              p=0.23              p=0.13              
     double exp. smoothing (Holt)     0.0806   0.012836   0.1133     1.41   2.004   p=0.49              p=0.28              p=0.38              p=0.14              
+    SARIMAX (3 exog lags)            0.0815   0.012070   0.1099     1.43   2.027   p=0.45              p=0.56              p=0.15              p=0.10              
     double exp. smoothing, damped    0.0841   0.012013   0.1096     1.46   2.091   p=0.11              p=0.47              p=0.10              p=0.09              
     SMA(3)                           0.1070   0.020912   0.1446     1.87   2.661   worse p=0.002       worse p=0.007       worse p=0.010       worse p=0.018       
     seasonal naive                   0.1201   0.025196   0.1587     2.09   2.987   worse p=0.001       worse p=0.004       -                   -                   
@@ -392,10 +432,13 @@ monetary_base_T  (selected on validation: SARIMA SARIMA(0,1,1), system VAR(5), s
     single exp. smoothing            0.1506   0.040356   0.2009     2.65   3.745   p=0.09              worse p=0.013       p=0.18              p=0.08              
     SARIMA + naive average           0.1533   0.042815   0.2069     2.71   3.813   p=0.63              p=0.27              better p=0.027      better p=0.015      
     SARIMA(0,1,1)                    0.1640   0.048206   0.2196     2.90   4.077   p=0.18              p=0.08              -                   -                   
+    SARIMAX (1 exog lag)             0.1675   0.050017   0.2236     2.95   4.165   p=0.16              p=0.11              p=0.75              p=0.70              
     VAR(5)                           0.1677   0.046640   0.2160     2.95   4.170   p=0.28              p=0.35              p=0.80              p=0.81              
+    SARIMAX (3 exog lags)            0.1677   0.049060   0.2215     2.96   4.171   p=0.14              p=0.09              p=0.62              p=0.74              
     SARIMA(0,1,1)x(1,0,1,12)         0.1689   0.050132   0.2239     2.98   4.201   p=0.06              p=0.07              -                   -                   
     SARIMA(1,1,1)x(1,0,1,12)         0.1690   0.050138   0.2239     2.99   4.203   worse p=0.045       worse p=0.048       -                   -                   
     drift                            0.1693   0.050055   0.2237     3.00   4.211   p=0.16              p=0.15              -                   -                   
+    SARIMAX (5 exog lags)            0.1698   0.050624   0.2250     3.00   4.223   p=0.13              p=0.09              p=0.57              p=0.48              
     double exp. smoothing, damped    0.1756   0.047052   0.2169     3.09   4.367   worse p=0.016       p=0.10              p=0.36              p=0.87              
     VECM(5)                          0.1769   0.055709   0.2360     3.11   4.400   p=0.26              p=0.25              p=0.55              p=0.50              
     SMA(3)                           0.1852   0.053834   0.2320     3.25   4.605   worse p=0.002       worse p=0.022       p=0.15              p=0.15              
@@ -416,7 +459,10 @@ monetary_base_T  (selected on validation: SARIMA SARIMA(0,1,1), system VAR(5), s
     double exp. smoothing, damped    0.2947   0.131507   0.3626     5.23   7.328   p=0.06              p=0.06              p=0.98              p=0.73              
     drift                            0.2949   0.146586   0.3829     5.29   7.334   p=0.26              p=0.17              -                   -                   
     VAR(5)                           0.2979   0.150666   0.3882     5.32   7.408   p=0.13              p=0.09              p=0.78              p=0.44              
+    SARIMAX (3 exog lags)            0.2986   0.144631   0.3803     5.35   7.425   p=0.07              p=0.09              p=0.38              p=0.27              
     SMA(12)                          0.2996   0.155483   0.3943     5.32   7.450   p=0.42              p=0.27              p=0.92              p=0.79              
+    SARIMAX (1 exog lag)             0.3034   0.146456   0.3827     5.43   7.545   worse p=0.014       p=0.10              p=0.60              p=0.64              
+    SARIMAX (5 exog lags)            0.3042   0.149665   0.3869     5.44   7.565   worse p=0.044       p=0.14              p=0.51              p=0.49              
     SARIMA(1,1,1)x(1,0,1,12)         0.3077   0.149479   0.3866     5.50   7.652   p=0.06              p=0.11              -                   -                   
     SARIMA(0,1,1)x(1,0,1,12)         0.3084   0.150767   0.3883     5.51   7.670   p=0.07              p=0.12              -                   -                   
     VECM(5)                          0.3332   0.213292   0.4618     5.92   8.285   p=0.20              p=0.23              p=0.37              p=0.31              
@@ -433,7 +479,10 @@ monetary_base_T  (selected on validation: SARIMA SARIMA(0,1,1), system VAR(5), s
     SMA(6)                           0.3185   0.178519   0.4225     5.76   7.921   p=0.88              p=0.84              p=0.27              p=0.30              
     SARIMA + naive average           0.3623   0.244995   0.4950     6.58   9.011   p=0.36              p=0.35              better p=0.046      p=0.18              
     double exp. smoothing, damped    0.3722   0.264169   0.5140     6.71   9.257   p=0.21              p=0.15              p=0.39              p=0.34              
+    SARIMAX (1 exog lag)             0.4403   0.343343   0.5860     8.00  10.949   p=0.14              p=0.29              p=0.99              p=0.73              
     SARIMA(0,1,1)                    0.4405   0.335763   0.5795     8.01  10.954   p=0.17              p=0.25              -                   -                   
+    SARIMAX (5 exog lags)            0.4443   0.352058   0.5933     8.07  11.049   p=0.15              p=0.29              p=0.88              p=0.61              
+    SARIMAX (3 exog lags)            0.4502   0.339736   0.5829     8.18  11.195   p=0.12              p=0.24              worse p=0.001       p=0.67              
     drift                            0.4517   0.342711   0.5854     8.21  11.233   p=0.14              p=0.25              -                   -                   
     SARIMA(1,1,1)x(1,0,1,12)         0.4534   0.356046   0.5967     8.23  11.275   p=0.09              p=0.23              -                   -                   
     SARIMA(0,1,1)x(1,0,1,12)         0.4556   0.360115   0.6001     8.27  11.330   p=0.10              p=0.24              -                   -                   
@@ -569,8 +618,8 @@ monetary_base_T  (selected on validation: SARIMA SARIMA(0,1,1), system VAR(5), s
       SARIMA(0,1,1)x(1,0,1,12)      constant      0.78    0.84     1.2338     1.8869   0.1122   0.16 / 0.22 / 0.84 / 1.00 / 1.00
       VECM(5)                       constant      0.78    0.78     1.3400     2.0494   0.1699   0.22 / 0.22 / 0.76 / 1.00 / 1.00
 
-  Refits that failed to converge: SARIMA(2,1,2): 2022-04; SARIMA(0,1,1): 2023-01; SARIMA(1,1,1)x(1,0,1,12): 2025-04
-  (3 failed refits in total for this split)
+  Refits that failed to converge: SARIMA(2,1,2): 2022-04; SARIMA(0,1,1): 2023-01; SARIMA(1,1,1)x(1,0,1,12): 2025-04; SARIMAX (1 exog lag): 2022-11, 2024-11, 2021-06, 2025-09; SARIMAX (3 exog lags): 2025-05, 2025-08, 2025-11; SARIMAX (5 exog lags): 2024-11
+  (11 failed refits in total for this split)
 
 All numbers: reports/forecast_metrics.csv, reports/forecast_intervals.csv
 Figures: reports/figures/forecast_evaluation.png, reports/figures/forecast_intervals.png

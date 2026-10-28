@@ -17,12 +17,14 @@ from autoregressive_experiments.forecast_evaluation import (
     drift_forecast,
     exponential_smoothing_forecaster,
     interval_scores,
+    lagged_exog,
     level_variances,
     mase_scale,
     moving_average_forecaster,
     naive_forecast,
     pinball_loss,
     rolling_forecasts,
+    sarimax_forecaster,
     seasonal_naive_forecast,
     standardized_quantiles,
     system_forecast,
@@ -291,3 +293,37 @@ def test_rolling_forecasts_only_use_data_up_to_each_origin() -> None:
     assert forecasts["origin"].nunique() == 5
     assert forecasts["target"].max() == dates[15]
     assert len(forecasts) == 5 + 4 + 3 + 2 + 1
+
+
+def test_lagged_exog_by_hand() -> None:
+    """Changes 1..5 with 2 lags: months 2, 3 and 4 get rows (most recent change first); months
+    0 and 1 have no full history and get none."""
+    matrix = lagged_exog(np.array([1.0, 2.0, 3.0, 4.0, 5.0]), 2)
+
+    # Month 2 sees changes 2 and 1, month 3 sees 3 and 2, month 4 sees 4 and 3; never its own.
+    assert matrix.tolist() == [[2.0, 1.0], [3.0, 2.0], [4.0, 3.0]]
+
+
+def test_sarimax_forecaster_ignores_everything_after_the_origin() -> None:
+    """Changing every month after the origin, in both series, leaves the forecast unchanged:
+    the regressors for later months come from the other series' forecast, not its future.
+
+    A history that doesn't match the harness's levels trips the leakage guard.
+    """
+    rng = np.random.default_rng(0)
+    # The second series follows the first's last change (x drives y), so the regressor matters.
+    x = rng.normal(size=80)
+    y = np.concatenate([[0.0], 0.8 * x[:-1]]) + 0.1 * rng.normal(size=80)
+    all_levels = np.column_stack([x.cumsum(), y.cumsum()])
+    ar1 = {"p": 1, "q": 0, "P": 0, "Q": 0}
+    origin = 60
+
+    forecaster = sarimax_forecaster(ar1, ar1, all_levels, 1, 3, {})
+    before = forecaster(all_levels[: origin + 1, 1], 6)["forecast"]
+    changed = all_levels.copy()
+    changed[origin + 1 :] += 100.0
+    after = sarimax_forecaster(ar1, ar1, changed, 1, 3, {})(changed[: origin + 1, 1], 6)
+
+    assert np.array_equal(before, after["forecast"])
+    with pytest.raises(AssertionError):
+        forecaster(all_levels[: origin + 1, 0], 6)

@@ -449,7 +449,12 @@ def nonseasonal_orders() -> list[tuple[int, int]]:
 
 
 def fit_sarima(
-    values: pd.Series, p: int, q: int, seasonal_p: int, seasonal_q: int
+    values: pd.Series,
+    p: int,
+    q: int,
+    seasonal_p: int,
+    seasonal_q: int,
+    exog: np.ndarray | None = None,
 ) -> SARIMAXResultsWrapper:
     """
     ARMA(p, q)x(P, 0, Q, 12) with a constant, fitted on the first differences (so d = 1).
@@ -466,12 +471,16 @@ def fit_sarima(
         Seasonal AR order P, at multiples of SEASONAL_PERIOD (12 months).
     seasonal_q : int
         Seasonal MA order Q, at multiples of SEASONAL_PERIOD.
+    exog : np.ndarray or None, default=None
+        Extra regressors, shape (len(values), k), one row per month of `values` (the SARIMAX
+        family of the forecast evaluation); None fits the plain SARIMA.
 
     Returns
     -------
     SARIMAXResultsWrapper
         The fitted model by maximum likelihood. Its params are the constant ("intercept"),
-        the AR / MA coefficients and the shock variance ("sigma2"). Convergence is in
+        the regression coefficients when `exog` is given, the AR / MA coefficients and the
+        shock variance ("sigma2"). Convergence is in
         ``mle_retvals["converged"]``.
 
     Notes
@@ -484,6 +493,7 @@ def fit_sarima(
     """
     return SARIMAX(
         values,
+        exog=exog,
         order=(p, 0, q),
         seasonal_order=(seasonal_p, 0, seasonal_q, SEASONAL_PERIOD),
         trend="c",

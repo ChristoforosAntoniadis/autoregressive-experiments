@@ -12,18 +12,20 @@ Rolling origin with an expanding window, on validation and then on test: at ever
 end of the previous split onwards, each model is refitted on all data up to that month and
 forecasts up to 12 months ahead; only forecasts whose target falls inside the split are scored.
 Each monthly origin is one fold (56 per split). Model orders come from the training split and the
-selected model per series and family (SARIMA, system, smoothing) from validation (lowest
-one-month MASE); test is run once, with all models, and nothing changes after it. Errors are
-measured on the levels (trillions), so MAPE stays well defined: the levels are always positive,
-while the differences cross zero.
+selected model per series and family (SARIMA, system, smoothing, SARIMAX) from validation
+(lowest one-month MASE); test is run once, with all models, and nothing changes after it. Errors
+are measured on the levels (trillions), so MAPE stays well defined: the levels are always
+positive, while the differences cross zero.
 
 Models: the SARIMA models that pass the residual checks (fitted on the first differences, their
 forecasts added back onto the last level), and three baselines: naive (no change), drift (the
 average monthly change so far) and seasonal naive (each month changes as it did a year earlier).
 Smoothing baselines: simple moving averages of the last 3, 6 and 12 levels, and single, double
 (Holt, plain and damped) and triple (Holt-Winters) exponential smoothing on the levels. A
-combination: the equal-weight average of the selected SARIMA and naive. Smoothing and the
-combination give point forecasts only.
+combination: the equal-weight average of the selected SARIMA and naive. SARIMAX: the selected
+SARIMA plus the other series' last 1, 3 or 5 monthly changes as regressors; for forecast months
+whose regressors aren't known yet, the other series' own selected-SARIMA forecasts stand in.
+Smoothing, the combination and SARIMAX give point forecasts only.
 
 Point accuracy per split, series, model and horizon: MAE, MSE, RMSE (trillions, trillions
 squared), MAPE (%) and MASE (MAE divided by the training split's in-sample MAE of the one-month
@@ -137,6 +139,14 @@ EXPONENTIAL_SMOOTHING: dict[str, dict[str, Any]] = {
 SMOOTHING = (*(f"SMA({window})" for window in MOVING_AVERAGE_WINDOWS), *EXPONENTIAL_SMOOTHING)
 # A 50 / 50 average of the selected SARIMA and naive forecasts.
 COMBINATION = "SARIMA + naive average"
+# SARIMAX (the user's request, 2026-10-28): the series' selected SARIMA plus the other series'
+# lagged monthly changes as regressors. The candidate lag counts are the VAR orders of earlier
+# steps, so no new number is introduced: 1 (BIC, step V2), 3 (AIC and HQIC, V2) and 5 (the first
+# order whose residuals passed, V6). Validation picks one per series.
+SARIMAX_LAGS = (1, 3, 5)
+SARIMAX_NAMES = {
+    lags: f"SARIMAX ({lags} exog lag{'' if lags == 1 else 's'})" for lags in SARIMAX_LAGS
+}
 SPLITS = ("validation", "test")
 # Ordered low to high: interval_scores unpacks them as 95% low, 80% low, median, 80% high,
 # 95% high.
@@ -167,8 +177,10 @@ BASELINE_STYLES: dict[str, tuple[str, float]] = {
 # Slots 1-4 (validated together) for the interval variants in the interval figure; zip stops
 # at the 4 variants.
 VARIANCE_COLORS = dict(zip(VARIANCES, SERIES_PALETTE))
-# The accuracy figure shows each family's selected model in slots 1-4 (validated together).
-FAMILY_COLORS = dict(zip(("SARIMA", "system", "smoothing", "combination"), SERIES_PALETTE))
+# The accuracy figure shows each family's selected model in slots 1-5 (validated together).
+FAMILY_COLORS = dict(
+    zip(("SARIMA", "system", "smoothing", "combination", "SARIMAX"), SERIES_PALETTE)
+)
 
 # A forecaster takes the levels up to an origin and a step count, and returns "forecast" (the
 # level path) plus, optionally, "sd_constant" / "sd_garch" paths, "nu_garch" and "converged".
@@ -710,6 +722,146 @@ def system_forecaster(
     return forecast
 
 
+def lagged_exog(changes: np.ndarray, lags: int) -> np.ndarray:
+    """
+    The lag matrix of a series of monthly changes: row i holds the `lags` changes before month
+    i + lags, most recent first.
+
+    Parameters
+    ----------
+    changes : np.ndarray
+        Monthly changes, shape (n,), trillions, oldest first.
+    lags : int
+        How many past changes each row holds.
+
+    Returns
+    -------
+    np.ndarray
+        Shape (n - lags, lags): row i is changes[i + lags - 1], changes[i + lags - 2], ...,
+        changes[i], the regressors for month i + lags.
+
+    Notes
+    -----
+    Months without a full set of earlier changes (the first `lags`) get no row, rather than
+    zeros standing in for unknown values; the SARIMAX fit drops the same first months of its
+    own series. A row never holds its own month's change, so a forecast never needs the other
+    series' value for the month being forecast (that would be leakage).
+    """
+    return np.column_stack(
+        [changes[lags - lag : len(changes) - lag] for lag in range(1, lags + 1)]
+    )
+
+
+def sarimax_forecaster(
+    model: dict[str, Any],
+    other_model: dict[str, Any],
+    all_levels: np.ndarray,
+    target: int,
+    lags: int,
+    plans: dict[tuple[int, int, int], np.ndarray],
+) -> Forecaster:
+    """
+    A forecaster for the SARIMAX family: one series' selected SARIMA plus the other series'
+    last `lags` monthly changes as regressors.
+
+    Parameters
+    ----------
+    model : dict of str to Any
+        This series' selected SARIMA (orders "p", "q", "P", "Q"), as in sarima_forecaster.
+    other_model : dict of str to Any
+        The other series' selected SARIMA, which forecasts that series' future changes.
+    all_levels : np.ndarray
+        Levels of both series over the whole sample, shape (months, 2), trillions, columns in
+        VALUE_COLUMNS order. Only the months the harness hands over are ever used.
+    target : int
+        Column of `all_levels` this forecaster scores; the other column is 1 - target.
+    lags : int
+        How many of the other series' past changes enter as regressors (one of SARIMAX_LAGS).
+    plans : dict of tuple of (int, int, int) to np.ndarray
+        Shared, mutated store of the other series' forecast changes, keyed by (its column,
+        months of history, steps), so the three lag candidates fit it once per origin.
+
+    Returns
+    -------
+    Forecaster
+        A forecaster for the harness; see the nested forecast() for what it returns.
+    """
+    other = 1 - target
+
+    def forecast(levels: np.ndarray, steps: int) -> dict[str, np.ndarray | bool]:
+        """
+        Fit the SARIMAX on the changes so far and forecast this series' levels.
+
+        Parameters
+        ----------
+        levels : np.ndarray
+            This series' levels up to and including the origin, shape (months,), trillions,
+            oldest first; only its length is used to cut both series, after the leakage check.
+        steps : int
+            Number of months to forecast.
+
+        Returns
+        -------
+        dict of str to np.ndarray or bool
+            "forecast": the level path at h = 1..steps, shape (steps,), trillions.
+            "converged": whether the SARIMAX's likelihood optimizer reported convergence.
+
+        Raises
+        ------
+        AssertionError
+            If the history cut from `all_levels` doesn't match the levels the harness passed.
+
+        Notes
+        -----
+        Processing:
+        1. Cut both series to the handed-over length and check this series against it
+           (leakage guard, as in system_forecaster).
+        2. Forecast the other series' changes with its selected SARIMA, once per origin.
+        3. Fit the SARIMAX on this series' changes from month `lags` on, with the lag matrix of
+           the other series' changes as regressors.
+        4. Regressors for the forecast months: the lag matrix of the other series' actual
+           changes followed by its forecast ones; the last `steps` rows belong to the forecast
+           months. From h = 2 on they include forecast changes, never actual future ones.
+        5. Point forecast: the last level plus the running total of the forecast changes.
+
+        No intervals: the SARIMAX's forecast variance treats the planned regressors as known,
+        so its intervals would be too narrow by construction.
+        """
+        history = all_levels[: len(levels)]
+        # Leakage guard: both series end at the month the harness handed over.
+        assert np.array_equal(history[:, target], levels)
+        own_changes = np.diff(history[:, target])
+        other_changes = np.diff(history[:, other])
+        key = (other, len(levels), steps)
+        if key not in plans:
+            other_fit = fit_sarima(
+                pd.Series(other_changes),
+                other_model["p"],
+                other_model["q"],
+                other_model["P"],
+                other_model["Q"],
+            )
+            plans[key] = np.asarray(other_fit.forecast(steps))
+        fitted = fit_sarima(
+            pd.Series(own_changes[lags:]),
+            model["p"],
+            model["q"],
+            model["P"],
+            model["Q"],
+            exog=lagged_exog(other_changes, lags),
+        )
+        # The forecast months' regressors; the extended series' last forecast change is never
+        # used, since a row only holds changes before its own month.
+        future = lagged_exog(np.concatenate([other_changes, plans[key]]), lags)[-steps:]
+        path = np.asarray(fitted.forecast(steps, exog=future))
+        return {
+            "forecast": levels[-1] + np.cumsum(path),
+            "converged": bool(fitted.mle_retvals.get("converged", False)),
+        }
+
+    return forecast
+
+
 def rolling_forecasts(
     dates: pd.Series,
     levels: np.ndarray,
@@ -1204,7 +1356,8 @@ def accuracy_report(
         One split's metrics: "series", "model", "horizon", "n", the METRICS columns, and the
         DM_COLUMNS and DM_SARIMA_COLUMNS (NaN where the test wasn't run).
     selected_by_family : dict of str to dict of str to str
-        Family ("SARIMA", "system", "smoothing", "combination") -> series -> selected model.
+        Family ("SARIMA", "system", "smoothing", "combination", "SARIMAX") -> series -> selected
+        model.
 
     Returns
     -------
@@ -1342,7 +1495,8 @@ def evaluation_report(
             "Rolling origin, expanding window: each model is refitted at every monthly origin on "
             f"all data up to it (data start {periods['start']}); each origin is one fold. "
             "Orders come from training; the selected model per series and family (SARIMA, "
-            "system, smoothing) from validation (lowest one-month MASE), fixed before test. "
+            "system, smoothing, SARIMAX) from validation (lowest one-month MASE), fixed before "
+            "test. "
             "Each family's test is run once, with all its models."
         ),
         (
@@ -1359,6 +1513,14 @@ def evaluation_report(
         (
             f"{COMBINATION}: the equal-weight average of the series' selected SARIMA and the "
             "naive (no-change) forecast, from the same origins. Point forecasts only."
+        ),
+        (
+            "SARIMAX: the series' selected SARIMA (same orders) plus the other series' last "
+            f"{', '.join(map(str, SARIMAX_LAGS))} monthly changes as regressors (the VAR orders "
+            "of steps V2 and V6), so DM vs SARIMA measures what the other series adds. Forecast "
+            "months whose regressors aren't known yet use the other series' own selected-SARIMA "
+            "forecasts from the same origin. Point forecasts only: the intervals would treat "
+            "those planned regressors as known."
         ),
         (
             "Point errors are on the levels: MAE, RMSE in trillions; MSE in trillions squared; "
@@ -1722,8 +1884,10 @@ def main(
        intervals and the failed refits.
     6. Select each family's model per series on validation (lowest one-month MASE).
     7. Add the SARIMA + naive average from the forecasts already made, and score it.
-    8. Test every non-SARIMA model against the series' selected SARIMA with DM.
-    9. Write the CSVs, the report and both figures.
+    8. Run the SARIMAX candidates (built on the selected SARIMAs) from the same origins, score
+       them with DM against naive, and select one per series on validation.
+    9. Test every non-SARIMA model against the series' selected SARIMA with DM.
+    10. Write the CSVs, the report and both figures.
 
     Selection uses validation only, and the test rows are scored by the same code, so the
     test numbers can't influence any choice.
@@ -1848,8 +2012,64 @@ def main(
         )
     forecasts = pd.concat([forecasts, *combined], ignore_index=True)
     selected_by_family["combination"] = {column: COMBINATION for column in VALUE_COLUMNS}
+
+    # SARIMAX builds on the selected SARIMA, so it runs after the selection above, from the same
+    # origins; the other series' future changes come from its own selected SARIMA.
+    by_label = {(m["series"], model_label(m)): m for m in passed}
+    plans: dict[tuple[int, int, int], np.ndarray] = {}
+    sarimax_rows = []
+    for split, (first_origin, last_target) in windows.items():
+        for target, column in enumerate(VALUE_COLUMNS):
+            other_column = VALUE_COLUMNS[1 - target]
+            sarimax_forecasters = {
+                name: sarimax_forecaster(
+                    by_label[(column, selected[column])],
+                    by_label[(other_column, selected[other_column])],
+                    all_levels,
+                    target,
+                    lags,
+                    plans,
+                )
+                for lags, name in SARIMAX_NAMES.items()
+            }
+            logger.info(f"{split}, {column}: rolling forecasts for the SARIMAX candidates")
+            values = levels[column].to_numpy(dtype=float)
+            rows = rolling_forecasts(dates, values, first_origin, last_target, sarimax_forecasters)
+            labels = {"split": split, "series": column}
+            sarimax_rows.append(rows.assign(**labels))
+            # dm_against needs the reference (naive) next to the new rows.
+            naive_rows = forecasts[
+                (forecasts["split"] == split)
+                & (forecasts["series"] == column)
+                & (forecasts["model"] == NAIVE)
+            ]
+            metrics = pd.concat(
+                [
+                    metrics,
+                    metrics_table(rows, scales[column])
+                    .merge(
+                        dm_against(pd.concat([naive_rows, rows]), NAIVE),
+                        on=["model", "horizon"],
+                        how="left",
+                    )
+                    .assign(**labels),
+                ],
+                ignore_index=True,
+            )
+            for model_name, months in convergence_failures(rows).items():
+                failures[split].setdefault(model_name, []).extend(months)
+    forecasts = pd.concat([forecasts, *sarimax_rows], ignore_index=True)
+    sarimax_one_month = metrics[
+        (metrics["split"] == "validation")
+        & (metrics["horizon"] == 1)
+        & metrics["model"].isin(SARIMAX_NAMES.values())
+    ]
+    selected_by_family["SARIMAX"] = {
+        column: group.sort_values("MASE")["model"].iloc[0]
+        for column, group in sarimax_one_month.groupby("series")
+    }
     # Does any other approach beat univariate SARIMA? Each one against the selected SARIMA.
-    others = [*SYSTEMS, *SMOOTHING, COMBINATION]
+    others = [*SYSTEMS, *SMOOTHING, COMBINATION, *SARIMAX_NAMES.values()]
     against_sarima = [
         dm_against(
             group[group["model"].isin([*others, selected[column]])],

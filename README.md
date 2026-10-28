@@ -10,7 +10,7 @@ Experiments on autoregressive approaches, from traditional econometrics (SARIMA,
 ## Plan
 
 - **Univariate (SARIMA, then ARCH / GARCH):** stationarity tests (ADF / KPSS on levels and first differences), ACF / PACF, and SARIMA order selection by AIC / AICc / BIC, residual checks of the selected models (Ljung-Box, Breusch-Godfrey), volatility checks (Engle's ARCH-LM, with and without a variance break), GARCH(1,1), EGARCH and GJR-GARCH on the residuals are done on the training split. Rolling-origin forecasts (expanding window, one fold per monthly origin) are scored on validation and then once on test, against naive, drift and seasonal-naive baselines: MAE, MSE, RMSE, MAPE, MASE and Diebold-Mariano tests at 1–12 months, plus quantile forecast intervals (80% / 95% coverage, pinball loss) with and without GARCH; see [`reports/`](reports/).
-- **Multivariate (VAR / VECM):** lag selection and the Johansen cointegration test are done on the training split; no cointegration was found, so the system is a VAR on the first differences. VAR(5) and a rank-1 VECM(5) are estimated, stable and pass the residual checks; Granger causality, impulse responses and the variance decomposition show a one-way link, from total assets to the monetary base. Both systems are evaluated with the same harness, on validation and once on test, including a Diebold-Mariano comparison against the selected SARIMA: joint modelling doesn't beat univariate modelling for either series.
+- **Multivariate (VAR / VECM):** lag selection and the Johansen cointegration test are done on the training split; no cointegration was found, so the system is a VAR on the first differences. VAR(5) and a rank-1 VECM(5) are estimated, stable and pass the residual checks; Granger causality, impulse responses and the variance decomposition show a one-way link, from total assets to the monetary base. Both systems are evaluated with the same harness, on validation and once on test, including a Diebold-Mariano comparison against the selected SARIMA: joint modelling doesn't beat univariate modelling for either series. SARIMAX (the selected SARIMA plus 1, 3 or 5 lagged monthly changes of the other series, chosen on validation) gives the same answer: no gain over SARIMA on test.
 - **Smoothing baselines and a combination:** moving averages (3, 6, 12 months), single, double (Holt, plain and damped) and triple (Holt-Winters) exponential smoothing, and a 50 / 50 average of SARIMA and the naive forecast, all through the same harness. On test, damped Holt is the best total-assets model so far, significantly better than naive and SARIMA at every horizon.
 - **Machine learning and neural networks:** models on lag features (gradient boosting, regularized regression), on lookback windows (MLP, N-BEATS, DLinear), and recurrent networks (LSTM, GRU), evaluated on the same chronological 60 / 20 / 20 split.
 
@@ -30,11 +30,11 @@ make residuals                    # Ljung-Box / Breusch-Godfrey on the selected 
 make volatility                   # ARCH-LM and a variance-break check on those models -> reports/
 make garch                        # GARCH(1,1) vs constant variance on those models, bootstrap checks (~3 min) -> reports/
 make asymmetric-garch             # EGARCH and GJR-GARCH vs that GARCH, bootstrap checks (~12 min) -> reports/
-make evaluate                     # rolling-origin forecasts of every model on validation and test (~5 min)
+make evaluate                     # rolling-origin forecasts of every model on validation and test (~12 min)
 make var                          # VAR lag order and Johansen cointegration test -> reports/
 make var-checks                   # fit VAR / VECM candidates; stability and Portmanteau checks -> reports/
 make var-analysis                 # Granger causality, impulse responses, variance decomposition -> reports/
-make all                          # every step above, in order (~18 min)
+make all                          # every step above, in order (~25 min)
 
 make test                         # unit tests
 make lint                         # check style and lint with ruff (changes nothing)
