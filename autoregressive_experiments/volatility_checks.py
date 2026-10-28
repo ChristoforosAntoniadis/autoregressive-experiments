@@ -39,6 +39,7 @@ from autoregressive_experiments.config import (
     PROCESSED_DATA_DIR,
     REPORTS_DIR,
 )
+from autoregressive_experiments.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.diagnostics import (
     CANDIDATES_PATH,
     SIGNIFICANCE_LEVEL,
@@ -61,12 +62,13 @@ from autoregressive_experiments.residual_checks import (
 
 app = typer.Typer()
 
-# Lags (months) for the reported ARCH-LM tests: last month, half a year, one year.
-ARCH_TEST_LAGS = (1, 6, 12)
-# Lags shown in the figure's ARCH-LM panel (every lag 1..12).
-PLOT_LAGS = 12
-# Each regime keeps at least this share of the months, so neither variance rests on a few points.
-BREAK_TRIM = 0.15
+# Settings; each value's justification is in configs/hyperparameters.json.
+# Lags (months) for the reported ARCH-LM tests.
+ARCH_TEST_LAGS = HYPERPARAMETERS.volatility_checks.arch_test_lags
+# Lags shown in the figure's ARCH-LM panel (every lag from 1).
+PLOT_LAGS = HYPERPARAMETERS.volatility_checks.plot_lags
+# Each regime keeps at least this share of the months.
+BREAK_TRIM = HYPERPARAMETERS.volatility_checks.break_trim
 
 # Verdict key -> the sentence explaining it in the report. Decided in volatility_check().
 VERDICTS = {

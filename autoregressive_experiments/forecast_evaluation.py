@@ -82,6 +82,7 @@ from autoregressive_experiments.config import (
     PROCESSED_DATA_DIR,
     REPORTS_DIR,
 )
+from autoregressive_experiments.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.diagnostics import (
     CANDIDATES_PATH,
     SEASONAL_PERIOD,
@@ -103,13 +104,14 @@ from autoregressive_experiments.residual_checks import (
     model_label,
 )
 from autoregressive_experiments.var_analysis import CARRIED_LAGS
-from autoregressive_experiments.var_models import VECM_RANK
+from autoregressive_experiments.var_models import VAR_LAGS, VECM_RANK
 from autoregressive_experiments.volatility_models import garch_variance_path
 
 app = typer.Typer()
 
+# Settings; each value's justification is in configs/hyperparameters.json.
 # Forecast horizons that are scored, in months ahead; every model forecasts up to the longest.
-HORIZONS = (1, 3, 6, 12)
+HORIZONS = HYPERPARAMETERS.forecast_evaluation.horizons
 MAX_HORIZON = max(HORIZONS)
 METRICS = ("MAE", "MSE", "RMSE", "MAPE", "MASE")
 # Diebold-Mariano statistic and p-value per loss, against naive; the DM_SARIMA_* twins hold the
@@ -122,35 +124,31 @@ BASELINES = (NAIVE, "drift", "seasonal naive")
 SYSTEMS = (f"VAR({CARRIED_LAGS})", f"VECM({CARRIED_LAGS})")
 # The standard normal's 97.5% quantile (about 1.96): a normal 95% interval is mean +- this x SD.
 NORMAL_95 = stats.norm.ppf(0.975)
-# Smoothing baselines (the user's request, 2026-10-26): simple moving averages of the last k
-# levels, and exponential smoothing via statsmodels' holtwinters.ExponentialSmoothing.
-MOVING_AVERAGE_WINDOWS = (3, 6, 12)
-# Model name -> keyword arguments for ExponentialSmoothing; no trend or season means single.
+# Smoothing baselines: simple moving averages of the last k levels, and exponential smoothing
+# via statsmodels' holtwinters.ExponentialSmoothing.
+MOVING_AVERAGE_WINDOWS = HYPERPARAMETERS.forecast_evaluation.moving_average_windows
+# Model name -> keyword arguments for ExponentialSmoothing; no trend or season means single. A
+# seasonal model gets the project's season length, so it isn't configured twice.
 EXPONENTIAL_SMOOTHING: dict[str, dict[str, Any]] = {
-    "single exp. smoothing": {},
-    "double exp. smoothing (Holt)": {"trend": "add"},
-    "double exp. smoothing, damped": {"trend": "add", "damped_trend": True},
-    "triple exp. smoothing (Holt-Winters)": {
-        "trend": "add",
-        "seasonal": "add",
-        "seasonal_periods": SEASONAL_PERIOD,
-    },
+    name: dict(options) | ({"seasonal_periods": SEASONAL_PERIOD} if "seasonal" in options else {})
+    for name, options in HYPERPARAMETERS.forecast_evaluation.exponential_smoothing.items()
 }
 SMOOTHING = (*(f"SMA({window})" for window in MOVING_AVERAGE_WINDOWS), *EXPONENTIAL_SMOOTHING)
-# A 50 / 50 average of the selected SARIMA and naive forecasts.
+# A weighted average of the selected SARIMA and naive forecasts; COMBINATION_WEIGHT is the
+# SARIMA's share.
 COMBINATION = "SARIMA + naive average"
-# SARIMAX (the user's request, 2026-10-28): the series' selected SARIMA plus the other series'
-# lagged monthly changes as regressors. The candidate lag counts are the VAR orders of earlier
-# steps, so no new number is introduced: 1 (BIC, step V2), 3 (AIC and HQIC, V2) and 5 (the first
-# order whose residuals passed, V6). Validation picks one per series.
-SARIMAX_LAGS = (1, 3, 5)
+COMBINATION_WEIGHT = HYPERPARAMETERS.forecast_evaluation.combination_weight
+# SARIMAX: the series' selected SARIMA plus the other series' lagged monthly changes as
+# regressors. The candidate lag counts are the VAR candidates' orders, so no new number is
+# introduced; validation picks one per series.
+SARIMAX_LAGS = VAR_LAGS
 SARIMAX_NAMES = {
     lags: f"SARIMAX ({lags} exog lag{'' if lags == 1 else 's'})" for lags in SARIMAX_LAGS
 }
 SPLITS = ("validation", "test")
 # Ordered low to high: interval_scores unpacks them as 95% low, 80% low, median, 80% high,
 # 95% high.
-QUANTILES = (0.025, 0.1, 0.5, 0.9, 0.975)
+QUANTILES = HYPERPARAMETERS.forecast_evaluation.quantiles
 # Interval variants: constant variance, U5b's GARCH, and U5c's EGARCH and GJR-GARCH.
 VARIANCES = ("constant", "garch", "egarch", "gjr")
 VARIANCE_NAMES = {
@@ -387,8 +385,8 @@ def exponential_smoothing_forecaster(settings: dict[str, Any]) -> Forecaster:
 
 def combine_forecasts(forecasts: pd.DataFrame, first: str, second: str, name: str) -> pd.DataFrame:
     """
-    Rows for `name`: the equal-weight average of two models' forecasts, same origin and
-    horizon. Point forecasts only; no intervals.
+    Rows for `name`: the weighted average of two models' forecasts (COMBINATION_WEIGHT on
+    the first), same origin and horizon. Point forecasts only; no intervals.
 
     Parameters
     ----------
@@ -416,7 +414,8 @@ def combine_forecasts(forecasts: pd.DataFrame, first: str, second: str, name: st
     1. Keep each model's rows and the key columns plus "forecast".
     2. Inner-join them on origin, horizon, target and actual, so the two forecasts in a row
        are for the same month made at the same origin.
-    3. Average the two forecasts.
+    3. Average the two forecasts, COMBINATION_WEIGHT on the first and the rest on the
+       second.
 
     Built from forecasts already made, so the combination adds no refits and can't see more
     data than its two parts did.
@@ -427,7 +426,10 @@ def combine_forecasts(forecasts: pd.DataFrame, first: str, second: str, name: st
         on=keys,
         suffixes=("_first", "_second"),
     )
-    average = (pair["forecast_first"] + pair["forecast_second"]) / 2
+    average = (
+        COMBINATION_WEIGHT * pair["forecast_first"]
+        + (1 - COMBINATION_WEIGHT) * pair["forecast_second"]
+    )
     return pair[keys].assign(model=name, forecast=average)
 
 

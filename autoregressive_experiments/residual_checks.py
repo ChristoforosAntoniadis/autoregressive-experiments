@@ -32,6 +32,7 @@ from autoregressive_experiments.config import (
     PROCESSED_DATA_DIR,
     REPORTS_DIR,
 )
+from autoregressive_experiments.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.diagnostics import (
     CANDIDATES_PATH,
     SEASONAL_PERIOD,
@@ -45,12 +46,13 @@ from autoregressive_experiments.features import DATE_COLUMN, split_boundaries, s
 
 app = typer.Typer()
 
-# Lags (months) at which both tests are reported: half a year, one year and two years.
-TEST_LAGS = (6, 12, 24)
-# Burnham & Anderson: a model within 2 AIC of the best still has substantial support.
-AIC_TIE_MARGIN = 2.0
-# Lags shown in the figure's ACF and Ljung-Box panels (two years of monthly data).
-PLOT_LAGS = 24
+# Settings; each value's justification is in configs/hyperparameters.json.
+# Lags (months) at which both tests are reported.
+TEST_LAGS = HYPERPARAMETERS.residual_checks.test_lags
+# A runner-up within this many AIC points of the best is checked too.
+AIC_TIE_MARGIN = HYPERPARAMETERS.residual_checks.aic_tie_margin
+# Lags shown in the figure's ACF and Ljung-Box panels.
+PLOT_LAGS = HYPERPARAMETERS.residual_checks.plot_lags
 
 REPORT_PATH = REPORTS_DIR / "residual_diagnostics.txt"
 FIGURE_PATH = FIGURES_DIR / "residual_diagnostics.png"

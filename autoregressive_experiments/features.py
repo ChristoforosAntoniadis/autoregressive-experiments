@@ -24,16 +24,18 @@ from autoregressive_experiments.config import (
     PROCESSED_DATA_DIR,
     RAW_DATA_DIR,
 )
+from autoregressive_experiments.config_loader import HYPERPARAMETERS
 
 app = typer.Typer()
 
 # The month-end date column and the two series the project models, in trillions USD.
 DATE_COLUMN = "date"
 VALUE_COLUMNS = ["fed_total_assets_T", "monetary_base_T"]
-# Whole percentages rather than fractions (0.6), so split_boundaries can use exact integer
-# arithmetic. Test takes the remaining 100 - 60 - 20 = 20%.
-TRAIN_PERCENT = 60
-VALIDATION_PERCENT = 20
+# Settings; each value's justification is in configs/hyperparameters.json.
+# Whole percentages rather than fractions, so split_boundaries can use exact integer
+# arithmetic. Test takes the rest.
+TRAIN_PERCENT = HYPERPARAMETERS.split.train_percent
+VALIDATION_PERCENT = HYPERPARAMETERS.split.validation_percent
 
 
 def read_dataset(input_path: Path = RAW_DATA_DIR) -> pd.DataFrame:

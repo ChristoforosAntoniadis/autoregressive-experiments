@@ -42,6 +42,7 @@ from autoregressive_experiments.config import (
     PROCESSED_DATA_DIR,
     REPORTS_DIR,
 )
+from autoregressive_experiments.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.diagnostics import (
     CANDIDATES_PATH,
     SIGNIFICANCE_LEVEL,
@@ -94,23 +95,19 @@ ASYMMETRIC_MODELS: dict[str, dict[str, Any]] = {
     EGARCH_T: {"vol": "EGARCH", "p": 1, "o": 1, "q": 1, "dist": "t"},
     GJR_T: {"vol": "GARCH", "p": 1, "o": 1, "q": 1, "dist": "t"},
 }
-# EGARCH has no closed-form multi-step variance forecast, so it is simulated; a fixed seed makes
-# every rerun give identical numbers.
-SIMULATIONS = 2000
-SIMULATION_SEED = 0
-# Parametric bootstrap of the standardized-residual checks (Davison & Hinkley 1997, ch. 4).
-# The textbook chi-squared p-values don't hold for residuals standardized by a fitted variance
-# model (Li & Mak 1994), and no fixed degrees-of-freedom correction is right for every
-# parameter set, so each model's own simulations give the null distribution. 999 replications
-# make the 5% test exact (0.05 x (999 + 1) = 50 simulated statistics in the tail), with a Monte
-# Carlo standard error of sqrt(0.05 x 0.95 / 999) = 0.007 at p = 0.05.
-BOOTSTRAP_REPLICATIONS = 999
-# Fixed so every rerun gives identical p-values; the value itself carries no meaning.
-BOOTSTRAP_SEED = 0
+# Settings; each value's justification is in configs/hyperparameters.json.
+# EGARCH has no closed-form multi-step variance forecast, so it is simulated, with a fixed
+# seed so every rerun gives identical numbers.
+SIMULATIONS = HYPERPARAMETERS.volatility_models.simulations
+SIMULATION_SEED = HYPERPARAMETERS.volatility_models.simulation_seed
+# Parametric bootstrap of the standardized-residual checks (Davison & Hinkley 1997, ch. 4): the
+# chi-squared tables don't hold for residuals standardized by a fitted variance model (Li & Mak
+# 1994), so each model's own simulations give the null distribution.
+BOOTSTRAP_REPLICATIONS = HYPERPARAMETERS.volatility_models.bootstrap_replications
+BOOTSTRAP_SEED = HYPERPARAMETERS.volatility_models.bootstrap_seed
 # Months simulated and dropped before each bootstrap series, so it starts from the model's
-# stationary distribution, not arch's starting value: a shock's effect shrinks by the
-# persistence each month, and 0.95^500 < 1e-11 for every persistence fitted here (all < 0.95).
-BURN_IN = 500
+# stationary distribution, not arch's starting value.
+BURN_IN = HYPERPARAMETERS.volatility_models.burn_in
 BOOTSTRAP_NOTE = (
     f"p-values by parametric bootstrap: {BOOTSTRAP_REPLICATIONS} series simulated from the "
     "fitted variance model and re-estimated the same way (break search included); "

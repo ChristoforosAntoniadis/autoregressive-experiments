@@ -43,6 +43,7 @@ from autoregressive_experiments.config import (
     PROCESSED_DATA_DIR,
     REPORTS_DIR,
 )
+from autoregressive_experiments.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.diagnostics import SIGNIFICANCE_LEVEL, VALUE_COLUMNS, repo_path
 from autoregressive_experiments.features import DATE_COLUMN, split_boundaries, split_by_time
 from autoregressive_experiments.residual_checks import (
@@ -58,13 +59,14 @@ from autoregressive_experiments.var_models import VECM_RANK
 
 app = typer.Typer()
 
-# The lag order carried forward from step V6 (the user's decision).
-CARRIED_LAGS = 5
-# Impulse responses and variance shares run 24 months after the shock.
-HORIZON = 24
-REPORT_HORIZONS = (1, 6, 12, 24)
-# Standard-normal 97.5% quantile: value +- 1.96 standard errors is a 95% band.
-BAND_Z = 1.96
+# Settings; each value's justification is in configs/hyperparameters.json.
+# The lag order carried forward from step V6.
+CARRIED_LAGS = HYPERPARAMETERS.var_analysis.carried_lags
+# Months the impulse responses and variance shares run after the shock, and those reported.
+HORIZON = HYPERPARAMETERS.var_analysis.horizon
+REPORT_HORIZONS = HYPERPARAMETERS.var_analysis.report_horizons
+# Normal quantile of the 95% bands: value +- BAND_Z standard errors.
+BAND_Z = HYPERPARAMETERS.var_analysis.band_z
 
 REPORT_PATH = REPORTS_DIR / "var_analysis.txt"
 FIGURE_PATH = FIGURES_DIR / "var_analysis.png"

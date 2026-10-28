@@ -1,0 +1,195 @@
+{
+  "split": {
+    "train_percent": {
+      "value": 60,
+      "justification": "The project's rule for every model: 60 / 20 / 20 train / validation / test, in time order, never shuffled. Whole percentages, so the split boundaries use exact integer arithmetic."
+    },
+    "validation_percent": {
+      "value": 20,
+      "justification": "Same rule: validation selects models; test takes the remaining 20% and is run once per model family."
+    }
+  },
+  "tests": {
+    "significance_level": {
+      "value": 0.05,
+      "justification": "The conventional 5% level, used by every test and confidence band so verdicts are comparable across steps. Johansen's critical-value tables exist only at 10%, 5% and 1%."
+    }
+  },
+  "diagnostics": {
+    "max_acf_lags": {
+      "value": 36,
+      "justification": "Three years of monthly lags, so the seasonal lags 12, 24 and 36 all show in the ACF / PACF (step U2)."
+    },
+    "max_order_sum": {
+      "value": 5,
+      "justification": "The project's grid rule (2026-10-23): every (p, q) with p + d + q <= 5, a total-complexity budget that covers pure AR, pure MA and mixed models alike."
+    },
+    "differencing_order": {
+      "value": 1,
+      "justification": "ADF and KPSS agree on train (step U1): both series are I(1), and one difference makes them stationary. Applied by fitting on the first differences."
+    },
+    "seasonal_ar_orders": {
+      "value": [0, 1],
+      "justification": "No seasonal term or one: the training split holds about 14 years, so a second seasonal coefficient would rest on very few cycles. No seasonal differencing, since one regular difference already gives stationarity."
+    },
+    "seasonal_ma_orders": {
+      "value": [0, 1],
+      "justification": "As for the seasonal AR orders: none or one seasonal MA term."
+    },
+    "seasonal_period": {
+      "value": 12,
+      "justification": "Monthly data: the seasonal cycle is one year."
+    },
+    "max_iterations": {
+      "value": 200,
+      "justification": "Four times statsmodels' default of 50, so slow but sound likelihood fits finish. Fits that still don't converge are counted and reported, never hidden."
+    },
+    "adf_autolag": {
+      "value": "AIC",
+      "justification": "statsmodels' default: the ADF lag length chosen by AIC (Said and Dickey 1984), so leftover serial correlation doesn't distort the test."
+    },
+    "kpss_nlags": {
+      "value": "auto",
+      "justification": "The data-dependent bandwidth of Hobijn, Franses and Ooms (1998), statsmodels' recommended setting for the KPSS long-run variance."
+    },
+    "pacf_method": {
+      "value": "ywm",
+      "justification": "Yule-Walker with MLE scaling: its PACF never exceeds 1 in size, and it is what statsmodels' PACF plots use, so the report's table matches the figure."
+    }
+  },
+  "residual_checks": {
+    "test_lags": {
+      "value": [6, 12, 24],
+      "justification": "Half a year, one year and two years: short-run, seasonal and longer autocorrelation left in the SARIMA residuals (step U4)."
+    },
+    "aic_tie_margin": {
+      "value": 2.0,
+      "justification": "Burnham and Anderson (2002): a model within 2 AIC of the best still has substantial support, so the runner-up is checked too."
+    },
+    "plot_lags": {
+      "value": 24,
+      "justification": "Display only: two years of lags in the ACF and Ljung-Box panels, up to the longest test lag."
+    }
+  },
+  "volatility_checks": {
+    "arch_test_lags": {
+      "value": [1, 6, 12],
+      "justification": "Last month, half a year and one year: short-lived and persistent volatility clustering (step U5)."
+    },
+    "plot_lags": {
+      "value": 12,
+      "justification": "Display only: every ARCH-LM lag up to the longest test lag, one year."
+    },
+    "break_trim": {
+      "value": 0.15,
+      "justification": "Andrews (1993): the standard 15% trimming when searching for a break at an unknown date, so neither regime's variance rests on a few months."
+    }
+  },
+  "volatility_models": {
+    "simulations": {
+      "value": 2000,
+      "justification": "EGARCH's multi-step variance has no closed form and is simulated. A variance estimated from 2,000 draws has a relative Monte Carlo error of about sqrt(2 / 2000) = 3% (normal shocks), small next to the forecast spread itself."
+    },
+    "simulation_seed": {
+      "value": 0,
+      "justification": "Fixed so every rerun gives identical numbers; the value itself carries no meaning."
+    },
+    "bootstrap_replications": {
+      "value": 999,
+      "justification": "Davison and Hinkley (1997, ch. 4): with 999 replications 0.05 x (999 + 1) = 50 simulated statistics lie in the tail, so the 5% test is exact, and the Monte Carlo error at p = 0.05 is sqrt(0.05 x 0.95 / 999) = 0.007."
+    },
+    "bootstrap_seed": {
+      "value": 0,
+      "justification": "Fixed so every rerun gives identical p-values; the value itself carries no meaning."
+    },
+    "burn_in": {
+      "value": 500,
+      "justification": "Months simulated and dropped before each bootstrap series, so it starts from the model's stationary distribution: a shock's effect shrinks by the persistence each month, and 0.95^500 < 1e-11 for every persistence fitted here (all below 0.95)."
+    }
+  },
+  "var_diagnostics": {
+    "max_lags": {
+      "value": 10,
+      "justification": "VAR lag orders 0..10 tried (step V2): at 10 lags each equation has 20 lag coefficients plus a constant, from 156 usable training months, about 7 observations per coefficient."
+    },
+    "criteria": {
+      "value": ["aic", "bic", "hqic"],
+      "justification": "The three standard criteria (Lütkepohl 2005): AIC targets forecast accuracy; BIC and HQIC pick the true order as the sample grows."
+    },
+    "primary_criterion": {
+      "value": "bic",
+      "justification": "BIC drives the Johansen decision: it is consistent (picks the true order as the sample grows), which suits a question about the model's structure."
+    },
+    "johansen_deterministic": {
+      "value": 0,
+      "justification": "det_order = 0: a constant in the error-correction model, so the levels may drift, as both series trend up."
+    }
+  },
+  "var_models": {
+    "var_lags": {
+      "value": [1, 3, 5],
+      "justification": "1 (BIC) and 3 (AIC, HQIC) from step V2, and 5: the smallest order whose residuals pass the Portmanteau test (step V6), added by the rule to raise the lag order when residuals are autocorrelated. Also the SARIMAX lag candidates."
+    },
+    "test_lags": {
+      "value": [6, 12, 24],
+      "justification": "Half a year, one year and two years, as in the univariate residual checks (step U4)."
+    },
+    "plot_lags": {
+      "value": 24,
+      "justification": "Display only: the Portmanteau p-value at every lag the model allows, up to the longest test lag."
+    },
+    "vecm_rank": {
+      "value": 1,
+      "justification": "The user's choice (2026-10-25): rank 1 even though Johansen found rank 0, so forecast accuracy, not the test alone, decides whether a long-run link helps. With two series, 1 is the only VECM rank."
+    },
+    "unit_root_tolerance": {
+      "value": 1e-6,
+      "justification": "An estimated unit root lands within numerical precision of 1, never exactly on it; 1e-6 is far below the distance of any genuine root here (the nearest, VECM(5)'s second root, is 0.952)."
+    }
+  },
+  "var_analysis": {
+    "carried_lags": {
+      "value": 5,
+      "justification": "The user's decision (2026-10-25, step V6): the smallest order whose residuals pass, for both VAR and VECM."
+    },
+    "horizon": {
+      "value": 24,
+      "justification": "Two years after the shock: long enough for the responses to settle (they do within about 8 months)."
+    },
+    "report_horizons": {
+      "value": [1, 6, 12, 24],
+      "justification": "The impact month, half a year, one year and the end of the response window."
+    },
+    "band_z": {
+      "value": 1.96,
+      "justification": "The standard normal's 97.5% quantile, rounded as usual: value +- 1.96 standard errors is a 95% band, matching the 5% significance level."
+    }
+  },
+  "forecast_evaluation": {
+    "horizons": {
+      "value": [1, 3, 6, 12],
+      "justification": "One month, a quarter, half a year and a year: from the next month to the annual horizon, the standard steps for monthly macro forecasts."
+    },
+    "quantiles": {
+      "value": [0.025, 0.1, 0.5, 0.9, 0.975],
+      "justification": "The median and the ends of the 80% and 95% central intervals, the two interval levels most used in forecast evaluation; coverage, width and pinball loss are scored on them."
+    },
+    "moving_average_windows": {
+      "value": [3, 6, 12],
+      "justification": "The user's choice (2026-10-26): a quarter, half a year and a year."
+    },
+    "exponential_smoothing": {
+      "value": {
+        "single exp. smoothing": {},
+        "double exp. smoothing (Holt)": {"trend": "add"},
+        "double exp. smoothing, damped": {"trend": "add", "damped_trend": true},
+        "triple exp. smoothing (Holt-Winters)": {"trend": "add", "seasonal": "add"}
+      },
+      "justification": "The user's request (2026-10-26): single, double (Holt) and triple (Holt-Winters) exponential smoothing via statsmodels, plus damped Holt (the user's choice after an explanation). Additive trend and season, since the series' monthly changes, not their ratios, are what the other models describe; the season length is the seasonal period."
+    },
+    "combination_weight": {
+      "value": 0.5,
+      "justification": "Equal weights for the selected SARIMA and naive: estimated combination weights rarely beat equal ones out of sample (Clemen 1989; Smith and Wallis 2009, the 'forecast combination puzzle')."
+    }
+  }
+}

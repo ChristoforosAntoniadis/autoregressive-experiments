@@ -33,6 +33,11 @@ MODELS_DIR = PROJ_ROOT / "models"
 REPORTS_DIR = PROJ_ROOT / "reports"
 FIGURES_DIR = REPORTS_DIR / "figures"
 
+# configs/: every setting's value and justification, read by config_loader (as in
+# neural-network-numpy, outside the package).
+CONFIGS_DIR = PROJ_ROOT / "configs"
+HYPERPARAMETERS_PATH = CONFIGS_DIR / "hyperparameters.json"
+
 # Route log messages through tqdm.write, so they print above an active progress bar instead of
 # breaking it. Handler 0 is loguru's default stderr handler, replaced here. Without tqdm
 # installed, loguru's default handler is kept.

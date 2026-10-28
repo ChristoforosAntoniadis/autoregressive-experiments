@@ -35,6 +35,7 @@ from autoregressive_experiments.config import (
     PROJ_ROOT,
     REPORTS_DIR,
 )
+from autoregressive_experiments.config_loader import HYPERPARAMETERS
 
 # VALUE_COLUMNS (the two series) is defined once, in features; the other analysis modules
 # import it from here.
@@ -47,21 +48,25 @@ from autoregressive_experiments.features import (
 
 app = typer.Typer()
 
-# 5%: the level for every test and confidence band in the project.
-SIGNIFICANCE_LEVEL = 0.05
-# Three years of monthly lags, so the seasonal lags 12, 24 and 36 all show in the ACF / PACF.
-MAX_LAGS = 36
-# Every non-seasonal order with p + d + q <= MAX_ORDER_SUM. d = 1 comes from the stationarity
-# tests (both series are I(1)) and is applied by fitting on the first differences.
-MAX_ORDER_SUM = 5
-DIFFERENCING_ORDER = 1
-# Seasonal AR (P) and MA (Q) orders tried. No seasonal differencing (D = 0): one regular
-# difference already makes both series stationary.
-SEASONAL_AR_ORDERS = (0, 1)
-SEASONAL_MA_ORDERS = (0, 1)
-SEASONAL_PERIOD = 12
+# Settings; each value's justification is in configs/hyperparameters.json.
+# The level for every test and confidence band in the project.
+SIGNIFICANCE_LEVEL = HYPERPARAMETERS.tests.significance_level
+# Lags shown in the ACF / PACF analysis.
+MAX_LAGS = HYPERPARAMETERS.diagnostics.max_acf_lags
+# Every non-seasonal order with p + d + q <= MAX_ORDER_SUM; d is applied by fitting on the
+# first differences.
+MAX_ORDER_SUM = HYPERPARAMETERS.diagnostics.max_order_sum
+DIFFERENCING_ORDER = HYPERPARAMETERS.diagnostics.differencing_order
+# Seasonal AR (P) and MA (Q) orders tried; no seasonal differencing (D = 0).
+SEASONAL_AR_ORDERS = HYPERPARAMETERS.diagnostics.seasonal_ar_orders
+SEASONAL_MA_ORDERS = HYPERPARAMETERS.diagnostics.seasonal_ma_orders
+SEASONAL_PERIOD = HYPERPARAMETERS.diagnostics.seasonal_period
 # The optimizer's iteration cap per fit; a fit that hits it is recorded as not converged.
-MAX_ITERATIONS = 200
+MAX_ITERATIONS = HYPERPARAMETERS.diagnostics.max_iterations
+# How the stationarity tests pick their lag length / bandwidth, and the PACF estimator.
+ADF_AUTOLAG = HYPERPARAMETERS.diagnostics.adf_autolag
+KPSS_NLAGS = HYPERPARAMETERS.diagnostics.kpss_nlags
+PACF_METHOD = HYPERPARAMETERS.diagnostics.pacf_method
 
 ACF_PACF_FIGURE_PATH = FIGURES_DIR / "fed_balance_sheet_acf_pacf.png"
 CANDIDATES_PATH = REPORTS_DIR / "information_criteria_candidates.csv"
@@ -297,8 +302,10 @@ def stationarity_report(
         values = series(dataframe, column)
         # result_object=True: named fields (statistic, pvalue, lags, critical_values) instead of
         # plain tuples, which statsmodels 0.16 drops.
-        adf_result = adfuller(values, regression=regression, autolag="AIC", result_object=True)
-        kpss_result = kpss(values, regression=regression, nlags="auto", result_object=True)
+        adf_result = adfuller(
+            values, regression=regression, autolag=ADF_AUTOLAG, result_object=True
+        )
+        kpss_result = kpss(values, regression=regression, nlags=KPSS_NLAGS, result_object=True)
         report_lines.extend(
             [
                 f"{column} (observations: {len(values)})",
@@ -380,7 +387,7 @@ def acf_pacf_report(dataframe: pd.DataFrame) -> tuple[str, Figure]:
         )
         acf_values, acf_intervals = acf_result.acf, acf_result.confint
         pacf_values, pacf_intervals = pacf(
-            values, nlags=lag_count, alpha=SIGNIFICANCE_LEVEL, method="ywm"
+            values, nlags=lag_count, alpha=SIGNIFICANCE_LEVEL, method=PACF_METHOD
         )
 
         plot_acf(

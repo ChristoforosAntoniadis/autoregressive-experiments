@@ -41,6 +41,7 @@ from autoregressive_experiments.config import (
     PROCESSED_DATA_DIR,
     REPORTS_DIR,
 )
+from autoregressive_experiments.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.diagnostics import SIGNIFICANCE_LEVEL, VALUE_COLUMNS, repo_path
 from autoregressive_experiments.features import DATE_COLUMN, split_boundaries, split_by_time
 from autoregressive_experiments.residual_checks import (
@@ -55,17 +56,16 @@ from autoregressive_experiments.residual_checks import (
 
 app = typer.Typer()
 
-# Lag orders tried in V2: 0..10 months. At 10 lags each equation has 20 lag coefficients plus
-# the constant, estimated from 156 usable training months.
-MAX_VAR_LAGS = 10
-CRITERIA = ("aic", "bic", "hqic")
-# BIC drives the Johansen decision: it's consistent (picks the true order as the sample grows),
-# which suits a question about the model's structure; AIC targets forecast accuracy instead.
-PRIMARY_CRITERION = "bic"
+# Settings; each value's justification is in configs/hyperparameters.json.
+# Lag orders tried in V2: 0..MAX_VAR_LAGS months.
+MAX_VAR_LAGS = HYPERPARAMETERS.var_diagnostics.max_lags
+CRITERIA = HYPERPARAMETERS.var_diagnostics.criteria
+# The criterion whose lag choice drives the Johansen decision.
+PRIMARY_CRITERION = HYPERPARAMETERS.var_diagnostics.primary_criterion
 # coint_johansen's critical-value columns are the 90%, 95% and 99% levels.
 CRITICAL_COLUMN = {0.10: 0, 0.05: 1, 0.01: 2}[SIGNIFICANCE_LEVEL]
-# det_order=0: a constant in the error-correction model, so the levels may drift (both trend up).
-JOHANSEN_DETERMINISTIC = 0
+# coint_johansen's det_order (0: a constant in the error-correction model).
+JOHANSEN_DETERMINISTIC = HYPERPARAMETERS.var_diagnostics.johansen_deterministic
 
 REPORT_PATH = REPORTS_DIR / "var_diagnostics.txt"
 FIGURE_PATH = FIGURES_DIR / "var_diagnostics.png"

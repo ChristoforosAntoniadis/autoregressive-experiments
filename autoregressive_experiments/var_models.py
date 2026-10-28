@@ -47,6 +47,7 @@ from autoregressive_experiments.config import (
     PROCESSED_DATA_DIR,
     REPORTS_DIR,
 )
+from autoregressive_experiments.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.diagnostics import SIGNIFICANCE_LEVEL, VALUE_COLUMNS, repo_path
 from autoregressive_experiments.features import DATE_COLUMN, split_boundaries, split_by_time
 from autoregressive_experiments.residual_checks import (
@@ -60,18 +61,17 @@ from autoregressive_experiments.residual_checks import (
 
 app = typer.Typer()
 
-# 1 (BIC) and 3 (AIC, HQIC) from step V2, and 5: the smallest order whose residuals pass V6,
-# added by the roadmap's rule (autocorrelated residuals: raise the lag order).
-VAR_LAGS = (1, 3, 5)
-# Portmanteau lags that decide the verdict: half a year, a year, two years.
-TEST_LAGS = (6, 12, 24)
+# Settings; each value's justification is in configs/hyperparameters.json.
+# Lag orders of the VAR / VECM candidates.
+VAR_LAGS = HYPERPARAMETERS.var_models.var_lags
+# Portmanteau lags that decide the verdict.
+TEST_LAGS = HYPERPARAMETERS.var_models.test_lags
 # The figure shows the Portmanteau p-value at every lag the model allows, up to this one.
-PLOT_LAGS = 24
-# Rank 1 even though Johansen found rank 0 (step V3): the user's choice, so that forecast
-# accuracy, not the test alone, decides whether a long-run link helps.
-VECM_RANK = 1
-# A unit root estimated from data lands within a hair of 1, never exactly on it.
-UNIT_ROOT_TOLERANCE = 1e-6
+PLOT_LAGS = HYPERPARAMETERS.var_models.plot_lags
+# Cointegration rank of the VECM candidates.
+VECM_RANK = HYPERPARAMETERS.var_models.vecm_rank
+# How close to 1 a root's modulus must be to count as a unit root.
+UNIT_ROOT_TOLERANCE = HYPERPARAMETERS.var_models.unit_root_tolerance
 
 REPORT_PATH = REPORTS_DIR / "var_models.txt"
 FIGURE_PATH = FIGURES_DIR / "var_models.png"
