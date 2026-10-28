@@ -19,6 +19,8 @@ dependencies = [
     "arch==8.0.0",
     # Already installed with statsmodels; pinned because the Diebold-Mariano test imports it.
     "scipy==1.18.1",
+    # The lag-feature ML family: Ridge, Lasso, random forest, histogram gradient boosting.
+    "scikit-learn==1.9.1",
     "kagglehub==1.0.3",
     "loguru==0.7.3",
     "typer==0.27.3",
@@ -37,6 +39,10 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["autoregressive_experiments*"]
+
+[tool.setuptools.package-data]
+# The settings file travels with the package, beside the code that reads it.
+autoregressive_experiments = ["configs/*.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

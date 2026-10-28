@@ -55,6 +55,7 @@ from autoregressive_experiments.residual_checks import (
     model_label,
     model_name,
 )
+from autoregressive_experiments.runlog import begin_phase, finish_run, start_run_log
 from autoregressive_experiments.volatility_checks import ARCH_TEST_LAGS
 from autoregressive_experiments.volatility_models import (
     BOOTSTRAP_NOTE,
@@ -110,7 +111,9 @@ def persistence(family: str, params: pd.Series) -> float:
 
 
 def asymmetric_check(
-    residuals: np.ndarray | pd.Series, replications: int = BOOTSTRAP_REPLICATIONS
+    residuals: np.ndarray | pd.Series,
+    replications: int = BOOTSTRAP_REPLICATIONS,
+    label: str = "",
 ) -> dict[str, Any]:
     """
     Fit EGARCH and GJR-GARCH and compare them with U5b's chosen GARCH variant.
@@ -125,6 +128,8 @@ def asymmetric_check(
     replications : int, default=BOOTSTRAP_REPLICATIONS
         Bootstrap replications for the checks; 0 skips the checks and verdicts, for the
         forecast evaluation, which only needs each family's chosen variant.
+    label : str, default=""
+        Names the model in the progress lines, e.g. "monetary_base_T SARIMA(0,1,1)".
 
     Returns
     -------
@@ -192,7 +197,7 @@ def asymmetric_check(
         }
         if not replications:
             continue
-        checks = bootstrap_checks(versions[chosen], chosen, replications)
+        checks = bootstrap_checks(versions[chosen], chosen, replications, label)
         clean = not (
             np.concatenate([checks["arch_p"], checks["squared_ljung_box_p"]]) < SIGNIFICANCE_LEVEL
         ).any()
@@ -369,11 +374,18 @@ def main(
         Writes REPORT_PATH and FIGURE_PATH, and prints the report. Only the models that
         passed the residual checks (U4) are examined.
     """
+    start_run_log("asymmetric-garch")
+    begin_phase("EGARCH / GJR fits and bootstrap checks (U5c)")
     # The training frame isn't needed: this report doesn't print dates.
     checked, _ = checked_models(levels_path, differences_path, candidates_path)
     # Each result keeps its U4 fields (series, orders, residuals) and gains the U5c ones.
     results = [
-        {**result, **asymmetric_check(result["residuals"])}
+        {
+            **result,
+            **asymmetric_check(
+                result["residuals"], label=f"{model_name(result)} {model_label(result)}"
+            ),
+        }
         for result in checked
         if result["passed"]
     ]
@@ -387,6 +399,7 @@ def main(
     # Free the figure's memory; it is already saved.
     plt.close(figure)
     logger.success(f"Asymmetric GARCH checks written to {REPORT_PATH} and {FIGURE_PATH}")
+    finish_run()
 
 
 # Running this file directly runs the typer CLI (main).

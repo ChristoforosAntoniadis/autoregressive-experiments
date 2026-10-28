@@ -32,7 +32,7 @@ from autoregressive_experiments.config import (
     PROCESSED_DATA_DIR,
     REPORTS_DIR,
 )
-from autoregressive_experiments.config_loader import HYPERPARAMETERS
+from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.diagnostics import (
     CANDIDATES_PATH,
     SEASONAL_PERIOD,
@@ -43,6 +43,7 @@ from autoregressive_experiments.diagnostics import (
     series,
 )
 from autoregressive_experiments.features import DATE_COLUMN, split_boundaries, split_by_time
+from autoregressive_experiments.runlog import begin_phase, finish_run, start_run_log
 
 app = typer.Typer()
 
@@ -664,6 +665,8 @@ def main(
     None
         Writes REPORT_PATH and FIGURE_PATH, and prints the report.
     """
+    start_run_log("residuals")
+    begin_phase("Residual checks of the recommended SARIMAs (U4)")
     results, train = checked_models(levels_path, differences_path, candidates_path)
 
     report = residual_report(results, train)
@@ -675,6 +678,7 @@ def main(
     # Free the figure's memory; it is already saved.
     plt.close(figure)
     logger.success(f"Residual checks written to {REPORT_PATH} and {FIGURE_PATH}")
+    finish_run()
 
 
 # Running this file directly runs the typer CLI (main).

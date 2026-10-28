@@ -10,12 +10,14 @@ series).
 
 Also provides the chronological 60 / 20 / 20 train / validation / test split that every
 analysis and model uses. Its boundaries are dates taken from the cleaned levels, so the
-levels and the first differences are always cut at the same months.
+levels and the first differences are always cut at the same months. And lagged_exog, the lag
+matrix of a series' monthly changes that SARIMAX and the lag-feature ML models use.
 """
 
 from pathlib import Path
 
 from loguru import logger
+import numpy as np
 import pandas as pd
 import typer
 
@@ -24,7 +26,8 @@ from autoregressive_experiments.config import (
     PROCESSED_DATA_DIR,
     RAW_DATA_DIR,
 )
-from autoregressive_experiments.config_loader import HYPERPARAMETERS
+from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
+from autoregressive_experiments.runlog import begin_phase, finish_run, start_run_log
 
 app = typer.Typer()
 
@@ -254,6 +257,36 @@ def split_by_time(
     return {name: dataframe[mask].reset_index(drop=True) for name, mask in masks.items()}
 
 
+def lagged_exog(changes: np.ndarray, lags: int) -> np.ndarray:
+    """
+    The lag matrix of a series of monthly changes: row i holds the `lags` changes before month
+    i + lags, most recent first.
+
+    Parameters
+    ----------
+    changes : np.ndarray
+        Monthly changes, shape (n,), trillions, oldest first.
+    lags : int
+        How many past changes each row holds.
+
+    Returns
+    -------
+    np.ndarray
+        Shape (n - lags, lags): row i is changes[i + lags - 1], changes[i + lags - 2], ...,
+        changes[i], the regressors for month i + lags.
+
+    Notes
+    -----
+    Months without a full set of earlier changes (the first `lags`) get no row, rather than
+    zeros standing in for unknown values; the SARIMAX fit drops the same first months of its
+    own series. A row never holds its own month's change, so a forecast never needs the other
+    series' value for the month being forecast (that would be leakage).
+    """
+    return np.column_stack(
+        [changes[lags - lag : len(changes) - lag] for lag in range(1, lags + 1)]
+    )
+
+
 @app.command()
 def main(
     input_path: Path = RAW_DATA_DIR,
@@ -289,6 +322,8 @@ def main(
     real datetime type (the raw ones are text), and the differences are computed from exactly
     what the later steps read from disk.
     """
+    start_run_log("features")
+    begin_phase("Clean the data and take first differences")
     df_clean = diagnose_dataset("Fed balance sheet dataset", read_dataset(input_path))
     print("\nFirst few rows of the dataset:")
     print(df_clean.head())
@@ -302,6 +337,8 @@ def main(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     differences.to_csv(output_path, index=False, date_format="%Y-%m-%d")
     logger.success(f"First-difference dataset saved to {output_path}")
+
+    finish_run()
 
 
 if __name__ == "__main__":

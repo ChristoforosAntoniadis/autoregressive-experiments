@@ -35,7 +35,7 @@ from autoregressive_experiments.config import (
     PROJ_ROOT,
     REPORTS_DIR,
 )
-from autoregressive_experiments.config_loader import HYPERPARAMETERS
+from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
 
 # VALUE_COLUMNS (the two series) is defined once, in features; the other analysis modules
 # import it from here.
@@ -44,6 +44,12 @@ from autoregressive_experiments.features import (
     VALUE_COLUMNS,
     split_boundaries,
     split_by_time,
+)
+from autoregressive_experiments.runlog import (
+    Progress,
+    begin_phase,
+    finish_run,
+    start_run_log,
 )
 
 app = typer.Typer()
@@ -562,8 +568,10 @@ def information_criteria(dataframe: pd.DataFrame) -> tuple[pd.DataFrame, str]:
                 f"seasonal model selection; {column} has {len(values)}."
             )
 
-        for p, q, seasonal_p, seasonal_q in candidate_orders:
+        progress = Progress(f"SARIMA GRID | {column}", len(candidate_orders))
+        for done, (p, q, seasonal_p, seasonal_q) in enumerate(candidate_orders, start=1):
             fitted_model = fit_sarima(values, p, q, seasonal_p, seasonal_q)
+            progress.step(done, f"({p},{DIFFERENCING_ORDER},{q})x({seasonal_p},0,{seasonal_q})")
 
             # Includes the constant and sigma2, which AICc's k must count.
             parameter_count = len(fitted_model.params)
@@ -676,6 +684,8 @@ def main(
     month. The boundaries come from the levels for both inputs, so the differences are cut
     at the same months (train has 167 levels and 166 differences).
     """
+    start_run_log("diagnostics")
+    begin_phase("Stationarity, ACF / PACF and the SARIMA grid (U1-U3)")
     for path in (levels_path, differences_path):
         if not path.is_file():
             raise FileNotFoundError(f"{path} not found. Generate it with make features.")
@@ -713,6 +723,8 @@ def main(
     print(report)
 
     logger.success(f"Diagnostics written to {REPORTS_DIR}")
+
+    finish_run()
 
 
 if __name__ == "__main__":

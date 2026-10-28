@@ -2,22 +2,27 @@
 Definitions of every configurable setting: one frozen dataclass per analysis step, listing the
 settings it accepts, their types and the rule each value must satisfy.
 
-The values themselves live in ``configs/hyperparameters.json``, each with its justification;
-``config_loader`` reads that file, checks it against these definitions and builds the objects
-the modules import. Names, paths, colours, labels, model identities (such as GARCH(1,1) or a VAR
-on the differences, which the code's formulas assume) and the evaluation's fixed rules (such as
-selecting on one-month MASE) are code, not settings, and stay in their modules.
+The values themselves live in ``hyperparameters.json`` beside this file, each with its
+justification; ``config_loader`` reads that file, checks it against these definitions and
+builds the objects the modules import. Names, paths, colours, labels, model identities (such as
+GARCH(1,1) or a VAR on the differences, which the code's formulas assume) and the evaluation's
+fixed rules (such as selecting on one-month MASE) are code, not settings, and stay in their
+modules.
 
 Input: none.
 
-Output: the dataclasses; nothing is read or written.
+Output: the dataclasses and the config file's path; nothing is read or written.
 """
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from itertools import pairwise
+from pathlib import Path
 from typing import Any
 
+# This module's folder; hyperparameters.json sits beside it.
+CONFIG_DIR = Path(__file__).resolve().parent
+HYPERPARAMETERS_PATH = CONFIG_DIR / "hyperparameters.json"
 # Keyword arguments ExponentialSmoothing may receive from the config; seasonal_periods is
 # added by the code from the seasonal period, so it isn't configured twice.
 SMOOTHING_OPTIONS = frozenset({"trend", "damped_trend", "seasonal"})
@@ -372,6 +377,51 @@ class ForecastEvaluationSettings:
 
 
 @dataclass(frozen=True)
+class MlSettings:
+    """
+    The lag-feature ML family (ml_forecasting.py): Ridge, Lasso, random forest and histogram
+    gradient boosting on the last k monthly changes of both series.
+
+    Attributes
+    ----------
+    cv_folds : int
+        Time-ordered cross-validation folds that choose the Ridge / Lasso penalty in each
+        origin's training window.
+    penalty_span : float
+        Ratio of the smallest to the largest positive penalty tried (Lasso: of the one that
+        zeroes every coefficient; Ridge: the grid runs from penalty_span x n to
+        n / penalty_span). A penalty of zero (plain least squares) is always tried too.
+    penalty_points : int
+        Penalties tried, log-spaced.
+    forest_trees : int
+        Trees in the random forest.
+    boosting_holdout_share : float
+        Share of each training window, at its end, that decides when boosting stops.
+    boosting_max_iterations : int
+        Cap on boosting iterations; early stopping picks fewer.
+    boosting_patience : int
+        Early stopping ends after this many trees without improvement on the holdout.
+    boosting_tolerance : float
+        The least holdout-loss improvement that counts.
+    boosting_learning_rate : float
+        Boosting's shrinkage per tree.
+    random_seed : int
+        Seed of the forest and the boosting.
+    """
+
+    cv_folds: int = setting(lambda v: v >= 2, "at least 2")
+    penalty_span: float = setting(lambda v: 0 < v < 1, "between 0 and 1")
+    penalty_points: int = setting(lambda v: v >= 2, "at least 2")
+    forest_trees: int = setting(lambda v: v >= 1, "at least 1")
+    boosting_holdout_share: float = setting(lambda v: 0 < v < 1, "between 0 and 1")
+    boosting_max_iterations: int = setting(lambda v: v >= 1, "at least 1")
+    boosting_patience: int = setting(lambda v: v >= 1, "at least 1")
+    boosting_tolerance: float = setting(lambda v: v >= 0, "at least 0")
+    boosting_learning_rate: float = setting(lambda v: 0 < v <= 1, "above 0, at most 1")
+    random_seed: int = setting(lambda v: v >= 0, "at least 0")
+
+
+@dataclass(frozen=True)
 class Hyperparameters:
     """
     Every configurable setting of the project, one section per analysis step.
@@ -379,7 +429,7 @@ class Hyperparameters:
     Attributes
     ----------
     split, tests, diagnostics, residual_checks, volatility_checks, volatility_models,
-    var_diagnostics, var_models, var_analysis, forecast_evaluation
+    var_diagnostics, var_models, var_analysis, forecast_evaluation, ml
         The sections, in pipeline order; see each class.
     """
 
@@ -393,3 +443,4 @@ class Hyperparameters:
     var_models: VarModelSettings
     var_analysis: VarAnalysisSettings
     forecast_evaluation: ForecastEvaluationSettings
+    ml: MlSettings

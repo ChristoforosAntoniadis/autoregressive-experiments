@@ -41,7 +41,7 @@ from autoregressive_experiments.config import (
     PROCESSED_DATA_DIR,
     REPORTS_DIR,
 )
-from autoregressive_experiments.config_loader import HYPERPARAMETERS
+from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.diagnostics import SIGNIFICANCE_LEVEL, VALUE_COLUMNS, repo_path
 from autoregressive_experiments.features import DATE_COLUMN, split_boundaries, split_by_time
 from autoregressive_experiments.residual_checks import (
@@ -53,6 +53,7 @@ from autoregressive_experiments.residual_checks import (
     SURFACE,
     apply_chart_style,
 )
+from autoregressive_experiments.runlog import begin_phase, finish_run, start_run_log
 
 app = typer.Typer()
 
@@ -526,6 +527,8 @@ def main(
     3. V3: run Johansen on the levels once per distinct selected lag order.
     4. Write and print the report; draw the figure for BIC's lag order.
     """
+    start_run_log("var")
+    begin_phase("VAR lag order and Johansen (V2-V3)")
     for path in (levels_path, differences_path):
         if not path.is_file():
             raise FileNotFoundError(f"{path} not found. Generate it with make features.")
@@ -557,6 +560,7 @@ def main(
     figure.savefig(FIGURE_PATH, dpi=150, facecolor=SURFACE)
     plt.close(figure)
     logger.success(f"VAR diagnostics written to {REPORT_PATH} and {FIGURE_PATH}")
+    finish_run()
 
 
 if __name__ == "__main__":

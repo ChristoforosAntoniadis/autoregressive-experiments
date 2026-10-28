@@ -11,9 +11,8 @@ from typing import Any
 
 import pytest
 
-from autoregressive_experiments.config import HYPERPARAMETERS_PATH
-from autoregressive_experiments.config_loader import ConfigLoader, convert
-from autoregressive_experiments.configurables import Hyperparameters
+from autoregressive_experiments.configs.config_loader import ConfigLoader, convert
+from autoregressive_experiments.configs.configurables import HYPERPARAMETERS_PATH, Hyperparameters
 
 
 def write_config(tmp_path: Path, change: Any) -> Path:

@@ -42,7 +42,7 @@ from autoregressive_experiments.config import (
     PROCESSED_DATA_DIR,
     REPORTS_DIR,
 )
-from autoregressive_experiments.config_loader import HYPERPARAMETERS
+from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.diagnostics import (
     CANDIDATES_PATH,
     SIGNIFICANCE_LEVEL,
@@ -60,6 +60,7 @@ from autoregressive_experiments.residual_checks import (
     model_label,
     model_name,
 )
+from autoregressive_experiments.runlog import Progress, begin_phase, finish_run, start_run_log
 from autoregressive_experiments.volatility_checks import (
     ADJUSTED_COLOR,
     ARCH_TEST_LAGS,
@@ -516,7 +517,10 @@ def simulate_residuals(
 
 
 def bootstrap_checks(
-    candidate: dict[str, Any], name: str, replications: int = BOOTSTRAP_REPLICATIONS
+    candidate: dict[str, Any],
+    name: str,
+    replications: int = BOOTSTRAP_REPLICATIONS,
+    label: str = "",
 ) -> dict[str, Any]:
     """
     Bootstrap p-values of the ARCH-LM and Ljung-Box-on-squares checks for one fitted model.
@@ -529,6 +533,8 @@ def bootstrap_checks(
         The model's name (fit_candidate() and variance_spec() accept it).
     replications : int, default=BOOTSTRAP_REPLICATIONS
         Simulated series; tests use fewer to stay fast.
+    label : str, default=""
+        Names the model in the progress lines, e.g. "monetary_base_T SARIMA(0,1,1)".
 
     Returns
     -------
@@ -560,10 +566,12 @@ def bootstrap_checks(
     observed = check_statistics(np.asarray(candidate["fit"].std_resid))
     simulated = np.empty((replications, observed.size))
     failed = 0
+    progress = Progress(" | ".join(filter(None, ["BOOTSTRAP", label, name])), replications)
     for row in range(replications):
         refit = fit_candidate(simulate_residuals(candidate, name, generator), name)
         failed += int(refit["fit"].convergence_flag != 0)
         simulated[row] = check_statistics(np.asarray(refit["fit"].std_resid))
+        progress.step(row + 1, f"{failed} re-estimations not converged")
     p_values = bootstrap_p_values(observed, simulated)
     return {
         "arch_p_curve": p_values[:PLOT_LAGS],
@@ -575,7 +583,9 @@ def bootstrap_checks(
 
 
 def garch_check(
-    residuals: np.ndarray | pd.Series, replications: int = BOOTSTRAP_REPLICATIONS
+    residuals: np.ndarray | pd.Series,
+    replications: int = BOOTSTRAP_REPLICATIONS,
+    label: str = "",
 ) -> dict[str, Any]:
     """
     Choose a variance model by BIC and check whether GARCH captured the clustering.
@@ -587,6 +597,8 @@ def garch_check(
     replications : int, default=BOOTSTRAP_REPLICATIONS
         Bootstrap replications for the checks; 0 skips the checks and the verdict, for
         callers that only need the BIC choice (the forecast evaluation, U5c's reference).
+    label : str, default=""
+        Names the model in the progress lines, e.g. "monetary_base_T SARIMA(0,1,1)".
 
     Returns
     -------
@@ -648,7 +660,7 @@ def garch_check(
     }
     if not replications:
         return result
-    checks = bootstrap_checks(candidates[garch_name], garch_name, replications)
+    checks = bootstrap_checks(candidates[garch_name], garch_name, replications, label)
     clustering_left = (
         np.concatenate([checks["arch_p"], checks["squared_ljung_box_p"]]) < SIGNIFICANCE_LEVEL
     ).any()
@@ -868,10 +880,19 @@ def main(
         Writes REPORT_PATH and FIGURE_PATH, and prints the report. Only the models that
         passed the residual checks (U4) are examined.
     """
+    start_run_log("garch")
+    begin_phase("GARCH fits and bootstrap checks (U5b)")
     checked, train = checked_models(levels_path, differences_path, candidates_path)
     # Each result keeps its U4 fields (series, orders, residuals) and gains the U5b ones.
     results = [
-        {**result, **garch_check(result["residuals"])} for result in checked if result["passed"]
+        {
+            **result,
+            **garch_check(
+                result["residuals"], label=f"{model_name(result)} {model_label(result)}"
+            ),
+        }
+        for result in checked
+        if result["passed"]
     ]
 
     report = garch_report(results, train)
@@ -883,6 +904,7 @@ def main(
     # Free the figure's memory; it is already saved.
     plt.close(figure)
     logger.success(f"GARCH checks written to {REPORT_PATH} and {FIGURE_PATH}")
+    finish_run()
 
 
 # Running this file directly runs the typer CLI (main).

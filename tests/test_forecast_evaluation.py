@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from autoregressive_experiments.features import lagged_exog
 from autoregressive_experiments.forecast_evaluation import (
     EXPONENTIAL_SMOOTHING,
     SYSTEMS,
@@ -17,7 +18,6 @@ from autoregressive_experiments.forecast_evaluation import (
     drift_forecast,
     exponential_smoothing_forecaster,
     interval_scores,
-    lagged_exog,
     level_variances,
     mase_scale,
     moving_average_forecaster,

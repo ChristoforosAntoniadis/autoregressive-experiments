@@ -12,7 +12,7 @@ Rolling origin with an expanding window, on validation and then on test: at ever
 end of the previous split onwards, each model is refitted on all data up to that month and
 forecasts up to 12 months ahead; only forecasts whose target falls inside the split are scored.
 Each monthly origin is one fold (56 per split). Model orders come from the training split and the
-selected model per series and family (SARIMA, system, smoothing, SARIMAX) from validation
+selected model per series and family (SARIMA, system, smoothing, ML, SARIMAX) from validation
 (lowest one-month MASE); test is run once, with all models, and nothing changes after it. Errors
 are measured on the levels (trillions), so MAPE stays well defined: the levels are always
 positive, while the differences cross zero.
@@ -25,7 +25,9 @@ Smoothing baselines: simple moving averages of the last 3, 6 and 12 levels, and 
 combination: the equal-weight average of the selected SARIMA and naive. SARIMAX: the selected
 SARIMA plus the other series' last 1, 3 or 5 monthly changes as regressors; for forecast months
 whose regressors aren't known yet, the other series' own selected-SARIMA forecasts stand in.
-Smoothing, the combination and SARIMAX give point forecasts only.
+Lag-feature ML (ml_forecasting): Ridge, Lasso, random forest and gradient boosting on the
+last 1, 3 or 5 monthly changes of both series, forecasting recursively. Smoothing, the
+combination, SARIMAX and ML give point forecasts only.
 
 Point accuracy per split, series, model and horizon: MAE, MSE, RMSE (trillions, trillions
 squared), MAPE (%) and MASE (MAE divided by the training split's in-sample MAE of the one-month
@@ -54,6 +56,8 @@ Output, in ``reports/``:
 - ``figures/forecast_evaluation.png``: per series, each family's selected model's MAE relative to
   naive by horizon on validation and on test, and the actual path against the selected SARIMA's,
   the best other family's and the naive one-month forecasts
+- ``figures/ml_evaluation.png``: per series and split, each ML model's best lag count (chosen
+  on validation) against naive, the selected SARIMA and the selected smoothing model
 - ``figures/forecast_intervals.png``: per series and split, the selected SARIMA's 80% and 95%
   interval coverage by horizon, with constant variance, GARCH, EGARCH and GJR-GARCH, against the
   targets
@@ -82,7 +86,7 @@ from autoregressive_experiments.config import (
     PROCESSED_DATA_DIR,
     REPORTS_DIR,
 )
-from autoregressive_experiments.config_loader import HYPERPARAMETERS
+from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.diagnostics import (
     CANDIDATES_PATH,
     SEASONAL_PERIOD,
@@ -91,7 +95,13 @@ from autoregressive_experiments.diagnostics import (
     fit_sarima,
     repo_path,
 )
-from autoregressive_experiments.features import DATE_COLUMN, split_boundaries, split_by_time
+from autoregressive_experiments.features import (
+    DATE_COLUMN,
+    lagged_exog,
+    split_boundaries,
+    split_by_time,
+)
+from autoregressive_experiments.ml_forecasting import ML_MODELS, ML_NAMES, ml_forecaster
 from autoregressive_experiments.residual_checks import (
     BASELINE,
     MUTED_INK,
@@ -102,6 +112,12 @@ from autoregressive_experiments.residual_checks import (
     apply_chart_style,
     checked_models,
     model_label,
+)
+from autoregressive_experiments.runlog import (
+    Progress,
+    begin_phase,
+    finish_run,
+    start_run_log,
 )
 from autoregressive_experiments.var_analysis import CARRIED_LAGS
 from autoregressive_experiments.var_models import VAR_LAGS, VECM_RANK
@@ -163,6 +179,7 @@ METRICS_PATH = REPORTS_DIR / "forecast_metrics.csv"
 INTERVALS_PATH = REPORTS_DIR / "forecast_intervals.csv"
 FIGURE_PATH = FIGURES_DIR / "forecast_evaluation.png"
 INTERVALS_FIGURE_PATH = FIGURES_DIR / "forecast_intervals.png"
+ML_FIGURE_PATH = FIGURES_DIR / "ml_evaluation.png"
 
 # Reference palette: baselines are ink and greys; slots 3-4's below-3:1 contrast is backed by
 # the legends and the report's tables.
@@ -724,36 +741,6 @@ def system_forecaster(
     return forecast
 
 
-def lagged_exog(changes: np.ndarray, lags: int) -> np.ndarray:
-    """
-    The lag matrix of a series of monthly changes: row i holds the `lags` changes before month
-    i + lags, most recent first.
-
-    Parameters
-    ----------
-    changes : np.ndarray
-        Monthly changes, shape (n,), trillions, oldest first.
-    lags : int
-        How many past changes each row holds.
-
-    Returns
-    -------
-    np.ndarray
-        Shape (n - lags, lags): row i is changes[i + lags - 1], changes[i + lags - 2], ...,
-        changes[i], the regressors for month i + lags.
-
-    Notes
-    -----
-    Months without a full set of earlier changes (the first `lags`) get no row, rather than
-    zeros standing in for unknown values; the SARIMAX fit drops the same first months of its
-    own series. A row never holds its own month's change, so a forecast never needs the other
-    series' value for the month being forecast (that would be leakage).
-    """
-    return np.column_stack(
-        [changes[lags - lag : len(changes) - lag] for lag in range(1, lags + 1)]
-    )
-
-
 def sarimax_forecaster(
     model: dict[str, Any],
     other_model: dict[str, Any],
@@ -870,6 +857,7 @@ def rolling_forecasts(
     first_origin: int,
     last_target: int,
     forecasters: dict[str, Forecaster],
+    label: str = "",
 ) -> pd.DataFrame:
     """
     Forecast from every origin in [first_origin, last_target) using only levels up to it,
@@ -888,6 +876,8 @@ def rolling_forecasts(
         Position of the split's last month; no forecast targets a month after it.
     forecasters : dict of str to Forecaster
         Model name -> forecaster.
+    label : str, default=""
+        Names the run in the progress lines, e.g. "validation | total assets".
 
     Returns
     -------
@@ -909,7 +899,11 @@ def rolling_forecasts(
     longer horizons have fewer forecasts.
     """
     rows = []
-    for origin in range(first_origin, last_target):
+    progress = Progress(
+        " | ".join(filter(None, [label, f"{len(forecasters)} models", "origin"])),
+        last_target - first_origin,
+    )
+    for done, origin in enumerate(range(first_origin, last_target), start=1):
         history = levels[: origin + 1]
         steps = min(MAX_HORIZON, last_target - origin)
         for name, forecaster in forecasters.items():
@@ -926,6 +920,7 @@ def rolling_forecasts(
                 for key, value in output.items():
                     row[key] = value[horizon - 1] if np.ndim(value) else value
                 rows.append(row)
+        progress.step(done, f"{dates.iloc[origin]:%Y-%m}")
     return pd.DataFrame(rows)
 
 
@@ -1497,8 +1492,8 @@ def evaluation_report(
             "Rolling origin, expanding window: each model is refitted at every monthly origin on "
             f"all data up to it (data start {periods['start']}); each origin is one fold. "
             "Orders come from training; the selected model per series and family (SARIMA, "
-            "system, smoothing, SARIMAX) from validation (lowest one-month MASE), fixed before "
-            "test. "
+            "system, smoothing, ML, SARIMAX) from validation (lowest one-month MASE), fixed "
+            "before test. "
             "Each family's test is run once, with all its models."
         ),
         (
@@ -1523,6 +1518,15 @@ def evaluation_report(
             "months whose regressors aren't known yet use the other series' own selected-SARIMA "
             "forecasts from the same origin. Point forecasts only: the intervals would treat "
             "those planned regressors as known."
+        ),
+        (
+            "Lag-feature ML: Ridge and Lasso (standardized features, penalty by time-ordered "
+            "cross-validation in each window), random forest and histogram gradient boosting "
+            "(trees chosen on the window's last quarter, in time order), each predicting next "
+            "month's change of one series from the last "
+            f"{', '.join(map(str, SARIMAX_LAGS))} changes of both series, refitted at every "
+            "origin and forecasting recursively. Point forecasts only. Settings and their "
+            "justifications: autoregressive_experiments/configs/hyperparameters.json."
         ),
         (
             "Point errors are on the levels: MAE, RMSE in trillions; MSE in trillions squared; "
@@ -1842,6 +1846,100 @@ def intervals_figure(intervals: pd.DataFrame, selected: dict[str, str]) -> Figur
     return figure
 
 
+def ml_figure(metrics: pd.DataFrame, selected_by_family: dict[str, dict[str, str]]) -> Figure:
+    """
+    One row per series, one column per split: each ML model's MAE relative to naive by horizon,
+    against the selected SARIMA and the selected smoothing model.
+
+    Parameters
+    ----------
+    metrics : pd.DataFrame
+        Every model's metrics, both splits, with "MASE" and "DM_absolute_p".
+    selected_by_family : dict of str to dict of str to str
+        Family -> series -> model selected on validation; uses "SARIMA" and "smoothing".
+
+    Returns
+    -------
+    Figure
+        A figure with one row per series and one column per split. The caller saves and
+        closes it.
+
+    Notes
+    -----
+    Processing, per series:
+    1. For each ML model type, pick its lag count on validation (lowest one-month MASE, the
+       harness's rule), so the lines show what each model type can do without looking at test.
+    2. Per split, draw each pick's MASE divided by naive's at the same horizon, with the
+       selected SARIMA and the selected smoothing model for comparison.
+    3. Filled points are significantly different from naive (DM, absolute loss, 5%).
+
+    Palette slots 1-4 go to the four ML model types and slot 5 to SARIMA; the smoothing model
+    is drawn in the baseline grey, as a reference.
+    """
+    apply_chart_style()
+    figure, axes = plt.subplots(
+        len(VALUE_COLUMNS),
+        2,
+        figsize=(15, 5.4 * len(VALUE_COLUMNS)),
+        squeeze=False,
+        facecolor=SURFACE,
+    )
+    for row, column in enumerate(VALUE_COLUMNS):
+        validation = metrics[
+            (metrics["series"] == column)
+            & (metrics["split"] == "validation")
+            & (metrics["horizon"] == 1)
+        ].set_index("model")["MASE"]
+        picks = {
+            model: min(
+                (name for (kind, _), name in ML_NAMES.items() if kind == model),
+                key=lambda name: validation[name],
+            )
+            for model in ML_MODELS
+        }
+        styles = {name: (color, 2.0) for name, color in zip(picks.values(), SERIES_PALETTE)}
+        styles[selected_by_family["SARIMA"][column]] = (SERIES_PALETTE[4], 2.0)
+        styles[selected_by_family["smoothing"][column]] = (MUTED_INK, 1.5)
+        for split, axis in zip(SPLITS, axes[row]):
+            axis.set_facecolor(SURFACE)
+            split_metrics = metrics[(metrics["series"] == column) & (metrics["split"] == split)]
+            naive_mase = split_metrics[split_metrics["model"] == NAIVE].set_index("horizon")[
+                "MASE"
+            ]
+            for name, (color, width) in styles.items():
+                model_metrics = split_metrics[split_metrics["model"] == name].set_index("horizon")
+                relative = model_metrics["MASE"] / naive_mase
+                axis.plot(relative.index, relative, color=color, linewidth=width, label=name)
+                # Filled: significantly different from naive (DM, absolute loss); hollow: not.
+                significant = model_metrics["DM_absolute_p"] < SIGNIFICANCE_LEVEL
+                for filled, face in ((significant, color), (~significant, SURFACE)):
+                    axis.scatter(
+                        relative.index[filled],
+                        relative[filled],
+                        s=36,
+                        color=face,
+                        edgecolors=color,
+                        linewidths=1.5,
+                        zorder=3,
+                    )
+            axis.axhline(1, color=PRIMARY_INK, linewidth=2, label=NAIVE)
+            axis.set_xticks(HORIZONS)
+            axis.set_xlabel("Horizon (months)")
+            axis.set_ylabel("MAE relative to naive")
+            axis.set_title(
+                f"{series_title(column)}, {split}: each ML model (lags chosen on validation)\n"
+                "vs the selected SARIMA and smoothing model; below 1: more accurate than naive\n"
+                "filled point: significantly different from naive (Diebold-Mariano, 5%)",
+                loc="left",
+                fontsize=10,
+            )
+            axis.legend(
+                loc="upper center", bbox_to_anchor=(0.5, -0.17), ncols=2, fontsize=8, frameon=False
+            )
+    figure.tight_layout()
+    return figure
+
+
 @app.command()
 def main(
     levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv",
@@ -1882,18 +1980,20 @@ def main(
        last month, the test origins at validation's last month.
     4. Compute each series' MASE scale on train.
     5. For each split and series, run every forecaster (SARIMAs, systems, baselines,
-       smoothing) from every origin, and score the point forecasts, DM against naive, the
-       intervals and the failed refits.
+       smoothing, lag-feature ML) from every origin, and score the point forecasts, DM
+       against naive, the intervals and the failed refits.
     6. Select each family's model per series on validation (lowest one-month MASE).
     7. Add the SARIMA + naive average from the forecasts already made, and score it.
     8. Run the SARIMAX candidates (built on the selected SARIMAs) from the same origins, score
        them with DM against naive, and select one per series on validation.
     9. Test every non-SARIMA model against the series' selected SARIMA with DM.
-    10. Write the CSVs, the report and both figures.
+    10. Write the CSVs, the report and the three figures.
 
     Selection uses validation only, and the test rows are scored by the same code, so the
     test numbers can't influence any choice.
     """
+    start_run_log("evaluate")
+    begin_phase("Fit and check the SARIMA models; choose their volatility variants")
     checked, _ = checked_models(levels_path, differences_path, candidates_path)
     passed = [result for result in checked if result["passed"]]
     # Each model's volatility variants, chosen on the training residuals: U5b's GARCH (final,
@@ -1932,10 +2032,13 @@ def main(
     all_levels = levels[list(VALUE_COLUMNS)].to_numpy(dtype=float)
     # One fit per system and origin, shared by both series' forecasters.
     system_fits: dict[tuple[str, int, int], tuple[np.ndarray, np.ndarray]] = {}
+    # One fit per ML model, lag count and origin, shared the same way.
+    ml_fits: dict[tuple[str, int, int, int], dict[str, np.ndarray]] = {}
     # Split -> model -> origins whose refit failed.
     failures: dict[str, dict[str, list[str]]]
     all_forecasts, all_metrics, all_intervals, failures = [], [], [], {}
     for split, (first_origin, last_target) in windows.items():
+        begin_phase(f"{split.capitalize()}: SARIMA, systems, baselines, smoothing and ML")
         failures[split] = {}
         for target, column in enumerate(VALUE_COLUMNS):
             values = levels[column].to_numpy(dtype=float)
@@ -1960,8 +2063,18 @@ def main(
                 name: exponential_smoothing_forecaster(settings)
                 for name, settings in EXPONENTIAL_SMOOTHING.items()
             }
-            logger.info(f"{split}, {column}: rolling forecasts for {len(forecasters)} models")
-            forecasts = rolling_forecasts(dates, values, first_origin, last_target, forecasters)
+            forecasters |= {
+                name: ml_forecaster(model, lags, all_levels, target, ml_fits)
+                for (model, lags), name in ML_NAMES.items()
+            }
+            forecasts = rolling_forecasts(
+                dates,
+                values,
+                first_origin,
+                last_target,
+                forecasters,
+                f"{split} | {series_title(column)}",
+            )
             labels = {"split": split, "series": column}
             all_forecasts.append(forecasts.assign(**labels))
             all_metrics.append(
@@ -1983,9 +2096,10 @@ def main(
     model = validation_one_month["model"]
     # SARIMA is whatever isn't a baseline, system or smoothing model: the labels vary by order.
     families = {
-        "SARIMA": ~model.isin([*BASELINES, *SYSTEMS, *SMOOTHING]),
+        "SARIMA": ~model.isin([*BASELINES, *SYSTEMS, *SMOOTHING, *ML_NAMES.values()]),
         "system": model.isin(SYSTEMS),
         "smoothing": model.isin(SMOOTHING),
+        "ML": model.isin(ML_NAMES.values()),
     }
     selected_by_family: dict[str, dict[str, str]] = {
         family: {
@@ -2021,6 +2135,7 @@ def main(
     plans: dict[tuple[int, int, int], np.ndarray] = {}
     sarimax_rows = []
     for split, (first_origin, last_target) in windows.items():
+        begin_phase(f"{split.capitalize()}: SARIMAX")
         for target, column in enumerate(VALUE_COLUMNS):
             other_column = VALUE_COLUMNS[1 - target]
             sarimax_forecasters = {
@@ -2034,9 +2149,15 @@ def main(
                 )
                 for lags, name in SARIMAX_NAMES.items()
             }
-            logger.info(f"{split}, {column}: rolling forecasts for the SARIMAX candidates")
             values = levels[column].to_numpy(dtype=float)
-            rows = rolling_forecasts(dates, values, first_origin, last_target, sarimax_forecasters)
+            rows = rolling_forecasts(
+                dates,
+                values,
+                first_origin,
+                last_target,
+                sarimax_forecasters,
+                f"SARIMAX | {split} | {series_title(column)}",
+            )
             labels = {"split": split, "series": column}
             sarimax_rows.append(rows.assign(**labels))
             # dm_against needs the reference (naive) next to the new rows.
@@ -2070,8 +2191,9 @@ def main(
         column: group.sort_values("MASE")["model"].iloc[0]
         for column, group in sarimax_one_month.groupby("series")
     }
+    begin_phase("DM tests against SARIMA, report and figures")
     # Does any other approach beat univariate SARIMA? Each one against the selected SARIMA.
-    others = [*SYSTEMS, *SMOOTHING, COMBINATION, *SARIMAX_NAMES.values()]
+    others = [*SYSTEMS, *SMOOTHING, COMBINATION, *SARIMAX_NAMES.values(), *ML_NAMES.values()]
     against_sarima = [
         dm_against(
             group[group["model"].isin([*others, selected[column]])],
@@ -2098,17 +2220,34 @@ def main(
         for split in SPLITS
     }
     report = evaluation_report(results, periods, scales, selected_by_family)
+    # The boosting cap must never bind: early stopping, not the cap, should end training.
+    trees = forecasts["trees"].max()
+    cap = HYPERPARAMETERS.ml.boosting_max_iterations
+    report += (
+        f"\nGradient boosting: at most {trees:.0f} trees chosen at any origin; the cap of {cap} "
+        + (
+            "was never reached.\n"
+            if trees < cap
+            else "WAS REACHED: the cap, not early stopping, ended training.\n"
+        )
+    )
     REPORT_PATH.write_text(report, encoding="utf-8")
     print(report)
 
     test_start = dates.iloc[validation_end + 1]
-    figure = evaluation_figure(metrics, forecasts, selected_by_family, test_start)
+    # The main figure keeps the families it has colours for; ML gets its own figure.
+    main_families = {f: picks for f, picks in selected_by_family.items() if f in FAMILY_COLORS}
+    figure = evaluation_figure(metrics, forecasts, main_families, test_start)
     figure.savefig(FIGURE_PATH, dpi=150, facecolor=SURFACE)
     plt.close(figure)
     figure = intervals_figure(intervals, selected)
     figure.savefig(INTERVALS_FIGURE_PATH, dpi=150, facecolor=SURFACE)
     plt.close(figure)
+    figure = ml_figure(metrics, selected_by_family)
+    figure.savefig(ML_FIGURE_PATH, dpi=150, facecolor=SURFACE)
+    plt.close(figure)
     logger.success(f"Forecast evaluation written to {REPORT_PATH} and {FIGURES_DIR}")
+    finish_run()
 
 
 if __name__ == "__main__":

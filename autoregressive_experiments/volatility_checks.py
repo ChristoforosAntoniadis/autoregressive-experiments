@@ -39,7 +39,7 @@ from autoregressive_experiments.config import (
     PROCESSED_DATA_DIR,
     REPORTS_DIR,
 )
-from autoregressive_experiments.config_loader import HYPERPARAMETERS
+from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.diagnostics import (
     CANDIDATES_PATH,
     SIGNIFICANCE_LEVEL,
@@ -59,6 +59,7 @@ from autoregressive_experiments.residual_checks import (
     model_label,
     model_name,
 )
+from autoregressive_experiments.runlog import begin_phase, finish_run, start_run_log
 
 app = typer.Typer()
 
@@ -476,6 +477,8 @@ def main(
         Writes REPORT_PATH and FIGURE_PATH, and prints the report. Only the models that
         passed the residual checks (U4) are examined.
     """
+    start_run_log("volatility")
+    begin_phase("ARCH-LM and the variance break (U5)")
     checked, train = checked_models(levels_path, differences_path, candidates_path)
     # Each result keeps its U4 fields (series, orders, residuals) and gains the U5 ones.
     results = [
@@ -493,6 +496,7 @@ def main(
     # Free the figure's memory; it is already saved.
     plt.close(figure)
     logger.success(f"Volatility checks written to {REPORT_PATH} and {FIGURE_PATH}")
+    finish_run()
 
 
 # Running this file directly runs the typer CLI (main).

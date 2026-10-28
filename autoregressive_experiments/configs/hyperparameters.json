@@ -143,7 +143,7 @@
       "justification": "The user's choice (2026-10-25): rank 1 even though Johansen found rank 0, so forecast accuracy, not the test alone, decides whether a long-run link helps. With two series, 1 is the only VECM rank."
     },
     "unit_root_tolerance": {
-      "value": 1e-6,
+      "value": 1e-06,
       "justification": "An estimated unit root lands within numerical precision of 1, never exactly on it; 1e-6 is far below the distance of any genuine root here (the nearest, VECM(5)'s second root, is 0.952)."
     }
   },
@@ -181,15 +181,65 @@
     "exponential_smoothing": {
       "value": {
         "single exp. smoothing": {},
-        "double exp. smoothing (Holt)": {"trend": "add"},
-        "double exp. smoothing, damped": {"trend": "add", "damped_trend": true},
-        "triple exp. smoothing (Holt-Winters)": {"trend": "add", "seasonal": "add"}
+        "double exp. smoothing (Holt)": {
+          "trend": "add"
+        },
+        "double exp. smoothing, damped": {
+          "trend": "add",
+          "damped_trend": true
+        },
+        "triple exp. smoothing (Holt-Winters)": {
+          "trend": "add",
+          "seasonal": "add"
+        }
       },
       "justification": "The user's request (2026-10-26): single, double (Holt) and triple (Holt-Winters) exponential smoothing via statsmodels, plus damped Holt (the user's choice after an explanation). Additive trend and season, since the series' monthly changes, not their ratios, are what the other models describe; the season length is the seasonal period."
     },
     "combination_weight": {
       "value": 0.5,
       "justification": "Equal weights for the selected SARIMA and naive: estimated combination weights rarely beat equal ones out of sample (Clemen 1989; Smith and Wallis 2009, the 'forecast combination puzzle')."
+    }
+  },
+  "ml": {
+    "cv_folds": {
+      "value": 5,
+      "justification": "The most folds that keep every time-ordered test fold at two years or more: the first origin's window has 161 to 165 rows (166 changes minus up to 5 lags), and TimeSeriesSplit's test folds hold rows // (folds + 1) = 26 months with 5 folds but 23 with 6, so each penalty is scored on at least two full seasonal cycles."
+    },
+    "penalty_span": {
+      "value": 0.001,
+      "justification": "Lasso: the positive penalties run from the value that zeroes every coefficient down to 0.1% of it (scikit-learn's and glmnet's default; Friedman, Hastie and Tibshirani 2010). Ridge gets the same span: with standardized features each column's sum of squares is n, so ridge shrinks a coefficient by about n / (n + alpha), and alpha from 0.001 n to 1000 n runs from almost no shrinkage (0.999) to near-zero coefficients (0.001). Zero (plain least squares) is added to both grids: on the validation origins cross-validation chose the least-shrinkage end in 18-24% of windows, so 'no penalty' must be a candidate it can choose, not an edge it piles up on."
+    },
+    "penalty_points": {
+      "value": 100,
+      "justification": "scikit-learn's and glmnet's default path length: neighbouring penalties differ by a factor of 1.07 (Lasso, 3 decades) or 1.15 (Ridge, 6 decades), finer than cross-validation error can tell apart on 160 months."
+    },
+    "forest_trees": {
+      "value": 500,
+      "justification": "More trees never make a random forest worse, they only stabilize its average; gains flatten after a few hundred (Probst and Boulesteix 2018), and 500 is the classic default of Breiman and Cutler's randomForest. Other settings are scikit-learn's defaults: forests gain little from tuning (Probst, Boulesteix and Bischl 2019)."
+    },
+    "boosting_holdout_share": {
+      "value": 0.25,
+      "justification": "The last quarter of each training window, in time order, decides when boosting stops adding trees: 25:75 inside the window mirrors the project's 20:60 validation-to-train ratio. It is passed to scikit-learn's early stopping as the validation set (X_val / y_val); the built-in random holdout is not used, since it would let later months choose for earlier ones."
+    },
+    "boosting_max_iterations": {
+      "value": 1000,
+      "justification": "A cap only, never the reason training stops: with the early-stopping rule, the largest number of trees chosen on the validation origins was 184. The report states the largest number chosen at any origin and whether the cap was reached."
+    },
+    "boosting_patience": {
+      "value": 10,
+      "justification": "scikit-learn's default early-stopping patience: stop after 10 trees in a row bring no holdout improvement. Taking the lowest holdout loss anywhere up to the cap instead chased tiny late dips after long plateaus (up to 1000 trees, e.g. 996 instead of 17, on the validation origins)."
+    },
+    "boosting_tolerance": {
+      "value": 1e-07,
+      "justification": "scikit-learn's default: an improvement in holdout loss smaller than this doesn't count, so numerical noise can't keep training going."
+    },
+    "boosting_learning_rate": {
+      "value": 0.1,
+      "justification": "scikit-learn's default shrinkage. With early stopping choosing the number of trees, a smaller rate mainly trades many more trees for a small accuracy gain (Friedman 2001)."
+    },
+    "random_seed": {
+      "value": 0,
+      "justification": "Fixed so every rerun gives identical forests and boosting; the value itself carries no meaning."
     }
   }
 }

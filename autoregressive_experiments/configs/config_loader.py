@@ -1,15 +1,17 @@
 """
 Loading and validation of the hyperparameter config.
 
-Defines `ConfigLoader`, which reads ``configs/hyperparameters.json``, checks every entry against
-the definitions in ``configurables`` and returns them as one typed, frozen `Hyperparameters`
-object. Every module takes its settings from `HYPERPARAMETERS`, loaded once on import.
+Defines `ConfigLoader`, which reads ``hyperparameters.json`` (beside this file), checks every
+entry against the definitions in ``configurables`` and returns them as one typed, frozen
+`Hyperparameters` object. Every module takes its settings from `HYPERPARAMETERS`, loaded once
+on import.
 
 Each entry in the file is an object with exactly two keys: "value" and "justification". A
 setting without a justification is rejected: every choice must say why it was made (a
 reference, a calculation or an earlier step's result).
 
-Input: ``configs/hyperparameters.json`` (or another path given to `ConfigLoader`).
+Input: ``autoregressive_experiments/configs/hyperparameters.json`` (or another path given to
+`ConfigLoader`).
 
 Output: the validated `Hyperparameters` object and each setting's justification. Nothing is
 written to disk.
@@ -24,8 +26,10 @@ from typing import Any, get_args, get_origin, get_type_hints
 
 from scipy import stats
 
-from autoregressive_experiments.config import HYPERPARAMETERS_PATH
-from autoregressive_experiments.configurables import Hyperparameters
+from autoregressive_experiments.configs.configurables import (
+    HYPERPARAMETERS_PATH,
+    Hyperparameters,
+)
 
 # The two keys every entry must have, and no others.
 ENTRY_KEYS = frozenset({"value", "justification"})

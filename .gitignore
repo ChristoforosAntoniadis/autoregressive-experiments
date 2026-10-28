@@ -18,3 +18,6 @@ data/interim/*
 data/processed/*
 !data/interim/.gitkeep
 !data/processed/.gitkeep
+
+# Run logs (runlog.py): one per run, they differ per computer and are never committed.
+logs/

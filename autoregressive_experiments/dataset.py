@@ -15,6 +15,7 @@ import tempfile
 import kagglehub
 
 from autoregressive_experiments.config import RAW_DATA_DIR
+from autoregressive_experiments.runlog import begin_phase, finish_run, start_run_log
 
 # The dataset's "owner/slug" identifier on Kaggle.
 DATASET_HANDLE = "belbino/fed-balance-sheet-and-m2-money-supply-1950-present"
@@ -85,4 +86,7 @@ def download_dataset() -> Path:
 
 # Running this file (make data) downloads the dataset and prints where it went.
 if __name__ == "__main__":
+    start_run_log("data")
+    begin_phase("Download the dataset")
     print(f"Dataset files downloaded to: {download_dataset()}")
+    finish_run()

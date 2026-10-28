@@ -43,7 +43,7 @@ from autoregressive_experiments.config import (
     PROCESSED_DATA_DIR,
     REPORTS_DIR,
 )
-from autoregressive_experiments.config_loader import HYPERPARAMETERS
+from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.diagnostics import SIGNIFICANCE_LEVEL, VALUE_COLUMNS, repo_path
 from autoregressive_experiments.features import DATE_COLUMN, split_boundaries, split_by_time
 from autoregressive_experiments.residual_checks import (
@@ -55,6 +55,7 @@ from autoregressive_experiments.residual_checks import (
     SURFACE,
     apply_chart_style,
 )
+from autoregressive_experiments.runlog import begin_phase, finish_run, start_run_log
 from autoregressive_experiments.var_models import VECM_RANK
 
 app = typer.Typer()
@@ -587,6 +588,8 @@ def main(
     The reverse ordering is a robustness check: orthogonalized shocks depend on which series
     comes first, so a conclusion that holds under both orderings doesn't rest on that choice.
     """
+    start_run_log("var-analysis")
+    begin_phase("Granger causality, impulse responses and FEVD (V7-V8)")
     for path in (levels_path, differences_path):
         if not path.is_file():
             raise FileNotFoundError(f"{path} not found. Generate it with make features.")
@@ -625,6 +628,7 @@ def main(
     figure.savefig(FIGURE_PATH, dpi=150, facecolor=SURFACE)
     plt.close(figure)
     logger.success(f"VAR / VECM analysis written to {REPORT_PATH} and {FIGURE_PATH}")
+    finish_run()
 
 
 if __name__ == "__main__":
