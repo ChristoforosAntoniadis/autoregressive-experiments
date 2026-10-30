@@ -3,17 +3,17 @@ Forecast evaluation (step U6, then every other family): how accurate are the mod
 sample, do they beat naive forecasts, does any other approach beat SARIMA, and are the forecast
 intervals honest?
 
-Every model's settings were tuned beforehand by ``tuning``, a time-aware random search on the
+Every model's settings were tuned beforehand by ``tuning``, a time-aware search on the
 training split, and are read from ``models/tuned_hyperparameters.json``; they stay fixed here.
 
 Rolling origin with an expanding window, on validation and then on test: at every month from the
 end of the previous split onwards, each model is refitted on all data up to that month and
 forecasts up to 12 months ahead; only forecasts whose target falls inside the split are scored.
 Each monthly origin is one fold (56 per split). The model reported per series and family
-(SARIMA, system, smoothing, ML, SARIMAX, combination) is chosen on validation (lowest one-month
-MASE); test is run once, with all models, and nothing changes after it. Errors are measured on
-the levels (trillions), so MAPE stays well defined: the levels are always positive, while the
-differences cross zero.
+(SARIMA, system, smoothing, ML, neural network, ready-made, SARIMAX, combination) is chosen on
+validation (lowest one-month MASE); test is run once, with all models, and nothing changes
+after it. Errors are measured on the levels (trillions), so MAPE stays well defined: the levels
+are always positive, while the differences cross zero.
 
 Models, each with its tuned settings: SARIMA fitted on the first differences (its forecasts added
 back onto the last level); three baselines: naive (no change), drift (the average monthly change
@@ -25,8 +25,10 @@ average; SARIMAX: the tuned SARIMA plus the other series' last monthly changes a
 forecast months whose regressors aren't known yet, the other series' own SARIMA forecasts stand
 in); lag-feature ML (ml_forecasting): Ridge, Lasso, random forest, XGBoost and k-nearest
 neighbours on the last monthly changes of both series, forecasting recursively; neural
-networks (nn_forecasting): a multilayer perceptron on the same features, forecasting the same
-way. Smoothing, the
+networks (nn_forecasting): multilayer perceptrons (scikit-learn, NumPy by hand, TensorFlow,
+PyTorch) and PyTorch sequence networks (LSTM, GRU, TCN, N-BEATS, DLinear) on the same features,
+forecasting the same way; ready-made (prophet_forecasting): Prophet on each series' levels, with
+intervals from its own uncertainty samples. Smoothing, the
 combination, SARIMAX and ML give point forecasts only.
 
 Point accuracy per split, series, model and horizon: MAE, MSE, RMSE (trillions, trillions
@@ -55,8 +57,8 @@ Output, in ``reports/``:
 - ``figures/forecast_evaluation.png``: per series, each family's selected model's MAE relative to
   naive by horizon on validation and on test, and the actual path against the SARIMA's, the best
   other family's and the naive one-month forecasts
-- ``figures/ml_evaluation.png``: per series and split, each ML model against naive, the SARIMA
-  and the selected smoothing model
+- ``figures/ml_evaluation.png`` and ``figures/nn_evaluation.png``: per series and split, each ML
+  model, or each neural network, against naive, the SARIMA and the selected smoothing model
 - ``figures/forecast_intervals.png``: per series and split, the SARIMA's 80% and 95% interval
   coverage by horizon, with constant variance, GARCH, EGARCH and GJR-GARCH, against the targets
 """
@@ -102,6 +104,7 @@ from autoregressive_experiments.features import (
 )
 from autoregressive_experiments.ml_forecasting import LAG_MODELS, ML_MODELS, ml_forecaster
 from autoregressive_experiments.nn_forecasting import NN_MODELS
+from autoregressive_experiments.prophet_forecasting import PROPHET, prophet_forecaster
 from autoregressive_experiments.residual_checks import (
     BASELINE,
     MUTED_INK,
@@ -165,6 +168,8 @@ VARIANCE_NAMES = {
 NAME_WIDTH = 36
 
 TUNED_PATH = MODELS_DIR / "tuned_hyperparameters.json"
+# Prophet's uncertainty samples per forecast, for its intervals.
+PROPHET_SAMPLES = HYPERPARAMETERS.ready_made.uncertainty_samples
 # Written by tuning.py; the report points to it.
 TUNING_REPORT_PATH = REPORTS_DIR / "tuning.txt"
 REPORT_PATH = REPORTS_DIR / "forecast_evaluation.txt"
@@ -173,6 +178,7 @@ INTERVALS_PATH = REPORTS_DIR / "forecast_intervals.csv"
 FIGURE_PATH = FIGURES_DIR / "forecast_evaluation.png"
 INTERVALS_FIGURE_PATH = FIGURES_DIR / "forecast_intervals.png"
 ML_FIGURE_PATH = FIGURES_DIR / "ml_evaluation.png"
+NN_FIGURE_PATH = FIGURES_DIR / "nn_evaluation.png"
 
 # Reference palette: baselines are ink and greys; slots 3-4's below-3:1 contrast is backed by
 # the legends and the report's tables.
@@ -193,10 +199,18 @@ Forecaster = Callable[[np.ndarray, int], dict]
 # Slots 1-4 (validated together) for the interval variants in the interval figure; zip stops
 # at the 4 variants.
 VARIANCE_COLORS = dict(zip(VARIANCES, SERIES_PALETTE))
-# The accuracy figure shows each family's selected model in slots 1-5 (validated together).
-FAMILY_COLORS = dict(
-    zip(("SARIMA", "system", "smoothing", "combination", "SARIMAX"), SERIES_PALETTE)
-)
+# The accuracy figure shows each family's selected model in slots 1-5 (validated together);
+# the sixth family reuses slot 1 with a dashed line. Family -> (color, line style). The ML and
+# neural-network families have figures of their own.
+FAMILY_STYLES: dict[str, tuple[str, str]] = {
+    **{
+        family: (color, "-")
+        for family, color in zip(
+            ("SARIMA", "system", "smoothing", "combination", "SARIMAX"), SERIES_PALETTE
+        )
+    },
+    "ready-made": (SERIES_PALETTE[0], "--"),
+}
 
 
 def naive_forecast(levels: np.ndarray, steps: int) -> dict[str, np.ndarray]:
@@ -371,6 +385,7 @@ def model_names(tuned: Mapping[str, Mapping[str, Any]]) -> dict[str, str]:
         EXPONENTIAL: EXPONENTIAL,
         SARIMAX: f"SARIMAX ({lags} exog lag{'' if lags == 1 else 's'})",
         **{model: model for model in LAG_MODELS},
+        PROPHET: PROPHET,
     }
 
 
@@ -1621,11 +1636,11 @@ def evaluation_report(
         (
             "Rolling origin, expanding window: each model is refitted at every monthly origin on "
             f"all data up to it (data start {periods['start']}); each origin is one fold. "
-            "Every model's settings were tuned beforehand by time-aware random search on the "
+            "Every model's settings were tuned beforehand by time-aware search on the "
             f"training split (see {repo_path(TUNING_REPORT_PATH)}) and are fixed here; the "
             "model reported per series and family (SARIMA, system, smoothing, SARIMAX, ML, "
-            "combination) is chosen on validation (lowest one-month MASE), before test. Each "
-            "family's test is run once, with all its models."
+            "neural network, ready-made, combination) is chosen on validation (lowest "
+            "one-month MASE), before test. Each family's test is run once, with all its models."
         ),
         (
             "Systems: a VAR on the differences and a VECM (rank "
@@ -1650,6 +1665,12 @@ def evaluation_report(
             "intervals would treat those planned regressors as known."
         ),
         (
+            "Neural networks: multilayer perceptrons (scikit-learn, NumPy by hand, TensorFlow, "
+            "PyTorch) and PyTorch sequence networks (LSTM, GRU, TCN, N-BEATS, DLinear) reading "
+            "the same lags as a window, each tuned and forecasting like the ML models. "
+            "Ready-made: Prophet on each series' levels with its month-end dates, refitted at "
+            "every origin; its intervals come from its own uncertainty samples (listed under "
+            "'constant', the model's own spread, as for naive and the systems). "
             "Lag-feature ML: Ridge, Lasso, random forest, XGBoost and k-nearest neighbours, "
             "each predicting next month's change of one series from the last changes of both "
             "series (lag count tuned), standardized inside every fit, refitted at every origin "
@@ -1727,10 +1748,10 @@ def series_title(column: str) -> str:
 
 def family_styles(
     selected_by_family: dict[str, dict[str, str]], column: str
-) -> dict[str, tuple[str, float, str]]:
+) -> dict[str, tuple[str, float, str, str]]:
     """
     Each family's selected model for the series, then drift and seasonal naive: name ->
-    (color, line width, legend label).
+    (color, line width, legend label, line style).
 
     Parameters
     ----------
@@ -1741,17 +1762,22 @@ def family_styles(
 
     Returns
     -------
-    dict of str to tuple of (str, float, str)
-        Model name -> (line color, line width, legend label), in drawing order. Naive isn't
-        included: the accuracy panels draw it as the reference line at 1.
+    dict of str to tuple of (str, float, str, str)
+        Model name -> (line color, line width, legend label, line style), in drawing order.
+        Naive isn't included: the accuracy panels draw it as the reference line at 1.
     """
-    styles: dict[str, tuple[str, float, str]] = {
-        picks[column]: (FAMILY_COLORS[family], 2, f"{family}: {picks[column]}")
+    styles: dict[str, tuple[str, float, str, str]] = {
+        picks[column]: (
+            *FAMILY_STYLES[family][:1],
+            2,
+            f"{family}: {picks[column]}",
+            FAMILY_STYLES[family][1],
+        )
         for family, picks in selected_by_family.items()
     }
     for name in ("drift", "seasonal naive"):
         color, width = BASELINE_STYLES[name]
-        styles[name] = (color, width, name)
+        styles[name] = (color, width, name, "-")
     return styles
 
 
@@ -1815,10 +1841,17 @@ def evaluation_figure(
             naive_mase = split_metrics[split_metrics["model"] == NAIVE].set_index("horizon")[
                 "MASE"
             ]
-            for name, (color, width, label) in styles.items():
+            for name, (color, width, label, dashes) in styles.items():
                 model_metrics = split_metrics[split_metrics["model"] == name].set_index("horizon")
                 relative = model_metrics["MASE"] / naive_mase
-                axis.plot(relative.index, relative, color=color, linewidth=width, label=label)
+                axis.plot(
+                    relative.index,
+                    relative,
+                    color=color,
+                    linewidth=width,
+                    linestyle=dashes,
+                    label=label,
+                )
                 # Filled: significantly different from naive (DM, absolute loss); hollow: not.
                 significant = model_metrics["DM_absolute_p"] < SIGNIFICANCE_LEVEL
                 for filled, face in ((significant, color), (~significant, SURFACE)):
@@ -1977,9 +2010,14 @@ def intervals_figure(intervals: pd.DataFrame, selected: dict[str, str]) -> Figur
     return figure
 
 
-def ml_figure(metrics: pd.DataFrame, selected_by_family: dict[str, dict[str, str]]) -> Figure:
+def ml_figure(
+    metrics: pd.DataFrame,
+    selected_by_family: dict[str, dict[str, str]],
+    models: tuple[str, ...],
+    kind: str,
+) -> Figure:
     """
-    One row per series, one column per split: each ML model's MAE relative to naive by horizon,
+    One row per series, one column per split: each model's MAE relative to naive by horizon,
     against the SARIMA and the selected smoothing model.
 
     Parameters
@@ -1988,6 +2026,10 @@ def ml_figure(metrics: pd.DataFrame, selected_by_family: dict[str, dict[str, str
         Every model's metrics, both splits, with "MASE" and "DM_absolute_p".
     selected_by_family : dict of str to dict of str to str
         Family -> series -> model selected on validation; uses "SARIMA" and "smoothing".
+    models : tuple of str
+        The models drawn: ML_MODELS or NN_MODELS.
+    kind : str
+        Their name in the titles: "ML model" or "neural network".
 
     Returns
     -------
@@ -1998,12 +2040,12 @@ def ml_figure(metrics: pd.DataFrame, selected_by_family: dict[str, dict[str, str
     Notes
     -----
     Processing, per series and split:
-    1. Draw each ML model's MASE divided by naive's at the same horizon, with the SARIMA and
+    1. Draw each model's MASE divided by naive's at the same horizon, with the SARIMA and
        the selected smoothing model for comparison.
     2. Filled points are significantly different from naive (DM, absolute loss, 5%).
 
-    Palette slots 1-5 go to the five ML models and the networks reuse them with dashed lines,
-    named in the legend; the SARIMA and the smoothing model are drawn
+    Palette slots 1-5 go to the first five models and the next five reuse them with dashed
+    lines, named in the legend; the SARIMA and the smoothing model are drawn
     in the secondary and muted greys, as references.
     """
     apply_chart_style()
@@ -2015,14 +2057,14 @@ def ml_figure(metrics: pd.DataFrame, selected_by_family: dict[str, dict[str, str
         facecolor=SURFACE,
     )
     for row, column in enumerate(VALUE_COLUMNS):
-        # Five validated colours for six models: past the fifth, the colours repeat dashed.
+        # Five validated colours: past the fifth model, the colours repeat dashed.
         styles = {
             name: (
                 SERIES_PALETTE[index % len(SERIES_PALETTE)],
                 2.0,
                 "-" if index < len(SERIES_PALETTE) else "--",
             )
-            for index, name in enumerate(LAG_MODELS)
+            for index, name in enumerate(models)
         }
         styles[selected_by_family["SARIMA"][column]] = (SECONDARY_INK, 1.5, "-")
         styles[selected_by_family["smoothing"][column]] = (MUTED_INK, 1.5, "-")
@@ -2060,7 +2102,7 @@ def ml_figure(metrics: pd.DataFrame, selected_by_family: dict[str, dict[str, str
             axis.set_xlabel("Horizon (months)")
             axis.set_ylabel("MAE relative to naive")
             axis.set_title(
-                f"{series_title(column)}, {split}: each tuned ML model and network\n"
+                f"{series_title(column)}, {split}: each tuned {kind}\n"
                 "vs the SARIMA and the smoothing pick; below 1: more accurate than naive\n"
                 "filled point: significantly different from naive (Diebold-Mariano, 5%)",
                 loc="left",
@@ -2093,7 +2135,7 @@ def main(
     -------
     None
         Writes REPORT_PATH, METRICS_PATH, INTERVALS_PATH, FIGURE_PATH, INTERVALS_FIGURE_PATH
-        and ML_FIGURE_PATH, and prints the report.
+        ML_FIGURE_PATH and NN_FIGURE_PATH, and prints the report.
 
     Raises
     ------
@@ -2171,6 +2213,9 @@ def main(
                 "seasonal naive": seasonal_naive_forecast,
                 name[SMA]: moving_average_forecaster(settings[SMA]["window"]),
                 name[EXPONENTIAL]: exponential_smoothing_forecaster(settings[EXPONENTIAL]),
+                name[PROPHET]: prophet_forecaster(
+                    settings[PROPHET], dates.to_numpy(), PROPHET_SAMPLES
+                ),
                 name[SARIMAX]: sarimax_forecaster(
                     settings[SARIMA],
                     other[SARIMA],
@@ -2231,6 +2276,7 @@ def main(
         "SARIMAX": (SARIMAX,),
         "ML": ML_MODELS,
         "neural network": NN_MODELS,
+        "ready-made": (PROPHET,),
     }
     validation_one_month = metrics[
         (metrics["split"] == "validation") & (metrics["horizon"] == 1)
@@ -2279,16 +2325,20 @@ def main(
 
     test_start = dates.iloc[validation_end + 1]
     # The main figure keeps the families it has colours for; ML gets its own figure.
-    main_families = {f: picks for f, picks in selected_by_family.items() if f in FAMILY_COLORS}
+    main_families = {f: picks for f, picks in selected_by_family.items() if f in FAMILY_STYLES}
     figure = evaluation_figure(metrics, forecasts, main_families, test_start)
     figure.savefig(FIGURE_PATH, dpi=150, facecolor=SURFACE)
     plt.close(figure)
     figure = intervals_figure(intervals, selected)
     figure.savefig(INTERVALS_FIGURE_PATH, dpi=150, facecolor=SURFACE)
     plt.close(figure)
-    figure = ml_figure(metrics, selected_by_family)
-    figure.savefig(ML_FIGURE_PATH, dpi=150, facecolor=SURFACE)
-    plt.close(figure)
+    for models, kind, path in (
+        (ML_MODELS, "ML model", ML_FIGURE_PATH),
+        (NN_MODELS, "neural network", NN_FIGURE_PATH),
+    ):
+        figure = ml_figure(metrics, selected_by_family, models, kind)
+        figure.savefig(path, dpi=150, facecolor=SURFACE)
+        plt.close(figure)
     logger.success(f"Forecast evaluation written to {REPORT_PATH} and {FIGURES_DIR}")
     finish_run()
 

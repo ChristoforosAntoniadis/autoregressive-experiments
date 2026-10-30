@@ -9,6 +9,9 @@ xgboost==3.4.1
 optuna==5.0.0
 tensorflow==2.21.0
 torch==2.15.0
+prophet==1.5.0
+# Below 3: Prophet's holidays dependency requires it.
+python-dateutil==2.9.0.post0
 kagglehub==1.0.3
 loguru==0.7.3
 typer==0.27.3

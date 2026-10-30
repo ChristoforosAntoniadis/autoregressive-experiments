@@ -74,6 +74,106 @@ SPACES: dict[str, frozenset[str]] = {
         }
     ),
     "knn": frozenset({"lags", "n_neighbors", "weights", "p"}),
+    "prophet": frozenset(
+        {
+            "growth",
+            "changepoint_prior_scale",
+            "changepoint_range",
+            "seasonality_mode",
+            "seasonality_prior_scale",
+            "yearly_seasonality",
+        }
+    ),
+    "lstm": frozenset(
+        {
+            "lags",
+            "optimizer",
+            "learning_rate",
+            "weight_decay",
+            "batch_size",
+            "use_bias",
+            "epochs",
+            "patience",
+            "min_delta",
+            "min_epochs",
+            "validation_share",
+            "hidden_units",
+            "layers",
+            "dropout",
+        }
+    ),
+    "gru": frozenset(
+        {
+            "lags",
+            "optimizer",
+            "learning_rate",
+            "weight_decay",
+            "batch_size",
+            "use_bias",
+            "epochs",
+            "patience",
+            "min_delta",
+            "min_epochs",
+            "validation_share",
+            "hidden_units",
+            "layers",
+            "dropout",
+        }
+    ),
+    "tcn": frozenset(
+        {
+            "lags",
+            "optimizer",
+            "learning_rate",
+            "weight_decay",
+            "batch_size",
+            "use_bias",
+            "epochs",
+            "patience",
+            "min_delta",
+            "min_epochs",
+            "validation_share",
+            "hidden_units",
+            "layers",
+            "kernel_size",
+            "dropout",
+        }
+    ),
+    "nbeats": frozenset(
+        {
+            "lags",
+            "optimizer",
+            "learning_rate",
+            "weight_decay",
+            "batch_size",
+            "use_bias",
+            "epochs",
+            "patience",
+            "min_delta",
+            "min_epochs",
+            "validation_share",
+            "hidden_units",
+            "layers",
+            "blocks",
+            "dropout",
+        }
+    ),
+    "dlinear": frozenset(
+        {
+            "lags",
+            "optimizer",
+            "learning_rate",
+            "weight_decay",
+            "batch_size",
+            "use_bias",
+            "epochs",
+            "patience",
+            "min_delta",
+            "min_epochs",
+            "validation_share",
+            "kernel_size",
+        }
+    ),
     "tensorflow_mlp": frozenset(
         {
             "lags",
@@ -606,6 +706,9 @@ class NnSettings:
     tensorflow_mlp, pytorch_mlp
         Mapping of str to list or range: the Keras and PyTorch networks' settings (their
         keyword names, plus "lags"), searched by Optuna.
+    lstm, gru, tcn, nbeats, dlinear
+        Mapping of str to list or range: the PyTorch sequence networks' settings (TorchNetwork's
+        keyword names, plus "lags", the window length), searched by Optuna.
     """
 
     mlp: Mapping[str, Any] = space("mlp")
@@ -613,6 +716,29 @@ class NnSettings:
     numpy_a2: Mapping[str, Any] = space("numpy_a2")
     tensorflow_mlp: Mapping[str, Any] = space("tensorflow_mlp")
     pytorch_mlp: Mapping[str, Any] = space("pytorch_mlp")
+    lstm: Mapping[str, Any] = space("lstm")
+    gru: Mapping[str, Any] = space("gru")
+    tcn: Mapping[str, Any] = space("tcn")
+    nbeats: Mapping[str, Any] = space("nbeats")
+    dlinear: Mapping[str, Any] = space("dlinear")
+
+
+@dataclass(frozen=True)
+class ReadyMadeSettings:
+    """
+    The ready-made family (prophet_forecasting.py).
+
+    Attributes
+    ----------
+    prophet
+        Mapping of str to list or range: Prophet's settings (its keyword names) and the values
+        searched by Optuna.
+    uncertainty_samples : int
+        Prophet's uncertainty samples per forecast, for its intervals.
+    """
+
+    prophet: Mapping[str, Any] = space("prophet")
+    uncertainty_samples: int = setting(lambda v: v >= 100, "at least 100")
 
 
 @dataclass(frozen=True)
@@ -623,7 +749,8 @@ class Hyperparameters:
     Attributes
     ----------
     split, tests, diagnostics, residual_checks, volatility_checks, volatility_models,
-    var_diagnostics, var_models, var_analysis, forecast_evaluation, tuning, ml, nn
+    var_diagnostics, var_models, var_analysis, forecast_evaluation, tuning, ml, nn,
+    ready_made
         The sections, in pipeline order; see each class.
     """
 
@@ -640,3 +767,4 @@ class Hyperparameters:
     tuning: TuningSettings
     ml: MlSettings
     nn: NnSettings
+    ready_made: ReadyMadeSettings

@@ -10,11 +10,11 @@ from sklearn.base import clone
 from autoregressive_experiments import tuning
 from autoregressive_experiments.forecast_evaluation import EXPONENTIAL, SARIMA, SMA, VAR_MODEL
 from autoregressive_experiments.ml_forecasting import (
-    MAX_LAG,
     RIDGE,
     build_model,
     lag_columns,
     lag_features,
+    max_lag,
 )
 from autoregressive_experiments.nn_forecasting import PYTORCH_MLP
 from autoregressive_experiments.tuning import (
@@ -125,13 +125,13 @@ def test_randomized_search_scores_equal_fitting_each_fold_on_earlier_months() ->
 
     best, scored, size = ml_search(changes, RIDGE, 0, folds)
 
-    features, target = lag_features(changes, MAX_LAG), changes[MAX_LAG:, 0]
+    features, target = lag_features(changes, max_lag(RIDGE)), changes[max_lag(RIDGE) :, 0]
     for entry in scored[:3]:
         setting = entry["settings"]
-        columns = lag_columns(setting["lags"], MAX_LAG, 2)
+        columns = lag_columns(setting["lags"], max_lag(RIDGE), 2)
         errors = []
         for start, end in folds:
-            first, last = start - MAX_LAG, end - MAX_LAG
+            first, last = start - max_lag(RIDGE), end - max_lag(RIDGE)
             fitted = build_model(RIDGE, setting).fit(features[:first, columns], target[:first])
             errors.append(target[first:last] - fitted.predict(features[first:last, columns]))
         assert entry["score"] == pytest.approx(np.mean(np.abs(np.concatenate(errors))))
@@ -156,11 +156,14 @@ def test_optuna_search_is_seeded_and_scores_every_trial_on_the_folds(
     assert (best, scored) == (again, scored_again) and len(scored) == 3 and size == 0
     winner = min(scored, key=lambda row: row["score"])
     assert best == winner["settings"]
-    features, target = lag_features(changes, MAX_LAG), changes[MAX_LAG:, 0]
-    columns = lag_columns(best["lags"], MAX_LAG, 2)
+    features, target = (
+        lag_features(changes, max_lag(PYTORCH_MLP)),
+        changes[max_lag(PYTORCH_MLP) :, 0],
+    )
+    columns = lag_columns(best["lags"], max_lag(PYTORCH_MLP), 2)
     errors = []
     for start, end in folds:
-        first, last = start - MAX_LAG, end - MAX_LAG
+        first, last = start - max_lag(PYTORCH_MLP), end - max_lag(PYTORCH_MLP)
         fitted = build_model(PYTORCH_MLP, best).fit(features[:first, columns], target[:first])
         errors.append(target[first:last] - fitted.predict(features[first:last, columns]))
     assert winner["score"] == pytest.approx(np.mean(np.abs(np.concatenate(errors))), rel=1e-6)

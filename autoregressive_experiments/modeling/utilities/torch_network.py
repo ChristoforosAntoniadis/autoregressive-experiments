@@ -1,8 +1,9 @@
 """
-The PyTorch multilayer perceptron as a scikit-learn regressor, built like the
-neural-network-numpy project's PyTorch networks: the layers of A1 or A2 (biases optional), and
-everything else PyTorch's own defaults (its weight initialization and optimizers), trained by a
-plain mini-batch loop with early stopping.
+The PyTorch networks as one scikit-learn regressor: the multilayer perceptron, built like the
+neural-network-numpy project's PyTorch networks (the layers of A1 or A2, biases optional, and
+PyTorch's own defaults for initialization and optimizers), and the sequence networks of
+sequence_networks (LSTM, GRU, TCN, N-BEATS, DLinear), all trained by the same mini-batch loop
+with early stopping.
 
 - A1: one hidden layer of sigmoid units, then one linear output unit
 - A2: three hidden layers of ReLU units, then one linear output unit
@@ -126,14 +127,21 @@ class MuonWithAdam:
 
 class TorchNetwork(RegressorMixin, BaseEstimator):
     """
-    A1 or A2 in PyTorch, trained by a mini-batch loop with early stopping.
+    A PyTorch network (A1, A2 or a sequence network), trained by a mini-batch loop with early
+    stopping.
 
     Parameters
     ----------
     architecture : str, default="A1"
-        A key of ARCHITECTURES.
+        A key of ARCHITECTURES, or one of sequence_networks.SEQUENCE_ARCHITECTURES.
     hidden_units : int, default=8
-        Units in each hidden layer.
+        Units in each hidden layer (recurrent units, TCN channels, N-BEATS layer width).
+    layers : int, default=1
+        Sequence networks only: recurrent layers, TCN blocks, or N-BEATS layers per block.
+    kernel_size : int, default=3
+        TCN: convolution kernel; DLinear: moving-average length.
+    blocks : int, default=2
+        N-BEATS: blocks in the chain.
     optimizer : str, default="adam"
         "sgd", "momentum", "adam" or "muon".
     learning_rate : float, default=0.001
@@ -162,6 +170,9 @@ class TorchNetwork(RegressorMixin, BaseEstimator):
         self,
         architecture: str = "A1",
         hidden_units: int = 8,
+        layers: int = 1,
+        kernel_size: int = 3,
+        blocks: int = 2,
         optimizer: str = "adam",
         learning_rate: float = 0.001,
         use_bias: bool = False,
@@ -176,6 +187,9 @@ class TorchNetwork(RegressorMixin, BaseEstimator):
     ) -> None:
         self.architecture = architecture
         self.hidden_units = hidden_units
+        self.layers = layers
+        self.kernel_size = kernel_size
+        self.blocks = blocks
         self.optimizer = optimizer
         self.learning_rate = learning_rate
         self.use_bias = use_bias
@@ -187,6 +201,41 @@ class TorchNetwork(RegressorMixin, BaseEstimator):
         self.min_delta = min_delta
         self.min_epochs = min_epochs
         self.validation_share = validation_share
+
+    def build(self, inputs: int) -> Any:
+        """
+        The untrained network.
+
+        Parameters
+        ----------
+        inputs : int
+            Width of the feature rows.
+
+        Returns
+        -------
+        torch.nn.Module
+            A1 / A2 as an nn.Sequential, or a sequence network; maps (batch, inputs) to
+            (batch, 1).
+        """
+        from torch import nn
+
+        from autoregressive_experiments.modeling.utilities.sequence_networks import (
+            build_sequence_module,
+        )
+
+        if self.architecture not in ARCHITECTURES:
+            return build_sequence_module(self.architecture, inputs, self)
+        hidden, activation = ARCHITECTURES[self.architecture]
+        modules: list[Any] = []
+        width = inputs
+        for _ in range(hidden):
+            modules.append(nn.Linear(width, self.hidden_units, bias=self.use_bias))
+            modules.append(nn.Sigmoid() if activation == "sigmoid" else nn.ReLU())
+            if self.dropout > 0:
+                modules.append(nn.Dropout(self.dropout))
+            width = self.hidden_units
+        modules.append(nn.Linear(width, 1, bias=self.use_bias))
+        return nn.Sequential(*modules)
 
     def fit(self, features: np.ndarray, target: np.ndarray) -> "TorchNetwork":
         """
@@ -207,11 +256,12 @@ class TorchNetwork(RegressorMixin, BaseEstimator):
         Notes
         -----
         Processing:
-        1. Use deterministic algorithms and seed the weights (torch.manual_seed) and the
-           shuffles (a generator) with RANDOM_SEED.
+        1. Use deterministic algorithms on one thread, and seed the weights (torch.manual_seed)
+           and the shuffles (a generator) with RANDOM_SEED.
         2. Hold out the last validation_share of the rows (at least one), in time order.
-        3. Build Linear -> activation (-> dropout) per hidden layer, then a one-unit Linear,
-           all with or without biases.
+        3. Build the network: for A1 / A2, Linear -> activation (-> dropout) per hidden layer,
+           then a one-unit Linear, all with or without biases; otherwise the sequence network
+           (sequence_networks.build_sequence_module).
         4. Each epoch: shuffle the training rows, step the optimizer on each mini-batch's mean
            squared error, then score the holdout. Stop when it hasn't improved by min_delta
            for `patience` epochs after min_epochs, or when a loss stops being finite; keep the
@@ -221,6 +271,10 @@ class TorchNetwork(RegressorMixin, BaseEstimator):
         from torch import nn
 
         torch.use_deterministic_algorithms(True)
+        # One thread: these networks are tiny, so splitting each operation across threads costs
+        # more than it saves (a TCN fit 5x faster, an LSTM 25%), and a fixed thread count keeps
+        # every rerun identical to the last bit.
+        torch.set_num_threads(1)
         torch.manual_seed(RANDOM_SEED)
         rows = torch.as_tensor(np.asarray(features, dtype="float32"))
         values = torch.as_tensor(np.asarray(target, dtype="float32").reshape(-1, 1))
@@ -231,17 +285,7 @@ class TorchNetwork(RegressorMixin, BaseEstimator):
             rows[split:],
             values[split:],
         )
-        hidden, activation = ARCHITECTURES[self.architecture]
-        modules: list[Any] = []
-        width = rows.shape[1]
-        for _ in range(hidden):
-            modules.append(nn.Linear(width, self.hidden_units, bias=self.use_bias))
-            modules.append(nn.Sigmoid() if activation == "sigmoid" else nn.ReLU())
-            if self.dropout > 0:
-                modules.append(nn.Dropout(self.dropout))
-            width = self.hidden_units
-        modules.append(nn.Linear(width, 1, bias=self.use_bias))
-        model = nn.Sequential(*modules)
+        model = self.build(rows.shape[1])
         optimizer = torch_optimizer(
             self.optimizer, list(model.parameters()), self.learning_rate, self.weight_decay
         )

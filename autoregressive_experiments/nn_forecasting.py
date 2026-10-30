@@ -1,8 +1,10 @@
 """
 The neural-network family, each predicting next month's change of one series from the last k
 monthly changes of both series: scikit-learn's multilayer perceptron (MLPRegressor), two
-networks written by hand in NumPy (A1 and A2), and a TensorFlow (Keras) and a PyTorch
-multilayer perceptron, each A1 or A2 by tuning, built with the framework's own defaults.
+networks written by hand in NumPy (A1 and A2), a TensorFlow (Keras) and a PyTorch multilayer
+perceptron, each A1 or A2 by tuning, built with the framework's own defaults, and five PyTorch
+sequence networks (LSTM, GRU, TCN, N-BEATS, DLinear) reading the same lags as a window in time
+order.
 
 A1 and A2 are the regression networks of the neural-network-numpy project, ported here (the
 regression part only): the same layers, activations, loss, optimizers, weight initialization,
@@ -50,10 +52,13 @@ from autoregressive_experiments.modeling.utilities.torch_network import TorchNet
 SETTINGS = HYPERPARAMETERS.nn
 MLP, NUMPY_A1, NUMPY_A2 = "MLP", "NumPy A1", "NumPy A2"
 TENSORFLOW_MLP, PYTORCH_MLP = "TensorFlow MLP", "PyTorch MLP"
-NN_MODELS = (MLP, NUMPY_A1, NUMPY_A2, TENSORFLOW_MLP, PYTORCH_MLP)
+LSTM, GRU, TCN, NBEATS, DLINEAR = "LSTM", "GRU", "TCN", "N-BEATS", "DLinear"
+# The PyTorch sequence networks: model name -> TorchNetwork's architecture.
+SEQUENCE_MODELS = {LSTM: "lstm", GRU: "gru", TCN: "tcn", NBEATS: "nbeats", DLINEAR: "dlinear"}
+NN_MODELS = (MLP, NUMPY_A1, NUMPY_A2, TENSORFLOW_MLP, PYTORCH_MLP, *SEQUENCE_MODELS)
 # The networks tuned by Optuna (their spaces include numeric ranges); the others by
 # scikit-learn's RandomizedSearchCV.
-OPTUNA_MODELS = (TENSORFLOW_MLP, PYTORCH_MLP)
+OPTUNA_MODELS = (TENSORFLOW_MLP, PYTORCH_MLP, *SEQUENCE_MODELS)
 # Model -> its search space: setting name -> the values tried.
 NN_SPACES: dict[str, Mapping[str, Any]] = {
     MLP: SETTINGS.mlp,
@@ -61,6 +66,11 @@ NN_SPACES: dict[str, Mapping[str, Any]] = {
     NUMPY_A2: SETTINGS.numpy_a2,
     TENSORFLOW_MLP: SETTINGS.tensorflow_mlp,
     PYTORCH_MLP: SETTINGS.pytorch_mlp,
+    LSTM: SETTINGS.lstm,
+    GRU: SETTINGS.gru,
+    TCN: SETTINGS.tcn,
+    NBEATS: SETTINGS.nbeats,
+    DLINEAR: SETTINGS.dlinear,
 }
 # The hand-written networks: model name -> their architecture in modeling/utilities/network.py.
 NUMPY_ARCHITECTURES = {NUMPY_A1: "A1", NUMPY_A2: "A2"}
@@ -95,4 +105,6 @@ def build_network(model: str, options: Mapping[str, Any]) -> Any:
         return KerasNetwork(**options)
     if model == PYTORCH_MLP:
         return TorchNetwork(**options)
+    if model in SEQUENCE_MODELS:
+        return TorchNetwork(architecture=SEQUENCE_MODELS[model], **options)
     raise ValueError(f"unknown neural network {model!r}")

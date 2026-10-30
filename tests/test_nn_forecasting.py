@@ -11,11 +11,16 @@ from autoregressive_experiments.ml_forecasting import build_model, lag_features
 from autoregressive_experiments.modeling.utilities.network import Cache, NumpyNetwork
 from autoregressive_experiments.modeling.utilities.optimizers import Optimizer, newton_schulz
 from autoregressive_experiments.nn_forecasting import (
+    DLINEAR,
+    GRU,
+    LSTM,
     MLP,
+    NBEATS,
     NUMPY_A1,
     NUMPY_A2,
     NUMPY_ARCHITECTURES,
     PYTORCH_MLP,
+    TCN,
     TENSORFLOW_MLP,
     build_network,
 )
@@ -166,6 +171,52 @@ def test_the_framework_networks_learn_the_rule_and_are_reproducible(model: str) 
         "weight_decay": 0.0001,
         "dropout": 0.1,
         "batch_size": 16,
+    }
+
+    first = build_model(model, settings).fit(features, target).predict(features)
+    second = build_model(model, settings).fit(features, target).predict(features)
+
+    assert np.array_equal(first, second)
+    assert 1 - np.var(target - first) / np.var(target) > 0.8
+
+
+def test_lag_rows_become_sequences_in_time_order() -> None:
+    """A row x1 x2 x3 y1 y2 y3 (each series' last three changes, most recent first) becomes the
+    sequence (x3, y3), (x2, y2), (x1, y1): oldest month first, one column per series."""
+    import torch
+
+    from autoregressive_experiments.modeling.utilities.sequence_networks import to_sequence
+
+    row = torch.tensor([[1.0, 2.0, 3.0, 10.0, 20.0, 30.0]])
+
+    assert to_sequence(row).tolist() == [[[3.0, 30.0], [2.0, 20.0], [1.0, 10.0]]]
+
+
+@pytest.mark.parametrize(
+    ("model", "extra"),
+    [
+        (LSTM, {"layers": 2, "dropout": 0.1}),
+        (GRU, {"layers": 1, "dropout": 0.1}),
+        (TCN, {"layers": 2, "kernel_size": 3, "dropout": 0.1}),
+        (NBEATS, {"layers": 2, "blocks": 2, "dropout": 0.1}),
+        (DLINEAR, {"kernel_size": 3}),
+    ],
+)
+def test_the_sequence_networks_learn_the_rule_and_are_reproducible(
+    model: str, extra: dict[str, float]
+) -> None:
+    """Through the shared lag-feature pipeline, each sequence network explains most of y's
+    variance from last month's x within a six-month window (R^2 above 0.8) and gives identical
+    predictions on refitting (fixed seed, deterministic operations)."""
+    changes = simulated_changes(300)
+    features, target = lag_features(changes, 6), changes[6:, 1]
+    settings = {
+        "lags": 6,
+        "hidden_units": 16,
+        "optimizer": "adam",
+        "learning_rate": 0.01,
+        "use_bias": True,
+        **extra,
     }
 
     first = build_model(model, settings).fit(features, target).predict(features)

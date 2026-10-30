@@ -26,6 +26,8 @@ How each model forecasts a fold's months:
 - the TensorFlow and PyTorch networks: the same folds and score, but searched by Optuna's TPE
   sampler (CANDIDATES trials, one after another, seeded with RANDOM_SEED, no pruning), which
   chooses each trial's settings from the scores of the earlier ones
+- Prophet: searched by Optuna the same way, refitted at every month of each fold, as the
+  evaluation does (the refits run in parallel)
 
 SARIMA is tuned first: its tuned orders feed the volatility models, SARIMAX and the average.
 
@@ -95,14 +97,19 @@ from autoregressive_experiments.forecast_evaluation import (
 )
 from autoregressive_experiments.ml_forecasting import (
     LAG_MODELS,
-    MAX_LAG,
     ML_SPACES,
     RIDGE,
     build_model,
     lag_columns,
     lag_features,
+    max_lag,
 )
 from autoregressive_experiments.nn_forecasting import NN_SPACES, OPTUNA_MODELS
+from autoregressive_experiments.prophet_forecasting import (
+    PROPHET,
+    READY_MADE_SPACES,
+    prophet_forecast,
+)
 from autoregressive_experiments.residual_checks import (
     MUTED_INK,
     PRIMARY_INK,
@@ -135,6 +142,7 @@ SPACES: dict[str, Mapping[str, Any]] = {
     EXPONENTIAL: SETTINGS.exponential_smoothing,
     **ML_SPACES,
     **NN_SPACES,
+    **READY_MADE_SPACES,
 }
 # A cross-validation fold: (first month it tests, first month after it), as positions in the
 # training split's monthly changes; the fold trains on every change before its first test month.
@@ -448,8 +456,9 @@ class TunableModel(RegressorMixin, BaseEstimator):
 
     Notes
     -----
-    The features it receives hold MAX_LAG lags of both series; fit and predict keep the columns
-    of settings["lags"] (lag_columns), so the lag count is searched like any other setting.
+    The features it receives hold max_lag(model) lags of both series; fit and predict keep the
+    columns of settings["lags"] (lag_columns), so the lag count is searched like any other
+    setting.
     The model itself comes from ml_forecasting.build_model, the same builder the evaluation
     uses, so Lasso with a zero penalty is a linear regression here too. get_params and
     set_params are written out because the settings differ by model and arrive as keywords.
@@ -500,7 +509,7 @@ class TunableModel(RegressorMixin, BaseEstimator):
         Parameters
         ----------
         features : np.ndarray
-            lag_features(changes, MAX_LAG) rows, shape (rows, 2 x MAX_LAG).
+            lag_features(changes, max_lag(model)) rows, shape (rows, 2 x max_lag(model)).
         target : np.ndarray
             The series' changes for those rows, shape (rows,), trillions.
 
@@ -509,7 +518,7 @@ class TunableModel(RegressorMixin, BaseEstimator):
         TunableModel
             Itself, fitted.
         """
-        columns = lag_columns(self.settings["lags"], MAX_LAG, 2)
+        columns = lag_columns(self.settings["lags"], max_lag(self.model), 2)
         self.fitted_ = build_model(self.model, self.settings).fit(features[:, columns], target)
         return self
 
@@ -520,14 +529,14 @@ class TunableModel(RegressorMixin, BaseEstimator):
         Parameters
         ----------
         features : np.ndarray
-            lag_features(changes, MAX_LAG) rows, shape (rows, 2 x MAX_LAG).
+            lag_features(changes, max_lag(model)) rows, shape (rows, 2 x max_lag(model)).
 
         Returns
         -------
         np.ndarray
             Predicted changes, shape (rows,), trillions.
         """
-        columns = lag_columns(self.settings["lags"], MAX_LAG, 2)
+        columns = lag_columns(self.settings["lags"], max_lag(self.model), 2)
         return np.asarray(self.fitted_.predict(features[:, columns]))
 
 
@@ -546,7 +555,8 @@ def ml_search(
     column : int
         The series predicted.
     folds : list of tuple of (int, int)
-        Folds over the n monthly changes; their first test month must be at least MAX_LAG.
+        Folds over the n monthly changes; their first test month must be at least the
+        model's max_lag.
 
     Returns
     -------
@@ -557,9 +567,9 @@ def ml_search(
     Notes
     -----
     Processing:
-    1. Build the features once with MAX_LAG lags, so every lag count is trained and scored on
-       the same months (from MAX_LAG on).
-    2. Turn the folds into row indices: row r's target is change r + MAX_LAG, so a fold trains
+    1. Build the features once with the model's max_lag lags, so every lag count is trained
+       and scored on the same months.
+    2. Turn the folds into row indices: row r's target is change r + max_lag, so a fold trains
        on the rows whose target comes before it and tests the rows inside it. Passing them
        explicitly matters: RandomizedSearchCV's default folds ignore time order.
     3. Draw CANDIDATES settings (seed RANDOM_SEED; all of them when the space is smaller), fit
@@ -567,7 +577,7 @@ def ml_search(
        long, so the mean of the fold MAEs is the MAE over all tested months, as for the other
        models. No final refit: the evaluation refits at every origin.
     """
-    features, target, splits = lag_splits(changes, column, folds)
+    features, target, splits = lag_splits(changes, model, column, folds)
     space = dict(SPACES[model])
     logger.info(f"TUNE | {model}: {CANDIDATES} settings x {len(folds)} folds, in parallel")
     searcher = RandomizedSearchCV(
@@ -591,84 +601,82 @@ def ml_search(
 
 
 def lag_splits(
-    changes: np.ndarray, column: int, folds: list[Fold]
+    changes: np.ndarray, model: str, column: int, folds: list[Fold]
 ) -> tuple[np.ndarray, np.ndarray, list[tuple[np.ndarray, np.ndarray]]]:
     """
-    The lag features, targets and fold row indices shared by the ML and network searches.
-
-    Parameters
-    ----------
-    changes : np.ndarray
-        Both series' training changes, shape (n, 2), trillions.
-    column : int
-        The series predicted.
-    folds : list of tuple of (int, int)
-        Folds over the n monthly changes; their first test month must be at least MAX_LAG.
-
-    Returns
-    -------
-    tuple of (np.ndarray, np.ndarray, list of tuple of (np.ndarray, np.ndarray))
-        Features with MAX_LAG lags, shape (n - MAX_LAG, 2 x MAX_LAG); the targets, shape
-        (n - MAX_LAG,); and per fold the training rows (targets before the fold) and the test
-        rows (targets inside it).
-
-    Notes
-    -----
-    Row r's target is change r + MAX_LAG, so every lag count is trained and scored on the same
-    months. Passing the folds explicitly matters: scikit-learn's default folds ignore time
-    order.
-    """
-    features = lag_features(changes, MAX_LAG)
-    target = changes[MAX_LAG:, column]
-    rows = np.arange(len(target))
-    splits = [
-        (rows[: start - MAX_LAG], rows[start - MAX_LAG : end - MAX_LAG]) for start, end in folds
-    ]
-    return features, target, splits
-
-
-def optuna_search(
-    changes: np.ndarray, model: str, column: int, folds: list[Fold]
-) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
-    """
-    Tune one network for one series with Optuna's TPE sampler.
+    The lag features, targets and fold row indices of one model's search.
 
     Parameters
     ----------
     changes : np.ndarray
         Both series' training changes, shape (n, 2), trillions.
     model : str
-        One of OPTUNA_MODELS.
+        One of LAG_MODELS; its max_lag sets how many lags the features hold.
     column : int
         The series predicted.
     folds : list of tuple of (int, int)
-        Folds over the n monthly changes.
+        Folds over the n monthly changes; their first test month must be at least the
+        model's max_lag.
+
+    Returns
+    -------
+    tuple of (np.ndarray, np.ndarray, list of tuple of (np.ndarray, np.ndarray))
+        Features with max_lag lags, shape (n - max_lag, 2 x max_lag); the targets, shape
+        (n - max_lag,); and per fold the training rows (targets before the fold) and the test
+        rows (targets inside it).
+
+    Notes
+    -----
+    Row r's target is change r + max_lag, so every lag count of the model is trained and
+    scored on the same months, and every model is scored on the folds' months. Passing the
+    folds explicitly matters: scikit-learn's default folds ignore time order.
+    """
+    longest = max_lag(model)
+    features = lag_features(changes, longest)
+    target = changes[longest:, column]
+    rows = np.arange(len(target))
+    splits = [
+        (rows[: start - longest], rows[start - longest : end - longest]) for start, end in folds
+    ]
+    return features, target, splits
+
+
+def run_optuna(
+    label: str, model: str, score: Callable[[dict[str, Any]], float]
+) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
+    """
+    Search one model's space with Optuna's TPE sampler.
+
+    Parameters
+    ----------
+    label : str
+        Names the series in the progress lines.
+    model : str
+        The model key in SPACES.
+    score : callable
+        Setting -> its cross-validation score (lower is better).
 
     Returns
     -------
     tuple of (dict of str to Any, list of dict of str to Any, int)
-        As search(): the best setting, every trial's setting and score (MAE, trillions) in
-        trial order, and 0 for the space's size (it has continuous ranges).
+        As search(): the best setting, every trial's setting and score in trial order, and 0
+        for the space's size (it has continuous ranges).
 
     Notes
     -----
-    Processing:
-    1. Each trial suggests one value per setting: a choice from a list, or a float from a
-       {"low", "high", "log"} range (on a log scale when "log" is true).
-    2. It is scored like every other ML model: fitted on each fold's earlier months and scored
-       by the mean absolute error of the fold's months (cross_val_score on lag_splits' rows).
-    3. CANDIDATES trials run one after another, so the seeded sampler's choices repeat
-       exactly; no pruning, so every trial is scored on every fold.
+    Each trial suggests one value per setting: a choice from a list, or a float from a
+    {"low", "high", "log"} range (on a log scale when "log" is true). CANDIDATES trials run one
+    after another, so the seeded sampler's choices repeat exactly; no pruning, so every trial
+    is scored on every fold.
     """
     import optuna
 
-    features, target, splits = lag_splits(changes, column, folds)
     space = SPACES[model]
-    progress = Progress(f"TUNE | {series_title(VALUE_COLUMNS[column])} | {model}", CANDIDATES)
+    progress = Progress(f"TUNE | {label} | {model}", CANDIDATES)
 
     def objective(trial: Any) -> float:
         """
-        Cross-validation MAE of the trial's settings.
+        The cross-validation score of the trial's settings.
 
         Parameters
         ----------
@@ -678,7 +686,7 @@ def optuna_search(
         Returns
         -------
         float
-            Mean absolute one-month error over the fold months, trillions.
+            score() of the suggested setting.
         """
         setting = {
             name: trial.suggest_float(name, spec["low"], spec["high"], log=spec["log"])
@@ -686,15 +694,7 @@ def optuna_search(
             else trial.suggest_categorical(name, spec)
             for name, spec in space.items()
         }
-        scores = cross_val_score(
-            TunableModel(model, **setting),
-            features,
-            target,
-            cv=splits,
-            scoring="neg_mean_absolute_error",
-            error_score="raise",
-        )
-        return -float(np.mean(scores))
+        return score(setting)
 
     def report(study: Any, trial: Any) -> None:
         """
@@ -718,13 +718,108 @@ def optuna_search(
         direction="minimize", sampler=optuna.samplers.TPESampler(seed=RANDOM_SEED)
     )
     study.optimize(objective, n_trials=CANDIDATES, callbacks=[report])
-    # Every trial completes or raises (error_score="raise"), so each has a value.
+    # Every trial completes or raises, so each has a value.
     scored = [
         {"settings": dict(trial.params), "score": float(trial.value)}
         for trial in study.trials
         if trial.value is not None
     ]
     return dict(study.best_params), scored, 0
+
+
+def optuna_search(
+    changes: np.ndarray, model: str, column: int, folds: list[Fold]
+) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
+    """
+    Tune one network for one series with Optuna's TPE sampler.
+
+    Parameters
+    ----------
+    changes : np.ndarray
+        Both series' training changes, shape (n, 2), trillions.
+    model : str
+        One of OPTUNA_MODELS.
+    column : int
+        The series predicted.
+    folds : list of tuple of (int, int)
+        Folds over the n monthly changes.
+
+    Returns
+    -------
+    tuple of (dict of str to Any, list of dict of str to Any, int)
+        As run_optuna().
+
+    Notes
+    -----
+    Each trial is scored like every other lag-feature model: fitted on each fold's earlier
+    months and scored by the mean absolute error of the fold's months (cross_val_score on
+    lag_splits' rows).
+    """
+    features, target, splits = lag_splits(changes, model, column, folds)
+
+    def score(setting: dict[str, Any]) -> float:
+        """
+        Cross-validation MAE of one setting.
+
+        Parameters
+        ----------
+        setting : dict of str to Any
+            The trial's settings.
+
+        Returns
+        -------
+        float
+            Mean absolute one-month error over the fold months, trillions.
+        """
+        scores = cross_val_score(
+            TunableModel(model, **setting),
+            features,
+            target,
+            cv=splits,
+            scoring="neg_mean_absolute_error",
+            error_score="raise",
+        )
+        return -float(np.mean(scores))
+
+    return run_optuna(series_title(VALUE_COLUMNS[column]), model, score)
+
+
+def prophet_one_step(
+    dates: pd.Series, levels: np.ndarray, setting: Mapping[str, Any], folds: list[Fold]
+) -> np.ndarray:
+    """
+    One-month errors of Prophet over every fold, refitted at every month, in parallel.
+
+    Parameters
+    ----------
+    dates : pd.Series
+        The training split's month-end dates, one per level.
+    levels : np.ndarray
+        One series' training levels, shape (n + 1,), trillions.
+    setting : Mapping of str to Any
+        Prophet's settings.
+    folds : list of tuple of (int, int)
+        Folds over the n monthly changes.
+
+    Returns
+    -------
+    np.ndarray
+        One-month level errors, every fold month, trillions.
+
+    Notes
+    -----
+    Change t is the move into level t + 1, so its forecast comes from the levels up to t, as
+    for exponential smoothing. The refits are independent, so they run in parallel processes;
+    each gives the same forecast wherever it runs.
+    """
+    from joblib import Parallel, delayed
+
+    months = [month for start, end in folds for month in range(start, end)]
+    forecasts = Parallel(n_jobs=-1)(
+        delayed(prophet_forecast)(dates[: month + 1], levels[: month + 1], setting, 1)
+        for month in months
+    )
+    return np.array([levels[month + 1] - mean[0] for month, (mean, _) in zip(months, forecasts)])
 
 
 def search(
@@ -764,6 +859,7 @@ def search(
 
 def tune_series(
     levels: np.ndarray,
+    dates: pd.Series,
     target: int,
     folds: list[Fold],
     system_cache: dict[tuple[str, str, int], np.ndarray],
@@ -775,6 +871,8 @@ def tune_series(
     ----------
     levels : np.ndarray
         Both series' training levels, shape (n + 1, 2), trillions, VALUE_COLUMNS order.
+    dates : pd.Series
+        Their month-end dates, for Prophet.
     target : int
         The series tuned (column of `levels`).
     folds : list of tuple of (int, int)
@@ -799,6 +897,7 @@ def tune_series(
     4. VAR and VECM, SMA and exponential smoothing, scored by MAE.
     5. The ML models and neural networks, by RandomizedSearchCV (ml_search), or by Optuna
        for the TensorFlow and PyTorch networks (optuna_search), scored by MAE.
+    6. Prophet, by Optuna, refitted at every fold month (prophet_one_step), scored by MAE.
 
     Naive's one-month forecast is no change, so its error is the change itself and its MAE the
     mean absolute change over the fold months: the reference every point model is shown
@@ -956,6 +1055,18 @@ def tune_series(
     for model in LAG_MODELS:
         search_model = optuna_search if model in OPTUNA_MODELS else ml_search
         record(model, "MAE", naive_mae, search_model(changes, model, target, folds))
+    record(
+        PROPHET,
+        "MAE",
+        naive_mae,
+        run_optuna(
+            label,
+            PROPHET,
+            lambda setting: float(
+                np.mean(np.abs(prophet_one_step(dates, levels[:, target], setting, folds)))
+            ),
+        ),
+    )
     return tuned, summaries
 
 
@@ -1143,7 +1254,9 @@ def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv")
     summaries: dict[str, list[dict[str, Any]]] = {}
     for target, column in enumerate(VALUE_COLUMNS):
         begin_phase(f"Tune every model for {series_title(column)}")
-        tuned[column], summaries[column] = tune_series(values, target, folds, system_cache)
+        tuned[column], summaries[column] = tune_series(
+            values, train[DATE_COLUMN], target, folds, system_cache
+        )
 
     begin_phase("Write the tuned settings, report and figure")
     TUNED_PATH.write_text(json.dumps(tuned, indent=2) + "\n", encoding="utf-8")

@@ -305,7 +305,15 @@
     "mlp": {
       "value": {
         "lags": [1, 2, 3, 4, 5, 6, 7, 8],
-        "hidden_layer_sizes": [[4], [8], [16], [32], [8, 4], [16, 8], [32, 16]],
+        "hidden_layer_sizes": [
+          [4],
+          [8],
+          [16],
+          [32],
+          [8, 4],
+          [16, 8],
+          [32, 16]
+        ],
         "activation": ["relu", "tanh"],
         "solver": ["lbfgs", "adam"],
         "alpha": [1e-05, 0.0001, 0.001, 0.01, 0.1, 1.0, 10.0],
@@ -386,6 +394,118 @@
         "validation_share": [0.25]
       },
       "reasoning": "The PyTorch multilayer perceptron (nn_forecasting). Layers as A1 (one sigmoid hidden layer) or A2 (three ReLU hidden layers) and a linear output unit, with no biases (as in the original A1 and A2) or biases on every layer (as in its A2-bias variant), searched so cross-validation decides; and the framework's own defaults for everything else, as in the neural-network-numpy project's PyTorch networks. Searched by Optuna's TPE sampler (seed RANDOM_SEED, 60 trials one after another, no pruning), over the same space as that project's tuning: optimizer SGD, momentum SGD (0.9), Adam (in place of AdaBelief, which PyTorch doesn't ship) or Muon; learning rate 0.0001 to 0.3 and weight decay 0.000001 to 0.01 on a log scale; dropout after every hidden layer, 0 to 0.3. Width 4 to 32 and batch size 8, 16 or 32 as for the NumPy networks, since this data has 2 to 16 inputs and 40 to 200 training rows per fit. Training as the NumPy networks: at most 100 epochs, early stopping after 10 epochs without a holdout improvement of 0.0001, never before epoch 20, keeping the best weights; the holdout is the last 25% of each fit's rows in time order. Features and target are standardized inside every fit. Lags as for Ridge."
+    },
+    "lstm": {
+      "value": {
+        "lags": [3, 6, 12, 18, 24],
+        "hidden_units": [4, 8, 16, 32],
+        "layers": [1, 2],
+        "dropout": {"low": 0.0, "high": 0.3, "log": false},
+        "optimizer": ["sgd", "momentum", "adam", "muon"],
+        "learning_rate": {"low": 0.0001, "high": 0.3, "log": true},
+        "weight_decay": {"low": 1e-06, "high": 0.01, "log": true},
+        "batch_size": [8, 16, 32],
+        "use_bias": [false, true],
+        "epochs": [100],
+        "patience": [10],
+        "min_delta": [0.0001],
+        "min_epochs": [20],
+        "validation_share": [0.25]
+      },
+      "reasoning": "LSTM (Hochreiter and Schmidhuber 1997) in PyTorch (sequence_networks): stacked recurrent layers over the window, the last step's state to one linear output. 4 to 32 units and one or two layers, the sizes the small MLPs use, since this data has 40 to 200 training rows per fit; dropout 0 to 0.3 between layers and before the output. The window (lags) is 3, 6, 12, 18 or 24 months of both series' changes: from a quarter to two years, so up to two seasonal cycles; the first fold still keeps 37 training rows at 24. Training and tuning as for the PyTorch MLP: optimizer SGD, momentum SGD (0.9), Adam or Muon (Muon for the 2-D weight matrices, Adam for the rest, as in the original PyTorch networks); learning rate 0.0001 to 0.3 and weight decay 0.000001 to 0.01 on a log scale; batch size 8, 16 or 32; biases off or on; at most 100 epochs, early stopping after 10 epochs without a holdout improvement of 0.0001, never before epoch 20, on the last 25% of each fit's rows in time order. Optuna's TPE sampler, 60 trials, no pruning. One-month forecasts fed back for longer horizons, like every other model."
+    },
+    "gru": {
+      "value": {
+        "lags": [3, 6, 12, 18, 24],
+        "hidden_units": [4, 8, 16, 32],
+        "layers": [1, 2],
+        "dropout": {"low": 0.0, "high": 0.3, "log": false},
+        "optimizer": ["sgd", "momentum", "adam", "muon"],
+        "learning_rate": {"low": 0.0001, "high": 0.3, "log": true},
+        "weight_decay": {"low": 1e-06, "high": 0.01, "log": true},
+        "batch_size": [8, 16, 32],
+        "use_bias": [false, true],
+        "epochs": [100],
+        "patience": [10],
+        "min_delta": [0.0001],
+        "min_epochs": [20],
+        "validation_share": [0.25]
+      },
+      "reasoning": "GRU (Cho et al. 2014) in PyTorch (sequence_networks): as the LSTM with gated recurrent units, which have fewer parameters per unit. 4 to 32 units, one or two layers, dropout 0 to 0.3. The window (lags) is 3, 6, 12, 18 or 24 months of both series' changes: from a quarter to two years, so up to two seasonal cycles; the first fold still keeps 37 training rows at 24. Training and tuning as for the PyTorch MLP: optimizer SGD, momentum SGD (0.9), Adam or Muon (Muon for the 2-D weight matrices, Adam for the rest, as in the original PyTorch networks); learning rate 0.0001 to 0.3 and weight decay 0.000001 to 0.01 on a log scale; batch size 8, 16 or 32; biases off or on; at most 100 epochs, early stopping after 10 epochs without a holdout improvement of 0.0001, never before epoch 20, on the last 25% of each fit's rows in time order. Optuna's TPE sampler, 60 trials, no pruning. One-month forecasts fed back for longer horizons, like every other model."
+    },
+    "tcn": {
+      "value": {
+        "lags": [3, 6, 12, 18, 24],
+        "hidden_units": [4, 8, 16, 32],
+        "layers": [1, 2, 3],
+        "kernel_size": [2, 3],
+        "dropout": {"low": 0.0, "high": 0.3, "log": false},
+        "optimizer": ["sgd", "momentum", "adam", "muon"],
+        "learning_rate": {"low": 0.0001, "high": 0.3, "log": true},
+        "weight_decay": {"low": 1e-06, "high": 0.01, "log": true},
+        "batch_size": [8, 16, 32],
+        "use_bias": [false, true],
+        "epochs": [100],
+        "patience": [10],
+        "min_delta": [0.0001],
+        "min_epochs": [20],
+        "validation_share": [0.25]
+      },
+      "reasoning": "TCN (Bai, Kolter and Koltun 2018) in PyTorch (sequence_networks): residual blocks of two dilated causal convolutions, dilation doubling per block. 4 to 32 channels; 1 to 3 blocks with kernel 2 or 3, so the receptive field runs from 3 to 29 months and covers the longest window; dropout 0 to 0.3. The window (lags) is 3, 6, 12, 18 or 24 months of both series' changes: from a quarter to two years, so up to two seasonal cycles; the first fold still keeps 37 training rows at 24. Training and tuning as for the PyTorch MLP: optimizer SGD, momentum SGD (0.9), Adam or Muon (Muon for the 2-D weight matrices, Adam for the rest, as in the original PyTorch networks); learning rate 0.0001 to 0.3 and weight decay 0.000001 to 0.01 on a log scale; batch size 8, 16 or 32; biases off or on; at most 100 epochs, early stopping after 10 epochs without a holdout improvement of 0.0001, never before epoch 20, on the last 25% of each fit's rows in time order. Optuna's TPE sampler, 60 trials, no pruning. One-month forecasts fed back for longer horizons, like every other model."
+    },
+    "nbeats": {
+      "value": {
+        "lags": [3, 6, 12, 18, 24],
+        "hidden_units": [8, 16, 32, 64],
+        "layers": [2, 4],
+        "blocks": [1, 2, 3],
+        "dropout": {"low": 0.0, "high": 0.3, "log": false},
+        "optimizer": ["sgd", "momentum", "adam", "muon"],
+        "learning_rate": {"low": 0.0001, "high": 0.3, "log": true},
+        "weight_decay": {"low": 1e-06, "high": 0.01, "log": true},
+        "batch_size": [8, 16, 32],
+        "use_bias": [false, true],
+        "epochs": [100],
+        "patience": [10],
+        "min_delta": [0.0001],
+        "min_epochs": [20],
+        "validation_share": [0.25]
+      },
+      "reasoning": "N-BEATS, generic (Oreshkin et al. 2020), in PyTorch (sequence_networks): blocks of fully connected ReLU layers in a residual chain, each removing its backcast from the window and adding its forecast. 1 to 3 blocks of 2 or 4 layers (the paper uses 4) and 8 to 64 units, scaled down from the paper's 512 for 40 to 200 training rows; dropout 0 to 0.3. The window (lags) is 3, 6, 12, 18 or 24 months of both series' changes: from a quarter to two years, so up to two seasonal cycles; the first fold still keeps 37 training rows at 24. Training and tuning as for the PyTorch MLP: optimizer SGD, momentum SGD (0.9), Adam or Muon (Muon for the 2-D weight matrices, Adam for the rest, as in the original PyTorch networks); learning rate 0.0001 to 0.3 and weight decay 0.000001 to 0.01 on a log scale; batch size 8, 16 or 32; biases off or on; at most 100 epochs, early stopping after 10 epochs without a holdout improvement of 0.0001, never before epoch 20, on the last 25% of each fit's rows in time order. Optuna's TPE sampler, 60 trials, no pruning. One-month forecasts fed back for longer horizons, like every other model."
+    },
+    "dlinear": {
+      "value": {
+        "lags": [3, 6, 12, 18, 24],
+        "kernel_size": [3, 5, 7],
+        "optimizer": ["sgd", "momentum", "adam", "muon"],
+        "learning_rate": {"low": 0.0001, "high": 0.3, "log": true},
+        "weight_decay": {"low": 1e-06, "high": 0.01, "log": true},
+        "batch_size": [8, 16, 32],
+        "use_bias": [false, true],
+        "epochs": [100],
+        "patience": [10],
+        "min_delta": [0.0001],
+        "min_epochs": [20],
+        "validation_share": [0.25]
+      },
+      "reasoning": "DLinear (Zeng et al. 2023) in PyTorch (sequence_networks): a centred moving-average trend and the remainder, each mapped to the forecast by one linear layer; the check of whether depth adds anything. Moving average of 3, 5 or 7 months (the paper's 25 is for windows of hundreds of steps; these windows are 3 to 24); no hidden layers, so no dropout or width. The window (lags) is 3, 6, 12, 18 or 24 months of both series' changes: from a quarter to two years, so up to two seasonal cycles; the first fold still keeps 37 training rows at 24. Training and tuning as for the PyTorch MLP: optimizer SGD, momentum SGD (0.9), Adam or Muon (Muon for the 2-D weight matrices, Adam for the rest, as in the original PyTorch networks); learning rate 0.0001 to 0.3 and weight decay 0.000001 to 0.01 on a log scale; batch size 8, 16 or 32; biases off or on; at most 100 epochs, early stopping after 10 epochs without a holdout improvement of 0.0001, never before epoch 20, on the last 25% of each fit's rows in time order. Optuna's TPE sampler, 60 trials, no pruning. One-month forecasts fed back for longer horizons, like every other model."
+    }
+  },
+  "ready_made": {
+    "prophet": {
+      "value": {
+        "growth": ["linear", "flat"],
+        "changepoint_prior_scale": {"low": 0.001, "high": 0.5, "log": true},
+        "changepoint_range": [0.8, 0.9, 0.95],
+        "seasonality_mode": ["additive", "multiplicative"],
+        "seasonality_prior_scale": {"low": 0.01, "high": 10.0, "log": true},
+        "yearly_seasonality": [true, false]
+      },
+      "reasoning": "The settings Prophet's documentation names for tuning, over its recommended ranges: changepoint_prior_scale 0.001 to 0.5 and seasonality_prior_scale 0.01 to 10 on a log scale (how freely the trend bends and how strong the season may be), seasonality_mode additive or multiplicative, and changepoint_range 0.8 (the default: changepoints in the first 80% of the history), 0.9 or 0.95, which lets the trend turn closer to the origin, as at the start of QT. growth linear or flat (no trend); logistic growth is left out, as it needs a saturation level the data doesn't give. Yearly seasonality on or off; weekly and daily seasonality are off in the code, since the data is monthly. Searched by Optuna's TPE sampler, 60 trials, no pruning, on the same folds, Prophet refitted at every month of each fold as the evaluation does (the refits run in parallel)."
+    },
+    "uncertainty_samples": {
+      "value": 1000,
+      "reasoning": "Prophet's default. The standard deviation of 1,000 draws has a relative Monte Carlo error of about 1 / sqrt(2 x 999) = 2.2%, small next to the forecast spread itself."
     }
   }
 }

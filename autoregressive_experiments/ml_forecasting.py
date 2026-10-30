@@ -53,8 +53,29 @@ ML_SPACES: dict[str, Mapping[str, Any]] = {
     XGBOOST: SETTINGS.xgboost,
     KNN: SETTINGS.knn,
 }
-# The longest lag any search space tries; the tuning builds its features once with it.
-MAX_LAG = max(max(space["lags"]) for space in (*ML_SPACES.values(), *NN_SPACES.values()))
+
+
+def max_lag(model: str) -> int:
+    """
+    The longest lag a model's search space tries.
+
+    Parameters
+    ----------
+    model : str
+        One of LAG_MODELS.
+
+    Returns
+    -------
+    int
+        The largest value of its "lags" setting; the tuning builds that model's features once
+        with this many lags.
+
+    Notes
+    -----
+    Per model, not shared: the sequence networks read windows of up to two years, and one
+    shared maximum would cost every other model its first training rows.
+    """
+    return int(max({**ML_SPACES, **NN_SPACES}[model]["lags"]))
 
 
 def lag_features(changes: np.ndarray, lags: int) -> np.ndarray:
