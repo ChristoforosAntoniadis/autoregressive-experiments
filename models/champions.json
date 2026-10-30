@@ -1,0 +1,137 @@
+{
+  "fed_total_assets_T": {
+    "econometric": {
+      "model": "exponential smoothing",
+      "settings": {
+        "trend": "add",
+        "damped_trend": true,
+        "seasonal": null,
+        "use_boxcox": true,
+        "initialization_method": "heuristic"
+      },
+      "validation_mean_MASE": 15.56395869094084,
+      "validation_MASE": {
+        "1": 3.0801158289488955,
+        "3": 7.463533753026394,
+        "6": 15.371670753581464,
+        "9": 22.010752853947228,
+        "12": 29.893720265200212
+      }
+    },
+    "machine learning": {
+      "model": "XGBoost",
+      "settings": {
+        "lags": 4,
+        "n_estimators": 800,
+        "learning_rate": 0.05,
+        "max_depth": 2,
+        "min_child_weight": 2,
+        "subsample": 0.85,
+        "colsample_bytree": 1.0,
+        "gamma": 0.5,
+        "reg_alpha": 0.1,
+        "reg_lambda": 0.1
+      },
+      "validation_mean_MASE": 13.232181962118887,
+      "validation_MASE": {
+        "1": 3.45648968871055,
+        "3": 9.314547895750184,
+        "6": 10.704114380491609,
+        "9": 16.295038654731485,
+        "12": 26.3907191909106
+      }
+    },
+    "neural network": {
+      "model": "NumPy A1",
+      "settings": {
+        "lags": 1,
+        "hidden_units": 32,
+        "optimizer": "adabelief",
+        "learning_rate": 0.1,
+        "use_bias": true,
+        "dropout": 0.1,
+        "batch_size": 32,
+        "epochs": 100,
+        "patience": 10,
+        "min_delta": 0.0001,
+        "min_epochs": 20,
+        "validation_share": 0.25
+      },
+      "validation_mean_MASE": 13.068884674539792,
+      "validation_MASE": {
+        "1": 3.5586080537153832,
+        "3": 8.899935351456293,
+        "6": 12.58893791890151,
+        "9": 17.474396024465257,
+        "12": 22.822546024160513
+      }
+    }
+  },
+  "monetary_base_T": {
+    "econometric": {
+      "model": "VECM",
+      "settings": {
+        "lags": 2,
+        "deterministic": "ci"
+      },
+      "validation_mean_MASE": 9.186682033831987,
+      "validation_MASE": {
+        "1": 2.517788692999046,
+        "3": 5.009265717238097,
+        "6": 10.400133783908656,
+        "9": 11.587828247380678,
+        "12": 16.418393727633458
+      }
+    },
+    "machine learning": {
+      "model": "XGBoost",
+      "settings": {
+        "lags": 4,
+        "n_estimators": 800,
+        "learning_rate": 0.05,
+        "max_depth": 2,
+        "min_child_weight": 2,
+        "subsample": 0.85,
+        "colsample_bytree": 1.0,
+        "gamma": 0.5,
+        "reg_alpha": 0.1,
+        "reg_lambda": 0.1
+      },
+      "validation_mean_MASE": 8.168100936708914,
+      "validation_MASE": {
+        "1": 2.326764552210226,
+        "3": 6.362380114827578,
+        "6": 7.918249543235855,
+        "9": 9.78880693657304,
+        "12": 14.444303536697873
+      }
+    },
+    "neural network": {
+      "model": "PyTorch MLP",
+      "settings": {
+        "lags": 5,
+        "architecture": "A1",
+        "hidden_units": 32,
+        "use_bias": false,
+        "optimizer": "muon",
+        "learning_rate": 0.04641071739310981,
+        "weight_decay": 9.147831760537897e-06,
+        "dropout": 0.05089284642519271,
+        "batch_size": 16,
+        "epochs": 100,
+        "patience": 10,
+        "min_delta": 0.0001,
+        "min_epochs": 20,
+        "validation_share": 0.25
+      },
+      "validation_mean_MASE": 6.976857569124642,
+      "validation_MASE": {
+        "1": 2.8199877318125255,
+        "3": 5.238933305584336,
+        "6": 6.798249867329938,
+        "9": 7.859034447418188,
+        "12": 12.168082493478227
+      }
+    }
+  }
+}

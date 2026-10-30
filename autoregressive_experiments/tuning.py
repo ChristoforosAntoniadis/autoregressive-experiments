@@ -134,6 +134,9 @@ REPORT_PATH = REPORTS_DIR / "tuning.txt"
 VALIDATION_METRICS_PATH = REPORTS_DIR / "validation_metrics.csv"
 SCORES_PATH = REPORTS_DIR / "tuning_scores.csv"
 FIGURE_PATH = FIGURES_DIR / "tuning.png"
+# The figure's axis ends here: a setting several times worse than naive is a failed setting,
+# and a diverged network's score (thousands of times naive's) would squash the useful range.
+MAX_SHOWN_RATIO = 3.0
 
 # Per-horizon metrics of one series: horizon -> {"n", "MAE", "MSE", "RMSE", "MAPE", "MASE"}.
 Metrics = dict[int, dict[str, float]]
@@ -666,7 +669,8 @@ def tuning_figure(
     Figure
         One panel per series; one row per model (its family in the label), the settings tried
         as hollow points, the tuned one filled (palette slot 2 for the family champions), on a
-        log scale around naive at 1. The caller saves and closes it.
+        log scale around naive at 1 that ends at MAX_SHOWN_RATIO (settings beyond it shown as
+        one arrow at the edge). The caller saves and closes it.
     """
     apply_chart_style()
     models = list(trials)
@@ -690,17 +694,21 @@ def tuning_figure(
                 [trial["per_series"].get(column, np.nan) for trial in trials[model]], dtype=float
             )
             ratios = scores[np.isfinite(scores)] / reference
+            shown = ratios[ratios <= MAX_SHOWN_RATIO]
             axis.scatter(
-                ratios,
-                np.full(len(ratios), position),
+                shown,
+                np.full(len(shown), position),
                 s=20,
                 facecolors="none",
                 edgecolors=MUTED_INK,
                 linewidths=1,
             )
+            beyond = int((ratios > MAX_SHOWN_RATIO).sum())
+            if beyond:
+                axis.scatter([MAX_SHOWN_RATIO], [position], marker=">", s=30, color=MUTED_INK)
             champion = bool(rows.loc[model, "champion"])
             axis.scatter(
-                [rows.loc[model, "mean_MASE"] / reference],
+                [min(rows.loc[model, "mean_MASE"] / reference, MAX_SHOWN_RATIO)],
                 [position],
                 s=70 if champion else 45,
                 color=SERIES_PALETTE[1] if champion else SERIES_PALETTE[0],
@@ -708,6 +716,7 @@ def tuning_figure(
             )
         axis.axvline(1, color=PRIMARY_INK, linewidth=1.5)
         axis.set_xscale("log")
+        axis.set_xlim(right=MAX_SHOWN_RATIO * 1.08)
         # Fixed ratios: the log locator leaves 1 to 2 unlabelled when the range is wide.
         low, high = axis.get_xlim()
         ratios = (0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.2, 1.4, 1.6, 1.8, 2, 2.5, 3, 4, 5, 7, 10, 20, 50)
@@ -744,9 +753,17 @@ def tuning_figure(
             color=SERIES_PALETTE[1],
             label="tuned, family champion",
         ),
+        plt.Line2D(
+            [],
+            [],
+            marker=">",
+            linestyle="",
+            color=MUTED_INK,
+            label=f"settings more than {MAX_SHOWN_RATIO:g}x worse than naive (off scale)",
+        ),
         plt.Line2D([], [], color=PRIMARY_INK, label="naive"),
     ]
-    figure.legend(handles=handles, loc="lower center", ncols=4, fontsize=9, frameon=False)
+    figure.legend(handles=handles, loc="lower center", ncols=5, fontsize=9, frameon=False)
     axes[0][0].invert_yaxis()
     figure.tight_layout(rect=(0, 0.04, 1, 1))
     return figure
