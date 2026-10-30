@@ -125,6 +125,14 @@ class Tee:
         os.close(self.write_end)
         # Bounded, so shutdown never hangs on a worker that still holds the write end.
         self.thread.join(timeout=5)
+        if self.thread.is_alive():
+            # A child process (such as a joblib worker or its resource tracker) inherited the
+            # write end and still holds it, so the pump is blocked reading. On Windows, closing
+            # a descriptor another thread is reading blocks as well, so the pipe, the copies of
+            # the terminal and the file are left for process exit to close; the pump is a
+            # daemon thread and doesn't keep the process alive.
+            self.file.flush()
+            return
         os.close(self.read_end)
         os.close(self.original_out)
         os.close(self.original_err)

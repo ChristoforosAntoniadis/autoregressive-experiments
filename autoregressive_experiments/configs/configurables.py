@@ -6,8 +6,8 @@ The values themselves live in ``hyperparameters.json`` beside this file, each wi
 reasoning; ``config_loader`` reads that file, checks it against these definitions and
 builds the objects the modules import. Names, paths, colours, labels, model identities (such as
 GARCH(1,1) or a VAR on the differences, which the code's formulas assume) and the evaluation's
-fixed rules (such as selecting on one-month MASE) are code, not settings, and stay in their
-modules.
+fixed rules (such as selecting on validation MASE averaged over the horizons) are code, not
+settings, and stay in their modules.
 
 Input: none.
 
@@ -31,7 +31,6 @@ RANDOM_SEED = 1337
 # values to try (a single value fixes the setting).
 SPACES: dict[str, frozenset[str]] = {
     "sarima": frozenset({"p", "q", "P", "Q", "trend"}),
-    "variance": frozenset({"p", "q", "dist", "break_adjusted"}),
     "var": frozenset({"lags", "trend"}),
     "vecm": frozenset({"lags", "deterministic"}),
     "sma": frozenset({"window"}),
@@ -641,26 +640,21 @@ class ForecastEvaluationSettings:
 @dataclass(frozen=True)
 class TuningSettings:
     """
-    The time-aware random search (tuning.py) and the econometric models' search spaces.
+    The tuning on the validation split (tuning.py) and the econometric models' search spaces.
 
     Attributes
     ----------
-    folds : int
-        Expanding, time-ordered cross-validation folds inside the training split.
-    min_train_months : int
-        Months the first fold trains on, at least.
+    validation_step : int
+        Months between consecutive validation origins.
     candidates : int
-        Settings drawn at random per model and series; smaller spaces are tried in full.
-    sarima, variance, var, vecm, sma, exponential_smoothing, sarimax, combination
-        Mapping of str to list: each model's settings and the values tried (variance applies
-        to GARCH, EGARCH and GJR-GARCH alike).
+        Optuna trials per model; spaces of at most this many settings are tried in full.
+    sarima, var, vecm, sma, exponential_smoothing, sarimax, combination
+        Mapping of str to list: each model's settings and the values tried.
     """
 
-    folds: int = setting(lambda v: v >= 2, "at least 2")
-    min_train_months: int = setting(lambda v: v >= 24, "at least 24 (two seasonal cycles)")
+    validation_step: int = setting(lambda v: v >= 1, "at least 1")
     candidates: int = setting(lambda v: v >= 1, "at least 1")
     sarima: Mapping[str, Any] = space("sarima")
-    variance: Mapping[str, Any] = space("variance")
     var: Mapping[str, Any] = space("var")
     vecm: Mapping[str, Any] = space("vecm")
     sma: Mapping[str, Any] = space("sma")
@@ -726,19 +720,16 @@ class NnSettings:
 @dataclass(frozen=True)
 class ReadyMadeSettings:
     """
-    The ready-made family (prophet_forecasting.py).
+    The ready-made model, Prophet (prophet_forecasting.py), part of the econometric family.
 
     Attributes
     ----------
     prophet
         Mapping of str to list or range: Prophet's settings (its keyword names) and the values
         searched by Optuna.
-    uncertainty_samples : int
-        Prophet's uncertainty samples per forecast, for its intervals.
     """
 
     prophet: Mapping[str, Any] = space("prophet")
-    uncertainty_samples: int = setting(lambda v: v >= 100, "at least 100")
 
 
 @dataclass(frozen=True)

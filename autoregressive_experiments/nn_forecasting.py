@@ -26,9 +26,8 @@ ml_forecasting's build_model wraps them in that pipeline. The hand-written netwo
 blocks (activations, optimizers, the network and its training) are in
 ``modeling/utilities``.
 
-Every setting, the lag count included, is chosen per series by the time-aware search of
-``tuning`` on the training split (random draws, or Optuna's TPE sampler for the TensorFlow and
-PyTorch networks), from the search spaces in the ``nn`` section of
+Every setting, the lag count included, is chosen by ``tuning`` on the validation split
+(Optuna), one setting for both series, from the search spaces in the ``nn`` section of
 ``configs/hyperparameters.json``, and then kept fixed.
 
 Input: none; the networks are built by ``ml_forecasting`` and evaluated by
@@ -56,9 +55,6 @@ LSTM, GRU, TCN, NBEATS, DLINEAR = "LSTM", "GRU", "TCN", "N-BEATS", "DLinear"
 # The PyTorch sequence networks: model name -> TorchNetwork's architecture.
 SEQUENCE_MODELS = {LSTM: "lstm", GRU: "gru", TCN: "tcn", NBEATS: "nbeats", DLINEAR: "dlinear"}
 NN_MODELS = (MLP, NUMPY_A1, NUMPY_A2, TENSORFLOW_MLP, PYTORCH_MLP, *SEQUENCE_MODELS)
-# The networks tuned by Optuna (their spaces include numeric ranges); the others by
-# scikit-learn's RandomizedSearchCV.
-OPTUNA_MODELS = (TENSORFLOW_MLP, PYTORCH_MLP, *SEQUENCE_MODELS)
 # Model -> its search space: setting name -> the values tried.
 NN_SPACES: dict[str, Mapping[str, Any]] = {
     MLP: SETTINGS.mlp,

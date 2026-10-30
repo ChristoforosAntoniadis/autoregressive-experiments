@@ -1,0 +1,47 @@
+Volatility checks of the models that passed the residual checks (step U5)
+Training split only: 2003-01 to 2016-10, 166 first differences.
+Engle's ARCH-LM null hypothesis: no ARCH effects (constant conditional variance). Significance level: 5%; lags 1, 6, 12.
+Variance break: the split that best fits one variance before and another after, with at least 15% of the months on each side. A searched break has a non-standard test distribution, so the decisive evidence is ARCH-LM after removing it.
+Break-adjusted: each regime's residuals divided by that regime's standard deviation.
+
+fed_total_assets_T  SARIMA(2,1,2)
+  Variance break: 2008-09 (68 months before, 98 after)
+  Standard deviation: 0.0174 before, 0.0840 after (x4.8)
+  lag  1: ARCH-LM p=3.366e-05 as is, 8.408e-05 break-adjusted
+  lag  6: ARCH-LM p=0.005279 as is, 0.01079 break-adjusted
+  lag 12: ARCH-LM p=0.1217 as is, 0.1632 break-adjusted
+  Verdict: GARCH NEEDED. ARCH effects remain after removing the variance break: volatility clusters, so fit GARCH on the residuals.
+
+fed_total_assets_T  SARIMA(0,1,4)
+  Variance break: 2008-08 (67 months before, 99 after)
+  Standard deviation: 0.0177 before, 0.0836 after (x4.7)
+  lag  1: ARCH-LM p=1.291e-06 as is, 7.778e-06 break-adjusted
+  lag  6: ARCH-LM p=0.0002869 as is, 0.0005755 break-adjusted
+  lag 12: ARCH-LM p=0.01708 as is, 0.02109 break-adjusted
+  Verdict: GARCH NEEDED. ARCH effects remain after removing the variance break: volatility clusters, so fit GARCH on the residuals.
+
+monetary_base_T  SARIMA(0,1,1)x(1,0,1,12)
+  Variance break: 2008-09 (68 months before, 98 after)
+  Standard deviation: 0.0113 before, 0.0736 after (x6.5)
+  lag  1: ARCH-LM p=5.32e-10 as is, 2.777e-06 break-adjusted
+  lag  6: ARCH-LM p=2.664e-11 as is, 4.835e-07 break-adjusted
+  lag 12: ARCH-LM p=7.556e-09 as is, 2.509e-05 break-adjusted
+  Verdict: GARCH NEEDED. ARCH effects remain after removing the variance break: volatility clusters, so fit GARCH on the residuals.
+
+monetary_base_T  SARIMA(0,1,1)
+  Variance break: 2008-09 (68 months before, 98 after)
+  Standard deviation: 0.0105 before, 0.0756 after (x7.2)
+  lag  1: ARCH-LM p=1.038e-09 as is, 3.508e-06 break-adjusted
+  lag  6: ARCH-LM p=1.314e-10 as is, 1.227e-06 break-adjusted
+  lag 12: ARCH-LM p=6.464e-09 as is, 1.654e-05 break-adjusted
+  Verdict: GARCH NEEDED. ARCH effects remain after removing the variance break: volatility clusters, so fit GARCH on the residuals.
+
+monetary_base_T  SARIMA(1,1,1)x(1,0,1,12)
+  Variance break: 2008-09 (68 months before, 98 after)
+  Standard deviation: 0.0112 before, 0.0736 after (x6.6)
+  lag  1: ARCH-LM p=5.166e-10 as is, 2.749e-06 break-adjusted
+  lag  6: ARCH-LM p=2.703e-11 as is, 5.052e-07 break-adjusted
+  lag 12: ARCH-LM p=8.02e-09 as is, 2.653e-05 break-adjusted
+  Verdict: GARCH NEEDED. ARCH effects remain after removing the variance break: volatility clusters, so fit GARCH on the residuals.
+
+Figure: reports/figures/volatility_diagnostics.png

@@ -10,19 +10,18 @@ forecast changes are added onto the last level, as for SARIMA. The models work o
 levels, because both series are I(1) (step U1) and because trees and neighbours can't predict
 outside the range they were trained on, which the test levels leave.
 
-Every setting, the lag count k included, is chosen per model and series by the time-aware
-random search of ``tuning`` on the training split, from the search spaces in the ``ml`` section
-of ``configs/hyperparameters.json``, and then kept fixed. Features and target are standardized
-inside every fit, from the rows that fit sees only, so the penalties and tree thresholds in the
-search spaces are in standard-deviation units.
+Every setting, the lag count k included, is chosen by ``tuning`` on the validation split
+(Optuna), from the search spaces in the ``ml`` section of ``configs/hyperparameters.json``, and
+then kept fixed; one setting serves both series, which these models forecast together.
+Features and target are standardized inside every fit, from the rows that fit sees only, so the
+penalties and tree thresholds in the search spaces are in standard-deviation units.
 
-Input: levels handed over by the forecast-evaluation harness (``forecast_evaluation``), which
-also selects, scores and reports these models; tuned settings from ``tuning``.
+Input: levels handed over by ``model_forecasts`` (for tuning and the test).
 
-Output: model builders and forecasters; nothing is written to disk.
+Output: model builders and forecasts; nothing is written to disk.
 """
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -289,69 +288,3 @@ def ml_forecast(
         for column, options in enumerate(settings)
     ]
     return history[-1] + np.cumsum(recursive_forecast(models, changes, steps), axis=0)
-
-
-def ml_forecaster(
-    model: str,
-    settings: Sequence[Mapping[str, Any]],
-    all_levels: np.ndarray,
-    target: int,
-    cache: dict[tuple[str, int, int], np.ndarray],
-) -> Callable[[np.ndarray, int], dict[str, np.ndarray]]:
-    """
-    A forecaster for one series of one ML model; the fit at each origin is shared between the
-    two series through the cache, as for the VAR systems.
-
-    Parameters
-    ----------
-    model : str
-        One of LAG_MODELS.
-    settings : Sequence of Mapping of str to Any
-        Each series' tuned settings for this model, in VALUE_COLUMNS order.
-    all_levels : np.ndarray
-        Levels of both series over the whole sample, shape (months, 2), trillions, columns in
-        VALUE_COLUMNS order. Only the months the harness hands over are ever used.
-    target : int
-        Column of `all_levels` this forecaster scores.
-    cache : dict of tuple of (str, int, int) to np.ndarray
-        Shared, mutated store of ml_forecast results, keyed by (model, months of history,
-        steps).
-
-    Returns
-    -------
-    callable
-        A forecaster for the harness: (levels, steps) -> {"forecast": level path, shape
-        (steps,), trillions}.
-    """
-
-    def forecast(levels: np.ndarray, steps: int) -> dict[str, np.ndarray]:
-        """
-        Forecast this series from the models fitted on both series so far.
-
-        Parameters
-        ----------
-        levels : np.ndarray
-            This series' levels up to and including the origin, shape (months,), trillions;
-            only its length is used to cut both series, after the leakage check.
-        steps : int
-            Months to forecast.
-
-        Returns
-        -------
-        dict of str to np.ndarray
-            "forecast": the level path, shape (steps,), trillions.
-
-        Raises
-        ------
-        AssertionError
-            If the history cut from `all_levels` doesn't match the levels the harness passed.
-        """
-        history = all_levels[: len(levels)]
-        # Leakage guard: both series end at the month the harness handed over.
-        assert np.array_equal(history[:, target], levels)
-        key = (model, len(levels), steps)
-        if key not in cache:
-            cache[key] = ml_forecast(model, settings, history, steps)
-        return {"forecast": cache[key][:, target]}
-
-    return forecast

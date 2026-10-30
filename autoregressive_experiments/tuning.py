@@ -1,115 +1,99 @@
 """
-Time-aware random search: every model's settings, tuned on the training split only.
+Tuning and champion selection on the validation split: the middle part of the textbook three-way
+split (Hastie, Tibshirani and Friedman 2009, section 7.2), in which training data fits each
+model's parameters, validation chooses its hyperparameters and each family's champion, and the
+test split (forecast_evaluation) measures the champions once.
 
-For each series and model, up to CANDIDATES settings are drawn at random, without repeats, from
-the model's search space in ``configs/hyperparameters.json`` (smaller spaces are tried in full).
-Each setting is scored by cross-validation in time order: FOLDS expanding folds of scikit-learn's
-TimeSeriesSplit over the training split's monthly changes, the first fold training on at least
-MIN_TRAIN_MONTHS months. Within a fold the model sees only the months before the fold, and is
-scored on one-month-ahead forecasts of the fold's months, each made from the actual past. Point
-models are scored by mean absolute error (the evaluation's one-month MASE ranks models the same
-way, being MAE over a constant), volatility models by the mean pinball loss of their one-month
-quantiles; the lowest score wins.
+Validation is rolling-origin with an expanding window (Tashman 2000): an origin every
+VALIDATION_STEP months through the validation split, at least 10 of them. At each origin a model
+is fitted on every month from the start of the data up to the origin and forecasts up to 12
+months ahead; only targets inside the validation split are scored, so test months are never
+seen. A setting's score is its MASE (Hyndman and Koehler 2006) averaged over the forecast
+horizons, so it must forecast well at every horizon.
 
-How each model forecasts a fold's months:
+Each model's settings are searched by Optuna: spaces of at most CANDIDATES settings in full by
+its grid sampler, larger ones by its seeded TPE sampler (Bergstra et al. 2011) with CANDIDATES
+trials, run one after another so the choices repeat exactly. Settings that only exist together
+(SARIMA's p and q under the order budget, exponential smoothing's damping and trend) are tried
+as one choice of their valid combinations. A setting without a usable forecast ranks last.
+Univariate models are tuned per series; VAR, VECM and the lag-feature models forecast both
+series together and are tuned once, on the two series' average score. Each origin's fit runs in
+a separate process, in parallel; every fit gives the same forecast wherever it runs.
 
-- SARIMA and SARIMAX: fitted once per fold, then run through the fold's months with their
-  parameters fixed (statsmodels' extend), so each forecast uses the actual past
-- GARCH, EGARCH and GJR-GARCH: fitted once per fold on the tuned SARIMA's in-sample residuals,
-  then run through the fold's one-month errors with their parameters fixed (arch's fix)
-- VAR, VECM, SMA and exponential smoothing: re-estimated at every month of the fold, exactly as
-  the evaluation does (they are cheap to fit)
-- the SARIMA + naive average: each weight applied to the tuned SARIMA's fold forecasts
-- ML and neural networks: searched with scikit-learn's RandomizedSearchCV on the same folds, the
-  settings run in parallel: fitted once per fold and predicting the fold's rows, whose features
-  are actual past changes
-- the TensorFlow and PyTorch networks: the same folds and score, but searched by Optuna's TPE
-  sampler (CANDIDATES trials, one after another, seeded with RANDOM_SEED, no pruning), which
-  chooses each trial's settings from the scores of the earlier ones
-- Prophet: searched by Optuna the same way, refitted at every month of each fold, as the
-  evaluation does (the refits run in parallel)
+Each family's champion per series (econometric, machine learning, neural network; see
+model_forecasts) is its model with the lowest validation score.
 
-SARIMA is tuned first: its tuned orders feed the volatility models, SARIMAX and the average.
-
-Input: ``data/interim/fed_balance_sheet_cleaned.csv`` (the training split only).
+Input: ``data/interim/fed_balance_sheet_cleaned.csv`` (train and validation months only).
 
 Output:
 
-- ``models/tuned_hyperparameters.json``: every model's tuned settings per series, read by the
-  forecast evaluation
-- ``reports/tuning.txt``: the folds, and per series and model the settings tried, the winner,
-  its cross-validation score and naive's
+- ``models/tuned_hyperparameters.json``: every model's tuned settings per series
+- ``models/champions.json``: each series' champion per family, with its settings and validation
+  scores, read by forecast_evaluation
+- ``reports/tuning.txt``: the origins, and per series every model's validation MASE by horizon,
+  its settings, and the champions
+- ``reports/validation_metrics.csv``: every tuned model's and naive's MAE, MSE, RMSE, MAPE and
+  MASE per series and horizon on validation
 - ``reports/tuning_scores.csv``: every setting tried and its score
-- ``reports/figures/tuning.png``: per series, every setting's score relative to the reference
-  (naive, or constant variance for the volatility models), the winner marked
+- ``reports/figures/tuning.png``: per series, every setting's validation score relative to naive's,
+  the tuned settings and the champions marked
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping, Sequence
+import itertools
 import json
 from pathlib import Path
 from typing import Any
 
-from arch import arch_model
+from joblib import Parallel, delayed
+from joblib.externals.loky import get_reusable_executor
 from loguru import logger
 from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter
+from matplotlib.ticker import FuncFormatter, NullLocator
 import numpy as np
 import pandas as pd
-from scipy import stats
-from sklearn.base import BaseEstimator, RegressorMixin
-from sklearn.model_selection import (
-    ParameterGrid,
-    RandomizedSearchCV,
-    TimeSeriesSplit,
-    cross_val_score,
-)
-from statsmodels.tsa.holtwinters import ExponentialSmoothing
 import typer
 
-from autoregressive_experiments.config import FIGURES_DIR, INTERIM_DATA_DIR, REPORTS_DIR
+from autoregressive_experiments.config import (
+    FIGURES_DIR,
+    INTERIM_DATA_DIR,
+    MODELS_DIR,
+    REPORTS_DIR,
+)
 from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.configs.configurables import RANDOM_SEED
 from autoregressive_experiments.diagnostics import (
     DIFFERENCING_ORDER,
     MAX_ORDER_SUM,
-    SEASONAL_PERIOD,
     VALUE_COLUMNS,
-    fit_sarima,
     repo_path,
 )
-from autoregressive_experiments.features import DATE_COLUMN, lagged_exog, split_boundaries
-from autoregressive_experiments.forecast_evaluation import (
+from autoregressive_experiments.features import (
+    DATE_COLUMN,
+    series_title,
+    split_boundaries,
+    split_by_time,
+)
+from autoregressive_experiments.metrics import HORIZONS, MAX_HORIZON, accuracy, mase_scale
+from autoregressive_experiments.ml_forecasting import ML_SPACES
+from autoregressive_experiments.model_forecasts import (
+    COMBINATION,
     EXPONENTIAL,
-    QUANTILES,
+    FAMILIES,
+    JOINT_MODELS,
+    NAIVE,
     SARIMA,
     SARIMAX,
     SMA,
-    TUNED_PATH,
-    TUNING_REPORT_PATH,
     VAR_MODEL,
     VECM_MODEL,
-    VOLATILITY_SPECS,
-    pinball_loss,
-    series_title,
-    system_forecast,
-    volatility_spec,
+    family_of,
+    joint_paths,
+    series_path,
 )
-from autoregressive_experiments.ml_forecasting import (
-    LAG_MODELS,
-    ML_SPACES,
-    RIDGE,
-    build_model,
-    lag_columns,
-    lag_features,
-    max_lag,
-)
-from autoregressive_experiments.nn_forecasting import NN_SPACES, OPTUNA_MODELS
-from autoregressive_experiments.prophet_forecasting import (
-    PROPHET,
-    READY_MADE_SPACES,
-    prophet_forecast,
-)
+from autoregressive_experiments.nn_forecasting import NN_SPACES
+from autoregressive_experiments.prophet_forecasting import PROPHET, READY_MADE_SPACES
 from autoregressive_experiments.residual_checks import (
     MUTED_INK,
     PRIMARY_INK,
@@ -119,37 +103,40 @@ from autoregressive_experiments.residual_checks import (
     apply_chart_style,
 )
 from autoregressive_experiments.runlog import Progress, begin_phase, finish_run, start_run_log
-from autoregressive_experiments.volatility_checks import regime_scales, variance_break
 
 app = typer.Typer()
 
 # Settings; each value's reasoning is in configs/hyperparameters.json.
 SETTINGS = HYPERPARAMETERS.tuning
-FOLDS = SETTINGS.folds
-MIN_TRAIN_MONTHS = SETTINGS.min_train_months
+VALIDATION_STEP = SETTINGS.validation_step
 CANDIDATES = SETTINGS.candidates
-COMBINATION = "combination"
-# Model key -> its search space, in tuning order: SARIMA first, since the volatility models,
-# SARIMAX and the average build on its tuned orders. The volatility models share one space.
+# Model -> its search space: setting name -> a list of values, or a {"low", "high", "log"} range.
 SPACES: dict[str, Mapping[str, Any]] = {
     SARIMA: SETTINGS.sarima,
-    **{model: SETTINGS.variance for model in VOLATILITY_SPECS},
     SARIMAX: SETTINGS.sarimax,
     COMBINATION: SETTINGS.combination,
     VAR_MODEL: SETTINGS.var,
     VECM_MODEL: SETTINGS.vecm,
     SMA: SETTINGS.sma,
     EXPONENTIAL: SETTINGS.exponential_smoothing,
+    **READY_MADE_SPACES,
     **ML_SPACES,
     **NN_SPACES,
-    **READY_MADE_SPACES,
 }
-# A cross-validation fold: (first month it tests, first month after it), as positions in the
-# training split's monthly changes; the fold trains on every change before its first test month.
-Fold = tuple[int, int]
+# Settings that only exist together: tried as one choice of their valid combinations.
+LINKED: dict[str, tuple[str, ...]] = {SARIMA: ("p", "q"), EXPONENTIAL: ("trend", "damped_trend")}
+# The univariate models, in tuning order: SARIMA first, since SARIMAX and the average use it.
+UNIVARIATE = (SARIMA, SARIMAX, COMBINATION, SMA, EXPONENTIAL, PROPHET)
 
+TUNED_PATH = MODELS_DIR / "tuned_hyperparameters.json"
+CHAMPIONS_PATH = MODELS_DIR / "champions.json"
+REPORT_PATH = REPORTS_DIR / "tuning.txt"
+VALIDATION_METRICS_PATH = REPORTS_DIR / "validation_metrics.csv"
 SCORES_PATH = REPORTS_DIR / "tuning_scores.csv"
 FIGURE_PATH = FIGURES_DIR / "tuning.png"
+
+# Per-horizon metrics of one series: horizon -> {"n", "MAE", "MSE", "RMSE", "MAPE", "MASE"}.
+Metrics = dict[int, dict[str, float]]
 
 
 def usable(score: float) -> float:
@@ -159,8 +146,8 @@ def usable(score: float) -> float:
     Parameters
     ----------
     score : float
-        A cross-validation score; NaN or infinite when a setting gave no usable forecast (for
-        example a multiplicative exponential-smoothing fit that broke down).
+        A validation score; NaN or infinite when a setting gave no usable forecast (for example
+        a multiplicative exponential-smoothing fit that broke down).
 
     Returns
     -------
@@ -175,40 +162,36 @@ def usable(score: float) -> float:
     return score if np.isfinite(score) else np.inf
 
 
-def time_series_folds(count: int) -> list[Fold]:
+def validation_origins(train_end: int, validation_end: int) -> list[int]:
     """
-    The expanding, time-ordered folds over `count` monthly changes.
+    The validation origins: the last training month, then every VALIDATION_STEP months.
 
     Parameters
     ----------
-    count : int
-        Monthly changes in the training split.
+    train_end : int
+        Position of the last training month.
+    validation_end : int
+        Position of the last validation month.
 
     Returns
     -------
-    list of tuple of (int, int)
-        FOLDS (start, end) pairs, oldest first: each fold tests changes[start:end] and trains on
-        changes[:start]. The test blocks are adjacent, equally long and end at the last change.
-
-    Notes
-    -----
-    scikit-learn's TimeSeriesSplit with test_size = (count - MIN_TRAIN_MONTHS) // FOLDS, so the
-    first fold trains on at least MIN_TRAIN_MONTHS months (the rounding gives it the rest).
+    list of int
+        Origins train_end, train_end + VALIDATION_STEP, ..., all before validation_end, so each
+        forecasts at least one validation month.
     """
-    splitter = TimeSeriesSplit(n_splits=FOLDS, test_size=(count - MIN_TRAIN_MONTHS) // FOLDS)
-    return [(int(test[0]), int(test[-1]) + 1) for _, test in splitter.split(np.arange(count))]
+    return list(range(train_end, validation_end, VALIDATION_STEP))
 
 
 def valid_setting(model: str, setting: Mapping[str, Any]) -> bool:
     """
-    Whether a combination of a search space's values is a model that exists.
+    Whether a combination of linked settings is a model that exists.
 
     Parameters
     ----------
     model : str
-        The model key (SARIMA, EXPONENTIAL, ...).
+        A key of LINKED.
     setting : Mapping of str to Any
-        One combination of its space's values.
+        Values of its linked settings.
 
     Returns
     -------
@@ -223,483 +206,252 @@ def valid_setting(model: str, setting: Mapping[str, Any]) -> bool:
     return True
 
 
-def draw_candidates(model: str, space: Mapping[str, Any]) -> tuple[list[dict[str, Any]], int]:
+def search_space(model: str) -> dict[str, Any]:
     """
-    The settings to try: CANDIDATES drawn at random without repeats, or all of them when the
-    space is that small.
+    A model's space as Optuna parameters: its own, with linked settings merged into one choice.
 
     Parameters
     ----------
     model : str
-        The model key, for valid_setting().
-    space : Mapping of str to Any
-        Setting name -> the list of values to try.
+        A key of SPACES.
 
     Returns
     -------
-    tuple of (list of dict of str to Any, int)
-        The drawn settings, in draw order, and the number of valid settings in the space.
-
-    Notes
-    -----
-    The draw is seeded with RANDOM_SEED afresh for every model, so each model's draw is
-    reproducible on its own, whatever is tuned before it.
+    dict of str to Any
+        Parameter name -> a list of choices or a {"low", "high", "log"} range. Linked settings
+        become one parameter named after them ("p+q"), whose choices are their valid
+        combinations, encoded as JSON strings.
     """
-    grid = [setting for setting in ParameterGrid(dict(space)) if valid_setting(model, setting)]
-    generator = np.random.default_rng(RANDOM_SEED)
-    picks = generator.choice(len(grid), size=min(CANDIDATES, len(grid)), replace=False)
-    return [grid[int(index)] for index in picks], len(grid)
-
-
-def arima_one_step(
-    changes: np.ndarray,
-    setting: Mapping[str, Any],
-    folds: list[Fold],
-    exog: np.ndarray | None = None,
-) -> tuple[np.ndarray, list[tuple[np.ndarray, np.ndarray]], int]:
-    """
-    One-month errors of a SARIMA (or SARIMAX) over every fold, parameters fixed within a fold.
-
-    Parameters
-    ----------
-    changes : np.ndarray
-        One series' monthly changes over the training split, shape (n,), trillions.
-    setting : Mapping of str to Any
-        SARIMA orders "p", "q", "P", "Q" and "trend".
-    folds : list of tuple of (int, int)
-        From time_series_folds(n).
-    exog : np.ndarray or None, default=None
-        SARIMAX regressors, shape (n - k, k): row i belongs to changes[i + k] (lagged_exog of
-        the other series); the first k months then have no row and are left out of every fit.
-
-    Returns
-    -------
-    tuple of (np.ndarray, list of tuple of (np.ndarray, np.ndarray), int)
-        The one-month errors (actual - forecast) of every fold's months, concatenated, shape
-        (tested months,), trillions; per fold, the fit's in-sample residuals (after the
-        filter's burn-in) and its one-month errors on the fold, for the volatility models; and
-        the number of fits whose optimizer didn't converge.
-
-    Notes
-    -----
-    Processing, per fold:
-    1. Fit on the changes before the fold (and their regressors).
-    2. extend() the fit over the fold's months without re-estimating: its fitted values are
-       the one-month forecasts, each from the actual months before it.
-    """
-    offset = 0 if exog is None else changes.shape[0] - exog.shape[0]
-    errors, residuals, failed = [], [], 0
-    for start, end in folds:
-        fitted = fit_sarima(
-            pd.Series(changes[offset:start]),
-            setting["p"],
-            setting["q"],
-            setting["P"],
-            setting["Q"],
-            exog=None if exog is None else exog[: start - offset],
-            trend=setting["trend"],
-        )
-        failed += int(not fitted.mle_retvals.get("converged", False))
-        extended = fitted.extend(
-            changes[start:end], exog=None if exog is None else exog[start - offset : end - offset]
-        )
-        fold_errors = changes[start:end] - np.asarray(extended.fittedvalues)
-        errors.append(fold_errors)
-        residuals.append(
-            (np.asarray(fitted.resid)[fitted.loglikelihood_burn :], np.asarray(fold_errors))
-        )
-    return np.concatenate(errors), residuals, failed
-
-
-def volatility_quantiles(
-    model: str, setting: Mapping[str, Any], fit_on: np.ndarray, run_on: np.ndarray
-) -> np.ndarray:
-    """
-    One-month QUANTILES of the shocks in `run_on` from a volatility model fitted on `fit_on`.
-
-    Parameters
-    ----------
-    model : str
-        "GARCH", "EGARCH" or "GJR-GARCH".
-    setting : Mapping of str to Any
-        Its "p", "q", "dist" and "break_adjusted".
-    fit_on : np.ndarray
-        The SARIMA's in-sample residuals before the fold, shape (n,), trillions.
-    run_on : np.ndarray
-        Its one-month errors in the fold, shape (m,), trillions.
-
-    Returns
-    -------
-    np.ndarray
-        Shape (m, 5), trillions: each fold month's quantiles, from the variance known one month
-        ahead (the model's parameters fixed, its volatility driven by the actual past errors).
-
-    Notes
-    -----
-    Processing:
-    1. With the break adjustment, divide each regime of `fit_on` by its own root mean square
-       (step U5's break, found on `fit_on` only) and the fold's errors by the last regime's.
-    2. Fit the model on `fit_on` (zero mean, arch's rescaling).
-    3. Run the fitted model over both series together with its parameters fixed; the fold
-       months' conditional volatility is the one-month SD.
-    4. Multiply by the fitted error distribution's standardized quantiles, and undo the
-       rescaling and the regime scale.
-    """
-    spec = volatility_spec(model, setting)
-    last_scale = 1.0
-    if setting["break_adjusted"]:
-        scales = regime_scales(fit_on, variance_break(fit_on))
-        fit_on, last_scale = fit_on / scales, float(scales[-1])
-        run_on = run_on / last_scale
-    fitted = arch_model(fit_on, mean="Zero", rescale=True, **spec).fit(disp="off")
-    both = np.concatenate([fit_on, run_on]) * fitted.scale
-    fixed = arch_model(both, mean="Zero", rescale=False, **spec).fix(fitted.params.to_numpy())
-    sd = np.asarray(fixed.conditional_volatility)[len(fit_on) :] / fitted.scale * last_scale
-    distribution = fitted.model.distribution
-    shape = fitted.params.to_numpy()[len(fitted.params) - distribution.num_params :]
-    standardized = distribution.ppf(np.array(QUANTILES), shape if len(shape) else None)
-    return sd[:, None] * np.asarray(standardized)[None, :]
-
-
-def constant_quantiles(fit_on: np.ndarray, run_on: np.ndarray) -> np.ndarray:
-    """
-    The reference for the volatility models: normal quantiles with the residuals' constant SD.
-
-    Parameters
-    ----------
-    fit_on : np.ndarray
-        In-sample residuals before the fold, shape (n,), trillions.
-    run_on : np.ndarray
-        The fold's one-month errors, shape (m,), trillions.
-
-    Returns
-    -------
-    np.ndarray
-        Shape (m, 5), trillions: the same quantiles for every fold month, from the root mean
-        square of `fit_on` (zero-mean residuals, as the volatility models assume).
-    """
-    sd = float(np.sqrt(np.mean(fit_on**2)))
-    return np.tile(sd * stats.norm.ppf(QUANTILES), (len(run_on), 1))
-
-
-def system_one_step(
-    levels: np.ndarray,
-    kind: str,
-    setting: Mapping[str, Any],
-    column: int,
-    folds: list[Fold],
-    cache: dict[tuple[str, str, int], np.ndarray],
-) -> np.ndarray:
-    """
-    One-month errors of a VAR or VECM over every fold, re-estimated at every month.
-
-    Parameters
-    ----------
-    levels : np.ndarray
-        Both series' training levels, shape (n + 1, 2), trillions, VALUE_COLUMNS order.
-    kind : str
-        VAR_MODEL or VECM_MODEL.
-    setting : Mapping of str to Any
-        Its settings (see forecast_evaluation.system_forecast).
-    column : int
-        The series scored.
-    folds : list of tuple of (int, int)
-        Folds over the n monthly changes.
-    cache : dict of tuple of (str, str, int) to np.ndarray
-        Shared store of one-month forecasts of both series, keyed by (kind, settings as JSON,
-        origin), so the second series reuses the first one's fits.
-
-    Returns
-    -------
-    np.ndarray
-        One-month errors of the series' level, every fold month, trillions.
-
-    Notes
-    -----
-    Change t is the move into level t + 1, so its forecast comes from levels[: t + 1].
-    """
-    errors = []
-    for start, end in folds:
-        for month in range(start, end):
-            key = (kind, json.dumps(setting, sort_keys=True), month)
-            if key not in cache:
-                cache[key] = system_forecast(kind, setting, levels[: month + 1], 1)[0][0]
-            errors.append(levels[month + 1, column] - cache[key][column])
-    return np.array(errors)
-
-
-def smoothing_one_step(
-    levels: np.ndarray, model: str, setting: Mapping[str, Any], folds: list[Fold]
-) -> np.ndarray:
-    """
-    One-month errors of a moving average or exponential smoothing, refitted at every month.
-
-    Parameters
-    ----------
-    levels : np.ndarray
-        One series' training levels, shape (n + 1,), trillions.
-    model : str
-        SMA or EXPONENTIAL.
-    setting : Mapping of str to Any
-        {"window": k} for SMA; ExponentialSmoothing's keyword arguments otherwise.
-    folds : list of tuple of (int, int)
-        Folds over the n monthly changes.
-
-    Returns
-    -------
-    np.ndarray
-        One-month level errors, every fold month, trillions.
-    """
-    options = dict(setting)
-    if model == EXPONENTIAL and setting["seasonal"]:
-        options["seasonal_periods"] = SEASONAL_PERIOD
-    errors = []
-    for start, end in folds:
-        for month in range(start, end):
-            history = levels[: month + 1]
-            if model == SMA:
-                forecast = float(np.mean(history[-setting["window"] :]))
-            else:
-                forecast = float(ExponentialSmoothing(history, **options).fit().forecast(1)[0])
-            errors.append(levels[month + 1] - forecast)
-    return np.array(errors)
-
-
-class TunableModel(RegressorMixin, BaseEstimator):
-    """
-    One ML model as a scikit-learn estimator whose settings, the lag count included, can be set
-    by RandomizedSearchCV.
-
-    Parameters
-    ----------
-    model : str, default=RIDGE
-        One of LAG_MODELS.
-    **settings : Any
-        Its settings (search-space names), including "lags".
-
-    Notes
-    -----
-    The features it receives hold max_lag(model) lags of both series; fit and predict keep the
-    columns of settings["lags"] (lag_columns), so the lag count is searched like any other
-    setting.
-    The model itself comes from ml_forecasting.build_model, the same builder the evaluation
-    uses, so Lasso with a zero penalty is a linear regression here too. get_params and
-    set_params are written out because the settings differ by model and arrive as keywords.
-    """
-
-    def __init__(self, model: str = RIDGE, **settings: Any) -> None:
-        self.model = model
-        self.settings = settings
-
-    def get_params(self, deep: bool = True) -> dict[str, Any]:
-        """
-        The model name and its settings, as scikit-learn's search and clone read them.
-
-        Parameters
-        ----------
-        deep : bool, default=True
-            Unused: there are no nested estimators to expand.
-
-        Returns
-        -------
-        dict of str to Any
-            {"model": ..., setting: value, ...}.
-        """
-        return {"model": self.model, **self.settings}
-
-    def set_params(self, **params: Any) -> "TunableModel":
-        """
-        Change the model name or any settings.
-
-        Parameters
-        ----------
-        **params : Any
-            "model" and / or settings to replace.
-
-        Returns
-        -------
-        TunableModel
-            Itself, as scikit-learn expects.
-        """
-        self.model = params.pop("model", self.model)
-        self.settings = {**self.settings, **params}
-        return self
-
-    def fit(self, features: np.ndarray, target: np.ndarray) -> "TunableModel":
-        """
-        Fit the model on the lag columns its settings ask for.
-
-        Parameters
-        ----------
-        features : np.ndarray
-            lag_features(changes, max_lag(model)) rows, shape (rows, 2 x max_lag(model)).
-        target : np.ndarray
-            The series' changes for those rows, shape (rows,), trillions.
-
-        Returns
-        -------
-        TunableModel
-            Itself, fitted.
-        """
-        columns = lag_columns(self.settings["lags"], max_lag(self.model), 2)
-        self.fitted_ = build_model(self.model, self.settings).fit(features[:, columns], target)
-        return self
-
-    def predict(self, features: np.ndarray) -> np.ndarray:
-        """
-        Predict the series' changes for the given rows.
-
-        Parameters
-        ----------
-        features : np.ndarray
-            lag_features(changes, max_lag(model)) rows, shape (rows, 2 x max_lag(model)).
-
-        Returns
-        -------
-        np.ndarray
-            Predicted changes, shape (rows,), trillions.
-        """
-        columns = lag_columns(self.settings["lags"], max_lag(self.model), 2)
-        return np.asarray(self.fitted_.predict(features[:, columns]))
-
-
-def ml_search(
-    changes: np.ndarray, model: str, column: int, folds: list[Fold]
-) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
-    """
-    Tune one ML model or network for one series with scikit-learn's RandomizedSearchCV.
-
-    Parameters
-    ----------
-    changes : np.ndarray
-        Both series' training changes, shape (n, 2), trillions.
-    model : str
-        One of LAG_MODELS.
-    column : int
-        The series predicted.
-    folds : list of tuple of (int, int)
-        Folds over the n monthly changes; their first test month must be at least the
-        model's max_lag.
-
-    Returns
-    -------
-    tuple of (dict of str to Any, list of dict of str to Any, int)
-        As search(): the best setting, every drawn setting with its score (MAE, trillions) in
-        draw order, and the number of settings in the space.
-
-    Notes
-    -----
-    Processing:
-    1. Build the features once with the model's max_lag lags, so every lag count is trained
-       and scored on the same months.
-    2. Turn the folds into row indices: row r's target is change r + max_lag, so a fold trains
-       on the rows whose target comes before it and tests the rows inside it. Passing them
-       explicitly matters: RandomizedSearchCV's default folds ignore time order.
-    3. Draw CANDIDATES settings (seed RANDOM_SEED; all of them when the space is smaller), fit
-       each on every fold in parallel, and score it by mean absolute error. The folds are equally
-       long, so the mean of the fold MAEs is the MAE over all tested months, as for the other
-       models. No final refit: the evaluation refits at every origin.
-    """
-    features, target, splits = lag_splits(changes, model, column, folds)
     space = dict(SPACES[model])
-    logger.info(f"TUNE | {model}: {CANDIDATES} settings x {len(folds)} folds, in parallel")
-    searcher = RandomizedSearchCV(
-        TunableModel(model),
-        param_distributions=space,
-        n_iter=CANDIDATES,
-        scoring="neg_mean_absolute_error",
-        cv=splits,
-        refit=False,
-        random_state=RANDOM_SEED,
-        n_jobs=-1,
-        error_score="raise",
-    ).fit(features, target)
-    results = searcher.cv_results_
-    scored: list[dict[str, Any]] = [
-        {"settings": dict(params), "score": -float(score)}
-        for params, score in zip(results["params"], results["mean_test_score"])
+    linked = LINKED.get(model, ())
+    if not linked:
+        return space
+    combinations = [
+        dict(zip(linked, values))
+        for values in itertools.product(*(space.pop(name) for name in linked))
     ]
-    winner = min(scored, key=lambda row: usable(row["score"]))
-    return dict(winner["settings"]), scored, len(ParameterGrid(space))
+    valid = [json.dumps(c) for c in combinations if valid_setting(model, c)]
+    return {"+".join(linked): valid, **space}
 
 
-def lag_splits(
-    changes: np.ndarray, model: str, column: int, folds: list[Fold]
-) -> tuple[np.ndarray, np.ndarray, list[tuple[np.ndarray, np.ndarray]]]:
+def decode(params: Mapping[str, Any]) -> dict[str, Any]:
     """
-    The lag features, targets and fold row indices of one model's search.
+    A model's settings from Optuna parameters, unpacking merged linked settings.
 
     Parameters
     ----------
-    changes : np.ndarray
-        Both series' training changes, shape (n, 2), trillions.
-    model : str
-        One of LAG_MODELS; its max_lag sets how many lags the features hold.
-    column : int
-        The series predicted.
-    folds : list of tuple of (int, int)
-        Folds over the n monthly changes; their first test month must be at least the
-        model's max_lag.
+    params : Mapping of str to Any
+        A trial's parameters.
 
     Returns
     -------
-    tuple of (np.ndarray, np.ndarray, list of tuple of (np.ndarray, np.ndarray))
-        Features with max_lag lags, shape (n - max_lag, 2 x max_lag); the targets, shape
-        (n - max_lag,); and per fold the training rows (targets before the fold) and the test
-        rows (targets inside it).
-
-    Notes
-    -----
-    Row r's target is change r + max_lag, so every lag count of the model is trained and
-    scored on the same months, and every model is scored on the folds' months. Passing the
-    folds explicitly matters: scikit-learn's default folds ignore time order.
+    dict of str to Any
+        Setting name -> value.
     """
-    longest = max_lag(model)
-    features = lag_features(changes, longest)
-    target = changes[longest:, column]
-    rows = np.arange(len(target))
-    splits = [
-        (rows[: start - longest], rows[start - longest : end - longest]) for start, end in folds
-    ]
-    return features, target, splits
+    settings: dict[str, Any] = {}
+    for name, value in params.items():
+        settings |= json.loads(value) if "+" in name else {name: value}
+    return settings
 
 
-def run_optuna(
-    label: str, model: str, score: Callable[[dict[str, Any]], float]
-) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
+def grid_size(space: Mapping[str, Any]) -> int | None:
     """
-    Search one model's space with Optuna's TPE sampler.
+    The number of settings in a space made only of lists, or None if it has a range.
 
     Parameters
     ----------
-    label : str
-        Names the series in the progress lines.
-    model : str
-        The model key in SPACES.
-    score : callable
-        Setting -> its cross-validation score (lower is better).
+    space : Mapping of str to Any
+        From search_space().
 
     Returns
     -------
-    tuple of (dict of str to Any, list of dict of str to Any, int)
-        As search(): the best setting, every trial's setting and score in trial order, and 0
-        for the space's size (it has continuous ranges).
+    int or None
+        The product of the lists' lengths; None for a space with a continuous range.
+    """
+    if any(isinstance(choices, dict) for choices in space.values()):
+        return None
+    return int(np.prod([len(choices) for choices in space.values()]))
+
+
+def origin_paths(
+    model: str,
+    settings: Mapping[str, Any],
+    levels: np.ndarray,
+    dates: np.ndarray,
+    origins: Sequence[int],
+    last_target: int,
+    columns: Sequence[int],
+    sarima: Sequence[Mapping[str, Any]] = (),
+) -> dict[int, list[np.ndarray]]:
+    """
+    A model's forecasts from every origin, fitted on the months up to each, in parallel.
+
+    Parameters
+    ----------
+    model : str
+        NAIVE, or any model of model_forecasts.FAMILIES.
+    settings : Mapping of str to Any
+        Its settings.
+    levels : np.ndarray
+        Both series' levels, shape (months, 2), trillions; only months up to each origin are
+        passed to the fit.
+    dates : np.ndarray
+        Their month-end dates.
+    origins : Sequence of int
+        Forecast origins (positions).
+    last_target : int
+        The last month that may be forecast: each origin forecasts min(MAX_HORIZON,
+        last_target - origin) months.
+    columns : Sequence of int
+        The series to forecast.
+    sarima : Sequence of Mapping of str to Any, default=()
+        Both series' tuned SARIMA settings (for SARIMAX and the SARIMA + naive average).
+
+    Returns
+    -------
+    dict of int to list of np.ndarray
+        Column -> one level path per origin, in origin order.
 
     Notes
     -----
-    Each trial suggests one value per setting: a choice from a list, or a float from a
-    {"low", "high", "log"} range (on a log scale when "log" is true). CANDIDATES trials run one
-    after another, so the seeded sampler's choices repeat exactly; no pruning, so every trial
-    is scored on every fold.
+    A joint model forecasts both series in one fit per origin; a univariate one is fitted per
+    series. The fits are independent, so they run in parallel processes.
+    """
+    steps = [min(MAX_HORIZON, last_target - origin) for origin in origins]
+    if model in JOINT_MODELS:
+        paths = Parallel(n_jobs=-1)(
+            delayed(joint_paths)(model, settings, levels[: origin + 1], count)
+            for origin, count in zip(origins, steps)
+        )
+        return {column: [path[:, column] for path in paths] for column in columns}
+    jobs = [(column, origin, count) for column in columns for origin, count in zip(origins, steps)]
+    paths = Parallel(n_jobs=-1)(
+        delayed(series_path)(
+            model, settings, levels[: origin + 1], dates[: origin + 1], column, count, sarima
+        )
+        for column, origin, count in jobs
+    )
+    result: dict[int, list[np.ndarray]] = {column: [] for column in columns}
+    for (column, _, _), path in zip(jobs, paths):
+        result[column].append(path)
+    return result
+
+
+def horizon_metrics(
+    paths: Sequence[np.ndarray], origins: Sequence[int], actual: np.ndarray, scale: float
+) -> Metrics:
+    """
+    MAE, MSE, RMSE, MAPE and MASE per horizon from one series' forecasts.
+
+    Parameters
+    ----------
+    paths : Sequence of np.ndarray
+        One level path per origin, each as long as that origin's forecast.
+    origins : Sequence of int
+        Their origins (positions).
+    actual : np.ndarray
+        The series' levels over the months the forecasts target, shape (months,), trillions.
+    scale : float
+        The MASE denominator: the training split's mean absolute monthly change.
+
+    Returns
+    -------
+    dict of int to dict of str to float
+        Horizon -> "n" (forecasts scored) and the five metrics, for every horizon in HORIZONS
+        that some origin reaches.
+    """
+    metrics: Metrics = {}
+    for horizon in HORIZONS:
+        pairs = [
+            (actual[origin + horizon], path[horizon - 1])
+            for origin, path in zip(origins, paths)
+            if len(path) >= horizon
+        ]
+        if pairs:
+            truth, forecast = (np.array(values) for values in zip(*pairs))
+            metrics[horizon] = {"n": float(len(pairs)), **accuracy(truth, forecast, scale)}
+    return metrics
+
+
+def mean_mase(metrics: Metrics) -> float:
+    """
+    MASE averaged over the horizons: the validation score.
+
+    Parameters
+    ----------
+    metrics : dict of int to dict of str to float
+        From horizon_metrics().
+
+    Returns
+    -------
+    float
+        The mean of the horizons' MASE (NaN if a forecast was not finite).
+    """
+    return float(np.mean([metrics[horizon]["MASE"] for horizon in HORIZONS]))
+
+
+def tune_model(
+    model: str,
+    columns: Sequence[int],
+    levels: np.ndarray,
+    dates: np.ndarray,
+    origins: Sequence[int],
+    last_target: int,
+    scales: Sequence[float],
+    sarima: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """
+    Search one model's settings on the validation origins with Optuna.
+
+    Parameters
+    ----------
+    model : str
+        A key of SPACES.
+    columns : Sequence of int
+        The series it is tuned on: one for a univariate model, both for a joint one (scored on
+        their average).
+    levels, dates, origins, last_target
+        As in origin_paths(); last_target is the last validation month.
+    scales : Sequence of float
+        Each series' MASE denominator.
+    sarima : Sequence of Mapping of str to Any, default=()
+        Both series' tuned SARIMA settings (for SARIMAX and the SARIMA + naive average).
+
+    Returns
+    -------
+    dict of str to Any
+        "settings" (the best), "score" (its validation score), "metrics" (column -> its
+        per-horizon metrics), "trials" (every trial's settings, score and per-series score) and
+        "size" (settings in the space; None with a continuous range).
+
+    Notes
+    -----
+    Processing:
+    1. Build the Optuna space (search_space()); use the grid sampler when it has at most
+       CANDIDATES settings and no ranges, otherwise the TPE sampler seeded with RANDOM_SEED.
+    2. Each trial forecasts from every origin and scores the mean of the horizons' MASE,
+       averaged over the series tuned on; an unusable score counts as infinity.
+    3. Keep the trial with the lowest score (the first one on a tie).
     """
     import optuna
 
-    space = SPACES[model]
-    progress = Progress(f"TUNE | {label} | {model}", CANDIDATES)
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    space = search_space(model)
+    size = grid_size(space)
+    grid = size is not None and size <= CANDIDATES
+    sampler: Any = (
+        optuna.samplers.GridSampler(dict(space), seed=RANDOM_SEED)
+        if grid
+        else optuna.samplers.TPESampler(seed=RANDOM_SEED)
+    )
+    trials = size if grid and size is not None else CANDIDATES
+    label = " + ".join(series_title(VALUE_COLUMNS[column]) for column in columns)
+    progress = Progress(f"TUNE | {label} | {model}", trials)
+    results: list[dict[str, Any]] = []
 
     def objective(trial: Any) -> float:
         """
-        The cross-validation score of the trial's settings.
+        The validation score of the trial's settings.
 
         Parameters
         ----------
@@ -709,15 +461,26 @@ def run_optuna(
         Returns
         -------
         float
-            score() of the suggested setting.
+            The mean over the series of their horizon-averaged MASE; inf when unusable.
         """
-        setting = {
-            name: trial.suggest_float(name, spec["low"], spec["high"], log=spec["log"])
-            if isinstance(spec, dict)
-            else trial.suggest_categorical(name, spec)
-            for name, spec in space.items()
+        params = {
+            name: trial.suggest_float(name, choices["low"], choices["high"], log=choices["log"])
+            if isinstance(choices, dict)
+            else trial.suggest_categorical(name, choices)
+            for name, choices in space.items()
         }
-        return usable(score(setting))
+        settings = decode(params)
+        paths = origin_paths(model, settings, levels, dates, origins, last_target, columns, sarima)
+        metrics = {
+            column: horizon_metrics(paths[column], origins, levels[:, column], scales[column])
+            for column in columns
+        }
+        per_series = {column: mean_mase(metrics[column]) for column in columns}
+        score = usable(float(np.mean(list(per_series.values()))))
+        results.append(
+            {"settings": settings, "score": score, "per_series": per_series, "metrics": metrics}
+        )
+        return score
 
     def report(study: Any, trial: Any) -> None:
         """
@@ -734,518 +497,266 @@ def run_optuna(
         -------
         None
         """
-        progress.step(trial.number + 1, f"best so far {study.best_value:.5f}")
+        progress.step(trial.number + 1, f"best so far {study.best_value:.4f}")
 
-    optuna.logging.set_verbosity(optuna.logging.WARNING)
-    study = optuna.create_study(
-        direction="minimize", sampler=optuna.samplers.TPESampler(seed=RANDOM_SEED)
-    )
-    study.optimize(objective, n_trials=CANDIDATES, callbacks=[report])
-    # Every trial completes or raises, so each has a value.
-    scored = [
-        {"settings": dict(trial.params), "score": float(trial.value)}
-        for trial in study.trials
-        if trial.value is not None
-    ]
-    return dict(study.best_params), scored, 0
+    study = optuna.create_study(direction="minimize", sampler=sampler)
+    study.optimize(objective, n_trials=trials, callbacks=[report])
+    best = min(results, key=lambda row: row["score"])
+    return {
+        "settings": best["settings"],
+        "score": best["score"],
+        "metrics": best["metrics"],
+        "trials": [
+            {key: row[key] for key in ("settings", "score", "per_series")} for row in results
+        ],
+        "size": size,
+    }
 
 
-def optuna_search(
-    changes: np.ndarray, model: str, column: int, folds: list[Fold]
-) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
+def choose_champions(
+    metrics: Mapping[int, Mapping[str, Metrics]],
+) -> dict[int, dict[str, str]]:
     """
-    Tune one network for one series with Optuna's TPE sampler.
+    Each series' champion per family: the model with the lowest validation score.
 
     Parameters
     ----------
-    changes : np.ndarray
-        Both series' training changes, shape (n, 2), trillions.
-    model : str
-        One of OPTUNA_MODELS.
-    column : int
-        The series predicted.
-    folds : list of tuple of (int, int)
-        Folds over the n monthly changes.
+    metrics : Mapping of int to Mapping of str to dict
+        Column -> model -> its tuned settings' validation metrics.
 
     Returns
     -------
-    tuple of (dict of str to Any, list of dict of str to Any, int)
-        As run_optuna().
-
-    Notes
-    -----
-    Each trial is scored like every other lag-feature model: fitted on each fold's earlier
-    months and scored by the mean absolute error of the fold's months (cross_val_score on
-    lag_splits' rows).
+    dict of int to dict of str to str
+        Column -> family -> champion model.
     """
-    features, target, splits = lag_splits(changes, model, column, folds)
-
-    def score(setting: dict[str, Any]) -> float:
-        """
-        Cross-validation MAE of one setting.
-
-        Parameters
-        ----------
-        setting : dict of str to Any
-            The trial's settings.
-
-        Returns
-        -------
-        float
-            Mean absolute one-month error over the fold months, trillions.
-        """
-        scores = cross_val_score(
-            TunableModel(model, **setting),
-            features,
-            target,
-            cv=splits,
-            scoring="neg_mean_absolute_error",
-            error_score="raise",
-        )
-        return -float(np.mean(scores))
-
-    return run_optuna(series_title(VALUE_COLUMNS[column]), model, score)
+    return {
+        column: {
+            family: min(models, key=lambda model: usable(mean_mase(by_model[model])))
+            for family, models in FAMILIES.items()
+        }
+        for column, by_model in metrics.items()
+    }
 
 
-def prophet_one_step(
-    dates: pd.Series, levels: np.ndarray, setting: Mapping[str, Any], folds: list[Fold]
-) -> np.ndarray:
+def metrics_rows(
+    metrics: Mapping[int, Mapping[str, Metrics]], champions: Mapping[int, Mapping[str, str]]
+) -> pd.DataFrame:
     """
-    One-month errors of Prophet over every fold, refitted at every month, in parallel.
+    The validation metrics as a table.
 
     Parameters
     ----------
-    dates : pd.Series
-        The training split's month-end dates, one per level.
-    levels : np.ndarray
-        One series' training levels, shape (n + 1,), trillions.
-    setting : Mapping of str to Any
-        Prophet's settings.
-    folds : list of tuple of (int, int)
-        Folds over the n monthly changes.
+    metrics : Mapping of int to Mapping of str to dict
+        Column -> model (naive included) -> per-horizon metrics.
+    champions : Mapping of int to Mapping of str to str
+        From choose_champions().
 
     Returns
     -------
-    np.ndarray
-        One-month level errors, every fold month, trillions.
-
-    Notes
-    -----
-    Change t is the move into level t + 1, so its forecast comes from the levels up to t, as
-    for exponential smoothing. The refits are independent, so they run in parallel processes;
-    each gives the same forecast wherever it runs.
+    pd.DataFrame
+        One row per series, model and horizon: "series", "family" ("benchmark" for naive),
+        "model", "champion", "horizon", "n", "MAE", "MSE", "RMSE", "MAPE", "MASE", and
+        "mean_MASE" (the validation score).
     """
-    from joblib import Parallel, delayed
-
-    months = [month for start, end in folds for month in range(start, end)]
-    forecasts = Parallel(n_jobs=-1)(
-        delayed(prophet_forecast)(dates[: month + 1], levels[: month + 1], setting, 1)
-        for month in months
-    )
-    return np.array([levels[month + 1] - mean[0] for month, (mean, _) in zip(months, forecasts)])
-
-
-def search(
-    label: str,
-    model: str,
-    score: Callable[..., float],
-) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
-    """
-    Score every drawn setting of one model and return the best.
-
-    Parameters
-    ----------
-    label : str
-        Names the series in the progress lines.
-    model : str
-        The model key in SPACES.
-    score : callable
-        Setting -> its cross-validation score (lower is better).
-
-    Returns
-    -------
-    tuple of (dict of str to Any, list of dict of str to Any, int)
-        The best setting (the first drawn on a tie; settings without a finite score rank
-        last), every drawn setting with its score as {"settings": ..., "score": ...} in draw
-        order, and the number of valid settings in the space.
-    """
-    candidates, size = draw_candidates(model, SPACES[model])
-    progress = Progress(f"TUNE | {label} | {model}", len(candidates))
-    scored: list[dict[str, Any]] = []
-    for done, setting in enumerate(candidates, start=1):
-        scored.append({"settings": setting, "score": float(score(setting))})
-        best = min(usable(row["score"]) for row in scored)
-        progress.step(done, f"best so far {best:.5f}")
-    winner = min(scored, key=lambda row: usable(row["score"]))
-    return dict(winner["settings"]), scored, size
-
-
-def tune_series(
-    levels: np.ndarray,
-    dates: pd.Series,
-    target: int,
-    folds: list[Fold],
-    system_cache: dict[tuple[str, str, int], np.ndarray],
-) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
-    """
-    Tune every model for one series.
-
-    Parameters
-    ----------
-    levels : np.ndarray
-        Both series' training levels, shape (n + 1, 2), trillions, VALUE_COLUMNS order.
-    dates : pd.Series
-        Their month-end dates, for Prophet.
-    target : int
-        The series tuned (column of `levels`).
-    folds : list of tuple of (int, int)
-        From time_series_folds(n).
-    system_cache : dict of tuple of (str, str, int) to np.ndarray
-        Shared VAR / VECM forecasts (see system_one_step).
-
-    Returns
-    -------
-    tuple of (dict of str to dict of str to Any, list of dict of str to Any)
-        Model key -> tuned settings; and one summary per model: "model", "metric", "tried",
-        "size", "best" (settings), "score", "reference" (naive's MAE, or constant variance's
-        pinball loss), "failed" (SARIMA / SARIMAX fits that didn't converge) and "scores" (every
-        setting's score).
-
-    Notes
-    -----
-    Processing:
-    1. SARIMA, scored by MAE; then the tuned SARIMA's fold residuals and errors.
-    2. GARCH, EGARCH and GJR-GARCH on those, scored by pinball loss against constant variance.
-    3. SARIMAX (the tuned orders plus the other series' lags) and the SARIMA + naive weight.
-    4. VAR and VECM, SMA and exponential smoothing, scored by MAE.
-    5. The ML models and neural networks, by RandomizedSearchCV (ml_search), or by Optuna
-       for the TensorFlow and PyTorch networks (optuna_search), scored by MAE.
-    6. Prophet, by Optuna, refitted at every fold month (prophet_one_step), scored by MAE.
-
-    Naive's one-month forecast is no change, so its error is the change itself and its MAE the
-    mean absolute change over the fold months: the reference every point model is shown
-    against.
-    """
-    label = series_title(VALUE_COLUMNS[target])
-    changes = np.diff(levels, axis=0)
-    own, other = changes[:, target], changes[:, 1 - target]
-    tested = np.concatenate([own[start:end] for start, end in folds])
-    naive_mae = float(np.mean(np.abs(tested)))
-    tuned: dict[str, dict[str, Any]] = {}
-    summaries: list[dict[str, Any]] = []
-    failures = {SARIMA: 0, SARIMAX: 0}
-
-    def record(
-        model: str,
-        metric: str,
-        reference: float,
-        result: tuple[dict[str, Any], list[dict[str, Any]], int],
-    ) -> None:
-        """
-        Store one model's search result: its winner and summary.
-
-        Parameters
-        ----------
-        model : str
-            The model key in SPACES.
-        metric : str
-            "MAE" or "pinball", for the report.
-        reference : float
-            The reference score the report and figure divide by.
-        result : tuple of (dict of str to Any, list of dict of str to Any, int)
-            What search() or ml_search() returned.
-
-        Returns
-        -------
-        None
-            Fills `tuned` and appends to `summaries`.
-        """
-        best, scored, size = result
-        tuned[model] = best
-        summaries.append(
-            {
-                "model": model,
-                "metric": metric,
-                "tried": len(scored),
-                "size": size,
-                "best": best,
-                "score": min(usable(row["score"]) for row in scored),
-                "unusable": sum(not np.isfinite(row["score"]) for row in scored),
-                "reference": reference,
-                "failed": failures.get(model, 0),
-                "scores": scored,
-            }
-        )
-
-    def arima_mae(setting: Mapping[str, Any], exog: np.ndarray | None = None) -> float:
-        """
-        Cross-validation MAE of a SARIMA, or of a SARIMAX when regressors are given.
-
-        Parameters
-        ----------
-        setting : Mapping of str to Any
-            SARIMA orders and trend.
-        exog : np.ndarray or None, default=None
-            The other series' lag matrix (SARIMAX) or None (SARIMA).
-
-        Returns
-        -------
-        float
-            Mean absolute one-month error over the fold months, trillions. Fits that didn't
-            converge are added to `failures`.
-        """
-        errors, _, failed = arima_one_step(own, setting, folds, exog)
-        failures[SARIMAX if exog is not None else SARIMA] += failed
-        return float(np.mean(np.abs(errors)))
-
-    record(SARIMA, "MAE", naive_mae, search(label, SARIMA, arima_mae))
-    errors, residuals, _ = arima_one_step(own, tuned[SARIMA], folds)
-    fold_errors = np.concatenate([run_on for _, run_on in residuals])
-    reference = pinball_loss(
-        fold_errors,
-        np.vstack([constant_quantiles(fit_on, run_on) for fit_on, run_on in residuals]),
-    )
-    for model in VOLATILITY_SPECS:
-        record(
-            model,
-            "pinball",
-            reference,
-            search(
-                label,
-                model,
-                lambda setting, model=model: pinball_loss(
-                    fold_errors,
-                    np.vstack(
-                        [
-                            volatility_quantiles(model, setting, fit_on, run_on)
-                            for fit_on, run_on in residuals
-                        ]
-                    ),
-                ),
-            ),
-        )
-    record(
-        SARIMAX,
-        "MAE",
-        naive_mae,
-        search(
-            label,
-            SARIMAX,
-            lambda setting: arima_mae(tuned[SARIMA], lagged_exog(other, setting["lags"])),
-        ),
-    )
-    # The average forecasts weight x SARIMA's change + (1 - weight) x naive's (none), so its
-    # error is (1 - weight) x the change + weight x SARIMA's error.
-    record(
-        COMBINATION,
-        "MAE",
-        naive_mae,
-        search(
-            label,
-            COMBINATION,
-            lambda setting: float(
-                np.mean(np.abs((1 - setting["weight"]) * tested + setting["weight"] * errors))
-            ),
-        ),
-    )
-    for kind in (VAR_MODEL, VECM_MODEL):
-        record(
-            kind,
-            "MAE",
-            naive_mae,
-            search(
-                label,
-                kind,
-                lambda setting, kind=kind: float(
-                    np.mean(
-                        np.abs(system_one_step(levels, kind, setting, target, folds, system_cache))
-                    )
-                ),
-            ),
-        )
-    for model in (SMA, EXPONENTIAL):
-        record(
-            model,
-            "MAE",
-            naive_mae,
-            search(
-                label,
-                model,
-                lambda setting, model=model: float(
-                    np.mean(np.abs(smoothing_one_step(levels[:, target], model, setting, folds)))
-                ),
-            ),
-        )
-    for model in LAG_MODELS:
-        search_model = optuna_search if model in OPTUNA_MODELS else ml_search
-        record(model, "MAE", naive_mae, search_model(changes, model, target, folds))
-    record(
-        PROPHET,
-        "MAE",
-        naive_mae,
-        run_optuna(
-            label,
-            PROPHET,
-            lambda setting: float(
-                np.mean(np.abs(prophet_one_step(dates, levels[:, target], setting, folds)))
-            ),
-        ),
-    )
-    return tuned, summaries
+    rows = []
+    for column, by_model in metrics.items():
+        winners = set(champions[column].values())
+        for model, per_horizon in by_model.items():
+            family = "benchmark" if model == NAIVE else family_of(model)
+            for horizon, values in per_horizon.items():
+                rows.append(
+                    {
+                        "series": VALUE_COLUMNS[column],
+                        "family": family,
+                        "model": model,
+                        "champion": model in winners,
+                        "horizon": horizon,
+                        **values,
+                        "mean_MASE": mean_mase(per_horizon),
+                    }
+                )
+    return pd.DataFrame(rows)
 
 
 def tuning_report(
-    summaries: dict[str, list[dict[str, Any]]], folds: list[Fold], dates: pd.Series
+    table: pd.DataFrame,
+    tuned: Mapping[str, Mapping[str, Any]],
+    origins: Sequence[int],
+    dates: pd.Series,
+    validation_end: int,
 ) -> str:
     """
-    The text report: the method, the folds, and per series and model the winner and its score.
+    The text report: the method, the origins, and per series every model's validation scores.
 
     Parameters
     ----------
-    summaries : dict of str to list of dict of str to Any
-        Series -> tune_series' summaries.
-    folds : list of tuple of (int, int)
-        The folds, over the training changes.
+    table : pd.DataFrame
+        From metrics_rows().
+    tuned : Mapping of str to Mapping of str to Any
+        Series -> model -> tuned settings.
+    origins : Sequence of int
+        The validation origins.
     dates : pd.Series
-        The training split's months (levels), so change t moves into dates[t + 1].
+        Month-end dates of the whole sample.
+    validation_end : int
+        Position of the last validation month.
 
     Returns
     -------
     str
-        The report text, lines joined with newlines.
+        The report text.
     """
     lines = [
-        "Hyperparameter tuning: time-aware random search on the training split",
+        "Tuning and champion selection on the validation split",
         (
-            f"Each model's settings are drawn at random from its search space ({CANDIDATES} "
-            f"per model and series, or all when the space is smaller; seed {RANDOM_SEED}) and "
-            f"scored by {FOLDS} expanding cross-validation folds in time order: each fold is "
-            "fitted on the months before it only and forecasts each of its months one month ahead "
-            "from the actual past. Point models: mean absolute error (trillions); volatility "
-            "models: mean pinball loss of the one-month quantiles. The lowest wins and is "
-            "fixed for the evaluation. Search spaces and their reasoning: "
-            "autoregressive_experiments/configs/hyperparameters.json."
+            f"{len(origins)} expanding-window origins, every {VALIDATION_STEP} months from "
+            f"{dates.iloc[origins[0]]:%Y-%m} to {dates.iloc[origins[-1]]:%Y-%m}: each model is "
+            f"fitted on every month from {dates.iloc[0]:%Y-%m} to the origin and forecasts the "
+            f"validation months up to {dates.iloc[validation_end]:%Y-%m}, at most "
+            f"{MAX_HORIZON} ahead. Score: MASE averaged over horizons "
+            f"{', '.join(map(str, HORIZONS))}. Settings searched by Optuna (grid when the space "
+            f"has at most {CANDIDATES} settings, seeded TPE with {CANDIDATES} trials "
+            "otherwise); joint models (VAR, VECM, ML, networks) tuned once on both series. "
+            "Champion per family and series: the lowest score. Search spaces and their "
+            "reasoning: autoregressive_experiments/configs/hyperparameters.json."
         ),
-        "Folds (months tested; each trains on every month before):",
+        "",
     ]
-    for number, (start, end) in enumerate(folds, start=1):
-        lines.append(
-            f"  {number}: {dates.iloc[start + 1]:%Y-%m} to {dates.iloc[end]:%Y-%m} "
-            f"({end - start} months; trains on {start} changes)"
-        )
-    lines.append("")
-    for column, rows in summaries.items():
-        lines.append(f"{column}")
-        lines.append(
-            f"  {'model':<24}{'tried':>12}{'metric':>9}{'score':>11}{'reference':>11}"
-            f"{'ratio':>7}   tuned settings"
-        )
-        for row in rows:
-            ratio = row["score"] / row["reference"]
-            tried = f"{row['tried']} of {row['size']}" if row["size"] else f"{row['tried']} TPE"
-            settings = ", ".join(f"{key}={value}" for key, value in row["best"].items())
-            failed = f" ({row['failed']} fits didn't converge)" if row["failed"] else ""
-            if row["unusable"]:
-                failed += f" ({row['unusable']} settings gave no usable forecast)"
+    for column in VALUE_COLUMNS:
+        rows = table[table["series"] == column]
+        scores = rows.drop_duplicates("model").sort_values("mean_MASE")
+        lines.append(f"{column}  (validation MASE by horizon; * champion of its family)")
+        header = "".join(f"{f'h={h}':>8}" for h in HORIZONS)
+        lines.append(f"  {'model':<26}{'family':<18}{'mean':>8}{header}   tuned settings")
+        for row in scores.itertuples():
+            per_horizon = rows[rows["model"] == row.model].set_index("horizon")["MASE"]
+            cells = "".join(f"{per_horizon.get(h, np.nan):8.3f}" for h in HORIZONS)
+            settings = ", ".join(f"{k}={v}" for k, v in tuned[column].get(row.model, {}).items())
+            mark = "*" if row.champion else " "
             lines.append(
-                f"  {row['model']:<24}{tried:>12}{row['metric']:>9}{row['score']:11.5f}"
-                f"{row['reference']:11.5f}{ratio:7.3f}   {settings}{failed}"
+                f" {mark}{row.model:<26}{row.family:<18}{row.mean_MASE:8.3f}{cells}   {settings}"
             )
         lines.append("")
     lines.append(
-        "reference: naive's MAE for point models (its one-month error is the change itself); "
-        "constant-variance normal quantiles' pinball loss for the volatility models. ratio "
-        "below 1: better than the reference in cross-validation."
+        f"All numbers: {repo_path(VALIDATION_METRICS_PATH)}; every setting tried: "
+        f"{repo_path(SCORES_PATH)}; figure: {repo_path(FIGURE_PATH)}"
     )
     lines.append(
-        f"Every setting tried: {repo_path(SCORES_PATH)}; figure: {repo_path(FIGURE_PATH)}"
+        f"Tuned settings: {repo_path(TUNED_PATH)}; champions: {repo_path(CHAMPIONS_PATH)}"
     )
-    lines.append(f"Tuned settings: {repo_path(TUNED_PATH)}")
     return "\n".join(lines)
 
 
-def tuning_figure(summaries: dict[str, list[dict[str, Any]]]) -> Figure:
+def tuning_figure(
+    trials: Mapping[str, Sequence[Mapping[str, Any]]], table: pd.DataFrame
+) -> Figure:
     """
-    Per series, every setting's cross-validation score relative to the reference, the winner
-    marked.
+    Per series, every setting's validation score relative to naive's, the tuned one and the
+    champions marked.
 
     Parameters
     ----------
-    summaries : dict of str to list of dict of str to Any
-        Series -> tune_series' summaries.
+    trials : Mapping of str to Sequence of Mapping of str to Any
+        Model -> its trials (with "per_series": column -> score).
+    table : pd.DataFrame
+        From metrics_rows(): the tuned models' scores, naive's and the champion flags.
 
     Returns
     -------
     Figure
-        One panel per series; one row per model, its settings as hollow points and the winner
-        filled, on a log scale around the reference line at 1. The caller saves and closes it.
-
-    Notes
-    -----
-    The spread of a row shows how much the settings matter for that model; a winner left of 1
-    beat naive (or constant variance) in cross-validation, which the evaluation then checks
-    out of sample.
+        One panel per series; one row per model (its family in the label), the settings tried
+        as hollow points, the tuned one filled (palette slot 2 for the family champions), on a
+        log scale around naive at 1. The caller saves and closes it.
     """
     apply_chart_style()
-    models = [row["model"] for row in next(iter(summaries.values()))]
+    models = list(trials)
     figure, axes = plt.subplots(
         1,
-        len(summaries),
-        figsize=(7.5 * len(summaries), 0.42 * len(models) + 2.2),
+        len(VALUE_COLUMNS),
+        figsize=(8 * len(VALUE_COLUMNS), 0.4 * len(models) + 2.4),
         squeeze=False,
         sharey=True,
         facecolor=SURFACE,
     )
-    for axis, (column, rows) in zip(axes[0], summaries.items()):
+    families = table.drop_duplicates("model").set_index("model")["family"]
+    plain = FuncFormatter(lambda value, _: f"{value:g}")
+    for column, axis in enumerate(axes[0]):
+        name = VALUE_COLUMNS[column]
+        rows = table[table["series"] == name].drop_duplicates("model").set_index("model")
+        reference = rows.loc[NAIVE, "mean_MASE"]
         axis.set_facecolor(SURFACE)
-        for position, row in enumerate(rows):
-            ratios = np.array([entry["score"] for entry in row["scores"]]) / row["reference"]
-            # Settings without a usable forecast have no point to draw; the report counts them.
-            ratios = ratios[np.isfinite(ratios)]
+        for position, model in enumerate(models):
+            scores = np.array(
+                [trial["per_series"].get(column, np.nan) for trial in trials[model]], dtype=float
+            )
+            ratios = scores[np.isfinite(scores)] / reference
             axis.scatter(
                 ratios,
                 np.full(len(ratios), position),
-                s=22,
+                s=20,
                 facecolors="none",
                 edgecolors=MUTED_INK,
                 linewidths=1,
-                label="a setting tried" if position == 0 else None,
             )
+            champion = bool(rows.loc[model, "champion"])
             axis.scatter(
-                [row["score"] / row["reference"]],
+                [rows.loc[model, "mean_MASE"] / reference],
                 [position],
-                s=60,
-                color=SERIES_PALETTE[0],
+                s=70 if champion else 45,
+                color=SERIES_PALETTE[1] if champion else SERIES_PALETTE[0],
                 zorder=3,
-                label="tuned (lowest score)" if position == 0 else None,
             )
-        axis.axvline(1, color=PRIMARY_INK, linewidth=1.5, label="reference")
+        axis.axvline(1, color=PRIMARY_INK, linewidth=1.5)
         axis.set_xscale("log")
-        # Plain numbers (0.5, 2) instead of powers of ten on the log axis.
-        plain = FuncFormatter(lambda value, _: f"{value:g}")
+        # Fixed ratios: the log locator leaves 1 to 2 unlabelled when the range is wide.
+        low, high = axis.get_xlim()
+        ratios = (0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.2, 1.4, 1.6, 1.8, 2, 2.5, 3, 4, 5, 7, 10, 20, 50)
+        axis.set_xticks([r for r in ratios if low <= r <= high])
+        axis.xaxis.set_minor_locator(NullLocator())
         axis.xaxis.set_major_formatter(plain)
-        axis.xaxis.set_minor_formatter(plain)
-        axis.set_yticks(range(len(models)), models)
-        axis.set_xlabel("Cross-validation score / reference (log scale)", color=SECONDARY_INK)
+        axis.set_yticks(range(len(models)), [f"{m} ({families[m]})" for m in models])
+        axis.set_xlabel("Validation MASE (mean over horizons) / naive's", color=SECONDARY_INK)
         axis.set_title(
-            f"{series_title(column)}: every setting tried, on the training folds\n"
-            "left of 1: better than naive (volatility models: than constant variance)",
+            f"{series_title(name)}: every setting tried on the validation origins\n"
+            "left of the line at 1: more accurate than naive",
             loc="left",
             fontsize=10,
         )
-        axis.legend(
-            loc="upper center", bbox_to_anchor=(0.5, -0.1), ncols=3, fontsize=8, frameon=False
-        )
-    # Once only: the panels share the y axis, so inverting each would flip it back.
+    # One legend for both panels, from proxy markers.
+    handles = [
+        plt.Line2D(
+            [],
+            [],
+            marker="o",
+            linestyle="",
+            markerfacecolor="none",
+            markeredgecolor=MUTED_INK,
+            label="a setting tried",
+        ),
+        plt.Line2D(
+            [], [], marker="o", linestyle="", color=SERIES_PALETTE[0], label="tuned (lowest score)"
+        ),
+        plt.Line2D(
+            [],
+            [],
+            marker="o",
+            linestyle="",
+            color=SERIES_PALETTE[1],
+            label="tuned, family champion",
+        ),
+        plt.Line2D([], [], color=PRIMARY_INK, label="naive"),
+    ]
+    figure.legend(handles=handles, loc="lower center", ncols=4, fontsize=9, frameon=False)
     axes[0][0].invert_yaxis()
-    figure.tight_layout()
+    figure.tight_layout(rect=(0, 0.04, 1, 1))
     return figure
 
 
 @app.command()
 def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv") -> None:
     """
-    Tune every model on the training split and write the tuned settings, report and figure.
+    Tune every model on the validation origins, choose each family's champion, and write the
+    settings, champions, report, tables and figure.
 
     Parameters
     ----------
@@ -1255,61 +766,121 @@ def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv")
     Returns
     -------
     None
-        Writes TUNED_PATH, TUNING_REPORT_PATH, SCORES_PATH and FIGURE_PATH, and prints the
-        report.
+        Writes TUNED_PATH, CHAMPIONS_PATH, REPORT_PATH, VALIDATION_METRICS_PATH, SCORES_PATH and
+        FIGURE_PATH, and prints the report.
 
     Notes
     -----
     Processing:
-    1. Keep the training split's levels (the months before validation's first).
-    2. Build the folds over its monthly changes.
-    3. Tune every model for each series (tune_series).
-    4. Write the tuned settings, every setting's score, the report and the figure.
-
-    Validation and test months are never read: the split boundary is applied before anything
-    else.
+    1. Keep the train and validation months; test months are dropped before anything else.
+    2. Build the validation origins and each series' MASE scale (on the training split).
+    3. Tune SARIMA per series, then the other univariate models (SARIMAX and the average use the
+       tuned SARIMA), then the joint models on both series.
+    4. Score naive on the same origins, as the reference.
+    5. Stop joblib's workers, choose the champions and write every output.
     """
     start_run_log("tune")
-    begin_phase("Read the training split and build the folds")
-    levels = pd.read_csv(levels_path, parse_dates=[DATE_COLUMN])
-    levels = levels.sort_values(DATE_COLUMN).reset_index(drop=True)
-    validation_start, _ = split_boundaries(levels)
-    train = levels[levels[DATE_COLUMN] < validation_start].reset_index(drop=True)
-    values = train[list(VALUE_COLUMNS)].to_numpy(dtype=float)
-    folds = time_series_folds(len(values) - 1)
-    system_cache: dict[tuple[str, str, int], np.ndarray] = {}
-    tuned: dict[str, dict[str, dict[str, Any]]] = {}
-    summaries: dict[str, list[dict[str, Any]]] = {}
-    for target, column in enumerate(VALUE_COLUMNS):
-        begin_phase(f"Tune every model for {series_title(column)}")
-        tuned[column], summaries[column] = tune_series(
-            values, train[DATE_COLUMN], target, folds, system_cache
-        )
+    begin_phase("Read the data and build the validation origins")
+    data = pd.read_csv(levels_path, parse_dates=[DATE_COLUMN])
+    data = data.sort_values(DATE_COLUMN).reset_index(drop=True)
+    splits = split_by_time(data, split_boundaries(data))
+    train_end = len(splits["train"]) - 1
+    validation_end = train_end + len(splits["validation"])
+    known = data.iloc[: validation_end + 1]
+    levels = known[list(VALUE_COLUMNS)].to_numpy(dtype=float)
+    dates = known[DATE_COLUMN].to_numpy()
+    origins = validation_origins(train_end, validation_end)
+    scales = [
+        mase_scale(splits["train"][column].to_numpy(dtype=float)) for column in VALUE_COLUMNS
+    ]
+    columns = list(range(len(VALUE_COLUMNS)))
+    tuned: dict[str, dict[str, Any]] = {name: {} for name in VALUE_COLUMNS}
+    metrics: dict[int, dict[str, Metrics]] = {column: {} for column in columns}
+    trials: dict[str, list[dict[str, Any]]] = {}
 
-    begin_phase("Write the tuned settings, report and figure")
+    def store(model: str, result: Mapping[str, Any], tuned_columns: Sequence[int]) -> None:
+        """
+        Keep one search's winner, metrics and trials.
+
+        Parameters
+        ----------
+        model : str
+            The model tuned.
+        result : Mapping of str to Any
+            From tune_model().
+        tuned_columns : Sequence of int
+            The series it was tuned on.
+
+        Returns
+        -------
+        None
+        """
+        for column in tuned_columns:
+            tuned[VALUE_COLUMNS[column]][model] = result["settings"]
+            metrics[column][model] = result["metrics"][column]
+        trials.setdefault(model, []).extend(result["trials"])
+
+    begin_phase("Tune the univariate models per series")
+    for model in UNIVARIATE:
+        sarima = [tuned[name].get(SARIMA, {}) for name in VALUE_COLUMNS]
+        for column in columns:
+            result = tune_model(
+                model, [column], levels, dates, origins, validation_end, scales, sarima
+            )
+            store(model, result, [column])
+    begin_phase("Tune the joint models on both series")
+    for model in JOINT_MODELS:
+        result = tune_model(model, columns, levels, dates, origins, validation_end, scales)
+        store(model, result, columns)
+    begin_phase("Score naive, choose the champions, write the outputs")
+    naive = origin_paths(NAIVE, {}, levels, dates, origins, validation_end, columns)
+    for column in columns:
+        metrics[column][NAIVE] = horizon_metrics(
+            naive[column], origins, levels[:, column], scales[column]
+        )
+    # The parallel fits are done: stop joblib's workers now, releasing their memory.
+    get_reusable_executor().shutdown(wait=True)
+    champions = choose_champions(
+        {c: {m: v for m, v in metrics[c].items() if m != NAIVE} for c in columns}
+    )
+    table = metrics_rows(metrics, champions)
     TUNED_PATH.write_text(json.dumps(tuned, indent=2) + "\n", encoding="utf-8")
+    champion_record = {
+        VALUE_COLUMNS[column]: {
+            family: {
+                "model": model,
+                "settings": tuned[VALUE_COLUMNS[column]][model],
+                "validation_mean_MASE": mean_mase(metrics[column][model]),
+                "validation_MASE": {
+                    str(h): values["MASE"] for h, values in metrics[column][model].items()
+                },
+            }
+            for family, model in by_family.items()
+        }
+        for column, by_family in champions.items()
+    }
+    CHAMPIONS_PATH.write_text(json.dumps(champion_record, indent=2) + "\n", encoding="utf-8")
+    table.to_csv(VALIDATION_METRICS_PATH, index=False)
     pd.DataFrame(
         [
             {
-                "series": column,
-                "model": row["model"],
-                "metric": row["metric"],
-                "settings": json.dumps(entry["settings"]),
-                "score": entry["score"],
-                "tuned": entry["settings"] == row["best"],
+                "model": model,
+                "trial": number,
+                "settings": json.dumps(trial["settings"]),
+                "score": trial["score"],
+                **{f"{VALUE_COLUMNS[c]}_mean_MASE": s for c, s in trial["per_series"].items()},
             }
-            for column, rows in summaries.items()
-            for row in rows
-            for entry in row["scores"]
+            for model, rows in trials.items()
+            for number, trial in enumerate(rows)
         ]
     ).to_csv(SCORES_PATH, index=False)
-    report = tuning_report(summaries, folds, train[DATE_COLUMN])
-    TUNING_REPORT_PATH.write_text(report + "\n", encoding="utf-8")
+    report = tuning_report(table, tuned, origins, data[DATE_COLUMN], validation_end)
+    REPORT_PATH.write_text(report + "\n", encoding="utf-8")
     print(report)
-    figure = tuning_figure(summaries)
+    figure = tuning_figure(trials, table)
     figure.savefig(FIGURE_PATH, dpi=150, facecolor=SURFACE)
     plt.close(figure)
-    logger.success(f"Tuned settings written to {TUNED_PATH}")
+    logger.success(f"Champions written to {CHAMPIONS_PATH}")
     finish_run()
 
 

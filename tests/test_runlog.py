@@ -66,3 +66,24 @@ def test_the_run_log_captures_prints_logger_lines_and_warnings(tmp_path: Path) -
     assert re.search(stamp + "a printed line", text)
     assert re.search(stamp + "INFO \\| a logger line", text)
     assert re.search(stamp + ".*a warning line", text)
+
+
+def test_the_run_log_lets_the_process_exit_while_a_child_still_holds_its_pipe(
+    tmp_path: Path,
+) -> None:
+    """A child process inherits the pipe the run log reads (as joblib's workers do) and outlives
+    its parent: the parent still exits within seconds, with its own lines in the log, instead of
+    blocking on the pipe at shutdown."""
+    script = (
+        "import subprocess, sys\n"
+        "from pathlib import Path\n"
+        "from autoregressive_experiments.runlog import start_run_log\n"
+        f"start_run_log('child', Path(r'{tmp_path}'))\n"
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+        "print('parent done')\n"
+    )
+
+    subprocess.run([sys.executable, "-c", script], check=True, capture_output=True, timeout=25)
+
+    text = next(tmp_path.glob("run_*_child.log")).read_text(encoding="utf-8")
+    assert "parent done" in text

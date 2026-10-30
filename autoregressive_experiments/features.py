@@ -257,6 +257,23 @@ def split_by_time(
     return {name: dataframe[mask].reset_index(drop=True) for name, mask in masks.items()}
 
 
+def series_title(column: str) -> str:
+    """
+    Readable series name for chart titles.
+
+    Parameters
+    ----------
+    column : str
+        Column name, e.g. "fed_total_assets_T".
+
+    Returns
+    -------
+    str
+        The name without the "_T" (trillions) suffix and with spaces, e.g. "fed total assets".
+    """
+    return column.removesuffix("_T").replace("_", " ")
+
+
 def lagged_exog(changes: np.ndarray, lags: int) -> np.ndarray:
     """
     The lag matrix of a series of monthly changes: row i holds the `lags` changes before month

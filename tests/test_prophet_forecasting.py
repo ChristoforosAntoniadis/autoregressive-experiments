@@ -1,13 +1,13 @@
 """
-Tests for the ready-made family (Prophet) in autoregressive_experiments.prophet_forecasting and
-its tuning in autoregressive_experiments.tuning.
+Tests for Prophet in autoregressive_experiments.prophet_forecasting, as the econometric family
+uses it through autoregressive_experiments.model_forecasts.
 """
 
 import numpy as np
 import pandas as pd
 
-from autoregressive_experiments.prophet_forecasting import prophet_forecast, prophet_forecaster
-from autoregressive_experiments.tuning import prophet_one_step
+from autoregressive_experiments.model_forecasts import series_path
+from autoregressive_experiments.prophet_forecasting import PROPHET, prophet_forecast
 
 SETTINGS = {
     "growth": "linear",
@@ -40,35 +40,25 @@ def monthly_series(months: int) -> tuple[np.ndarray, np.ndarray]:
     return dates, 2 + 0.01 * time + 0.1 * np.sin(2 * np.pi * time / 12) + noise
 
 
-def test_prophet_ignores_later_months_and_repeats_exactly() -> None:
-    """Changing every month after the origin leaves the forecast and its spread unchanged, two
-    runs agree exactly (seeded samples), and the spread is positive at every horizon."""
+def test_prophet_repeats_exactly_and_follows_the_trend() -> None:
+    """Two fits on the same 80 months agree exactly. The forecasts for months 80 and 91 differ by
+    the trend, 11 x 0.01 = 0.11, plus the sine's change from month 80 (phase 8 of 12,
+    sin = -0.866) to month 91 (phase 7, sin = -0.5): 0.1 x 0.366 = 0.037, so about 0.147."""
+    dates, levels = monthly_series(80)
+
+    first = prophet_forecast(dates, levels, SETTINGS, 12)
+    second = prophet_forecast(dates, levels, SETTINGS, 12)
+
+    assert np.array_equal(first, second)
+    assert abs(first[11] - first[0] - 0.147) < 0.03
+
+
+def test_prophet_through_series_path_uses_only_the_history_it_is_given() -> None:
+    """series_path hands Prophet the dates of the months it forecasts from, so the history up to
+    month 60 gives the same forecast whatever the dates array holds after it."""
     dates, levels = monthly_series(100)
-    origin = 80
-    forecaster = prophet_forecaster(SETTINGS, dates, 200)
+    history = np.column_stack([levels, levels])[:61]
 
-    before = forecaster(levels[: origin + 1], 6)
-    again = forecaster(levels[: origin + 1], 6)
-    changed = levels.copy()
-    changed[origin + 1 :] += 50.0
-    after = prophet_forecaster(SETTINGS, dates, 200)(changed[: origin + 1], 6)
+    path = series_path(PROPHET, SETTINGS, history, dates, 0, 3)
 
-    for key in ("forecast", "sd_constant"):
-        assert np.array_equal(before[key], again[key])
-        assert np.array_equal(before[key], after[key])
-    assert np.all(before["sd_constant"] > 0)
-
-
-def test_prophet_fold_errors_equal_fitting_each_month_on_earlier_months() -> None:
-    """Each tuning error is the actual level minus Prophet's one-month forecast from the months
-    before it, the same whether the refits run in parallel or one by one."""
-    dates, levels = monthly_series(64)
-
-    errors = prophet_one_step(pd.Series(dates), levels, SETTINGS, [(60, 62)])
-
-    expected = [
-        levels[month + 1]
-        - prophet_forecast(dates[: month + 1], levels[: month + 1], SETTINGS, 1)[0][0]
-        for month in (60, 61)
-    ]
-    assert errors.tolist() == expected
+    assert np.array_equal(path, prophet_forecast(dates[:61], levels[:61], SETTINGS, 3))

@@ -1,0 +1,48 @@
+Residual checks of the recommended SARIMA models (step U4)
+Training split only: 2003-01 to 2016-10, 166 first differences. Models are fitted exactly as in the information-criteria grid.
+Recommended = best by AIC, AICc and BIC, plus the AIC runner-up when it is within 2 AIC of the best.
+Both tests' null hypothesis: no autocorrelation up to the lag. Significance level: 5%.
+Ljung-Box degrees of freedom = lag - (p + q + P + Q); n/a when that is not positive.
+Breusch-Godfrey is the auxiliary regression of the residuals on their own lags; for models with MA terms this is an approximation of the exact LM test.
+A model passes when every available p-value is at or above the significance level.
+
+fed_total_assets_T  SARIMA(2,1,2)  (AIC, AICc, BIC)
+  Residuals: 166, ARMA terms: 4
+  lag  6: Ljung-Box p=0.1786, Breusch-Godfrey p=0.7639
+  lag 12: Ljung-Box p=0.8483, Breusch-Godfrey p=0.9842
+  lag 24: Ljung-Box p=0.9973, Breusch-Godfrey p=0.9999
+  Verdict: PASS
+
+fed_total_assets_T  SARIMA(0,1,4)  (AIC tie (+0.326))
+  Residuals: 166, ARMA terms: 4
+  lag  6: Ljung-Box p=0.1556, Breusch-Godfrey p=0.7040
+  lag 12: Ljung-Box p=0.8258, Breusch-Godfrey p=0.9787
+  lag 24: Ljung-Box p=0.9965, Breusch-Godfrey p=0.9998
+  Verdict: PASS
+
+fed_total_assets_T: carry forward SARIMA(2,1,2), SARIMA(0,1,4)
+
+monetary_base_T  SARIMA(0,1,1)x(1,0,1,12)  (AIC, AICc)
+  Residuals: 166, ARMA terms: 3
+  lag  6: Ljung-Box p=0.3169, Breusch-Godfrey p=0.7825
+  lag 12: Ljung-Box p=0.3351, Breusch-Godfrey p=0.5111
+  lag 24: Ljung-Box p=0.3794, Breusch-Godfrey p=0.5687
+  Verdict: PASS
+
+monetary_base_T  SARIMA(0,1,1)  (BIC)
+  Residuals: 166, ARMA terms: 1
+  lag  6: Ljung-Box p=0.5275, Breusch-Godfrey p=0.6885
+  lag 12: Ljung-Box p=0.2420, Breusch-Godfrey p=0.2423
+  lag 24: Ljung-Box p=0.2900, Breusch-Godfrey p=0.4363
+  Verdict: PASS
+
+monetary_base_T  SARIMA(1,1,1)x(1,0,1,12)  (AIC tie (+1.997))
+  Residuals: 166, ARMA terms: 4
+  lag  6: Ljung-Box p=0.1745, Breusch-Godfrey p=0.7833
+  lag 12: Ljung-Box p=0.2513, Breusch-Godfrey p=0.5118
+  lag 24: Ljung-Box p=0.3162, Breusch-Godfrey p=0.5678
+  Verdict: PASS
+
+monetary_base_T: carry forward SARIMA(0,1,1)x(1,0,1,12), SARIMA(0,1,1), SARIMA(1,1,1)x(1,0,1,12)
+
+Figure: reports/figures/residual_diagnostics.png

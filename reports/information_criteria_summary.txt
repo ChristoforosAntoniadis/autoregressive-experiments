@@ -1,0 +1,22 @@
+Training split only (first 60% of months), first differences: 2003-01 to 2016-10, 166 observations.
+Validation and test months are held out for model evaluation.
+
+SARIMA information criteria model selection
+Input: first-order-differenced balance-sheet data.
+d=1 is applied by the differencing: each candidate is an ARMA(p, q) with a constant on the differences, i.e. ARIMA(p, 1, q) with drift on the levels.
+Monthly seasonal period: 12; all candidates use D=0.
+Candidate orders: every p, q with p + d + q <= 5 (15 pairs), P in (0, 1), Q in (0, 1): 60 candidates per series.
+Lower AIC, AICc, and BIC indicate a preferred fit/complexity tradeoff.
+AICc applies the finite-sample correction to AIC.
+
+fed_total_assets_T: 59 of 60 candidates converged.
+  Best by AIC: SARIMA(2,1,2)x(0,0,0,12), AIC=-421.3517
+  Best by AICc: SARIMA(2,1,2)x(0,0,0,12), AICc=-420.8234
+  Best by BIC: SARIMA(2,1,2)x(0,0,0,12), BIC=-402.6798
+
+monetary_base_T: 57 of 60 candidates converged.
+  Best by AIC: SARIMA(0,1,1)x(1,0,1,12), AIC=-467.9834
+  Best by AICc: SARIMA(0,1,1)x(1,0,1,12), AICc=-467.6084
+  Best by BIC: SARIMA(0,1,1)x(0,0,0,12), BIC=-455.9025
+
+Full candidate table: reports/information_criteria_candidates.csv

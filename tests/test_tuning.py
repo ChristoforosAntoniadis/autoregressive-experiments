@@ -1,36 +1,24 @@
 """
-Tests for the time-aware random search in autoregressive_experiments.tuning.
+Tests for the tuning and champion selection on the validation split in
+autoregressive_experiments.tuning.
 """
+
+import json
 
 import numpy as np
 import pytest
-from scipy import stats
-from sklearn.base import clone
 
-from autoregressive_experiments import tuning
-from autoregressive_experiments.forecast_evaluation import EXPONENTIAL, SARIMA, SMA, VAR_MODEL
-from autoregressive_experiments.ml_forecasting import (
-    RIDGE,
-    build_model,
-    lag_columns,
-    lag_features,
-    max_lag,
-)
-from autoregressive_experiments.nn_forecasting import PYTORCH_MLP
+from autoregressive_experiments.model_forecasts import EXPONENTIAL, NAIVE, SARIMA, SMA
 from autoregressive_experiments.tuning import (
-    CANDIDATES,
-    SPACES,
-    TunableModel,
-    arima_one_step,
-    constant_quantiles,
-    draw_candidates,
-    ml_search,
-    optuna_search,
-    search,
-    smoothing_one_step,
-    system_one_step,
-    time_series_folds,
-    volatility_quantiles,
+    choose_champions,
+    decode,
+    grid_size,
+    horizon_metrics,
+    mean_mase,
+    origin_paths,
+    search_space,
+    usable,
+    validation_origins,
 )
 
 
@@ -54,163 +42,122 @@ def random_walks(months: int, seed: int = 0) -> np.ndarray:
     return 10 + np.cumsum(steps, axis=0)
 
 
-def test_folds_over_the_training_changes_by_hand() -> None:
-    """166 training changes, 5 folds, at least 60 training months: each fold tests
-    (166 - 60) // 5 = 21 months, so the first trains on 166 - 5 x 21 = 61 and the last ends
-    at 166."""
-    assert time_series_folds(166) == [(61, 82), (82, 103), (103, 124), (124, 145), (145, 166)]
+def test_validation_origins_by_hand() -> None:
+    """Training ends at month 166 and validation at 222: origins 166, 170, ..., 218, every 4
+    months, all before the last validation month: (218 - 166) / 4 + 1 = 14 folds."""
+    origins = validation_origins(166, 222)
+
+    assert origins[0] == 166 and origins[-1] == 218 and len(origins) == 14
+    assert set(np.diff(origins)) == {4}
 
 
-def test_draws_are_reproducible_and_small_spaces_are_tried_in_full() -> None:
-    """SARIMA's space keeps the 15 (p, q) pairs with p + 1 + q <= 5, times 2 x 2 x 2 for P, Q
-    and the trend: 120 valid settings, of which CANDIDATES are drawn, the same ones each time.
-    Exponential smoothing has 3 x 3 x 2 x 2 = 36 settings without damping, plus 24 damped
-    ones with a trend: 60, at most CANDIDATES, so all are tried. SMA's 23 windows are all
-    tried too."""
-    first, size = draw_candidates(SARIMA, SPACES[SARIMA])
-    second, _ = draw_candidates(SARIMA, SPACES[SARIMA])
+def test_linked_settings_become_one_choice_of_valid_combinations() -> None:
+    """SARIMA's p and q under p + 1 + q <= 5 give the 15 pairs with p + q <= 4; exponential
+    smoothing's trend and damping give 5 forms (no trend undamped only, additive and
+    multiplicative each undamped or damped); decoding unpacks them again."""
+    sarima = search_space(SARIMA)
+    smoothing = search_space(EXPONENTIAL)
 
-    assert size == 120 and len(first) == CANDIDATES and first == second
-    assert all(setting["p"] + setting["q"] <= 4 for setting in first)
-    smoothing, smoothing_size = draw_candidates(EXPONENTIAL, SPACES[EXPONENTIAL])
-    assert smoothing_size == 60 and len(smoothing) == 60
-    assert not any(s["damped_trend"] and s["trend"] is None for s in smoothing)
-    assert len(draw_candidates(SMA, SPACES[SMA])[0]) == 23
+    assert len(sarima["p+q"]) == 15
+    assert all(sum(json.loads(choice).values()) <= 4 for choice in sarima["p+q"])
+    assert len(smoothing["trend+damped_trend"]) == 5
+    assert decode({"p+q": '{"p": 2, "q": 1}', "trend": "n"}) == {"p": 2, "q": 1, "trend": "n"}
 
 
-def test_a_setting_without_a_usable_forecast_never_wins() -> None:
-    """SMA windows scored NaN for 2 and 3 months, inf for 4, and their own length otherwise:
-    the first draws can be unusable, but the winner is the smallest finite score."""
-    unusable = {2: np.nan, 3: np.nan, 4: np.inf}
-
-    best, scored, _ = search("check", SMA, lambda s: unusable.get(s["window"], s["window"]))
-
-    assert best == {"window": 5}
-    assert sum(not np.isfinite(row["score"]) for row in scored) == 3
+def test_grid_sizes_by_hand() -> None:
+    """SMA tries 23 windows; exponential smoothing 5 forms x 3 seasons x 2 Box-Cox x 2
+    initializations = 60; a space with a continuous range has no grid."""
+    assert grid_size(search_space(SMA)) == 23
+    assert grid_size(search_space(EXPONENTIAL)) == 60
+    assert grid_size({"rate": {"low": 0.1, "high": 1.0, "log": True}}) is None
 
 
-def test_moving_average_errors_by_hand() -> None:
-    """Levels 0..9; a fold testing changes 5 and 6 forecasts levels 6 and 7 from the mean of
-    the two levels before each: (4 + 5) / 2 = 4.5 and 5.5, so both errors are 1.5."""
-    levels = np.arange(10.0)
+def test_horizon_metrics_and_their_mean_by_hand() -> None:
+    """Levels 0..20 with a scale of 1; from origins 0 and 10 a path that is 1 too low at every
+    step: MAE 1 at every horizon, so MASE 1 and its mean 1; only horizons the paths reach are
+    scored."""
+    actual = np.arange(21.0)
+    paths = [actual[1:13] - 1, actual[11:21] - 1]
 
-    errors = smoothing_one_step(levels, SMA, {"window": 2}, [(5, 7)])
+    metrics = horizon_metrics(paths, [0, 10], actual, scale=1.0)
 
-    assert errors.tolist() == [1.5, 1.5]
-
-
-def test_sarima_fold_errors_ignore_everything_after_the_fold() -> None:
-    """Changing every month after the first fold leaves that fold's errors unchanged: each fold
-    is fitted on earlier months and run through its own months only."""
-    changes = np.diff(random_walks(71)[:, 0])
-    setting = {"p": 1, "q": 0, "P": 0, "Q": 0, "trend": "c"}
-    folds = [(40, 50), (50, 60)]
-
-    before, residuals, _ = arima_one_step(changes, setting, folds)
-    changed = changes.copy()
-    changed[50:] += 5.0
-    after, _, _ = arima_one_step(changed, setting, folds)
-
-    assert np.array_equal(before[:10], after[:10])
-    assert not np.array_equal(before[10:], after[10:])
-    # Per fold: the in-sample residuals and the fold's 10 one-month errors.
-    assert [len(run_on) for _, run_on in residuals] == [10, 10]
+    assert metrics[1]["MAE"] == pytest.approx(1.0) and metrics[1]["n"] == 2
+    # The second origin forecasts 10 months, so only the first reaches horizon 12.
+    assert metrics[12]["n"] == 1
+    assert mean_mase(metrics) == pytest.approx(1.0)
 
 
-def test_tunable_model_survives_cloning_and_takes_new_settings() -> None:
-    """RandomizedSearchCV clones the estimator and sets each drawn setting on the copy: the copy
-    keeps the model and settings, and set_params replaces only what it is given."""
-    original = TunableModel(RIDGE, lags=2, alpha=1.0)
+def scored(value: float) -> dict[int, dict[str, float]]:
+    """
+    Metrics with the same MASE at every horizon.
 
-    copy = clone(original).set_params(alpha=10.0)
+    Parameters
+    ----------
+    value : float
+        The MASE.
 
-    assert original.get_params() == {"model": RIDGE, "lags": 2, "alpha": 1.0}
-    assert copy.get_params() == {"model": RIDGE, "lags": 2, "alpha": 10.0}
-
-
-def test_randomized_search_scores_equal_fitting_each_fold_on_earlier_months() -> None:
-    """Every setting's score from RandomizedSearchCV equals the MAE of fitting it on the months
-    before each fold and predicting the fold's months by hand: the search uses the
-    time-ordered folds, not its default ones."""
-    changes = np.diff(random_walks(81), axis=0)
-    folds = [(50, 60), (60, 70), (70, 80)]
-
-    best, scored, size = ml_search(changes, RIDGE, 0, folds)
-
-    features, target = lag_features(changes, max_lag(RIDGE)), changes[max_lag(RIDGE) :, 0]
-    for entry in scored[:3]:
-        setting = entry["settings"]
-        columns = lag_columns(setting["lags"], max_lag(RIDGE), 2)
-        errors = []
-        for start, end in folds:
-            first, last = start - max_lag(RIDGE), end - max_lag(RIDGE)
-            fitted = build_model(RIDGE, setting).fit(features[:first, columns], target[:first])
-            errors.append(target[first:last] - fitted.predict(features[first:last, columns]))
-        assert entry["score"] == pytest.approx(np.mean(np.abs(np.concatenate(errors))))
-    # Ridge's space: 8 lag counts x 8 penalties.
-    assert size == 64 and len(scored) == CANDIDATES
-    assert best == min(scored, key=lambda row: row["score"])["settings"]
+    Returns
+    -------
+    dict of int to dict of str to float
+        Horizon -> {"MASE": value}.
+    """
+    return {horizon: {"MASE": value} for horizon in (1, 3, 6, 9, 12)}
 
 
-def test_optuna_search_is_seeded_and_scores_every_trial_on_the_folds(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Three Optuna trials of the PyTorch network: two searches choose the same settings and
-    scores (seeded TPE, deterministic fits), the best is the lowest-scoring trial, and its score
-    is the MAE of fitting it on each fold's earlier months, as for every other model."""
-    monkeypatch.setattr(tuning, "CANDIDATES", 3)
-    changes = np.diff(random_walks(81), axis=0)
-    folds = [(50, 60), (60, 70), (70, 80)]
-
-    best, scored, size = optuna_search(changes, PYTORCH_MLP, 0, folds)
-    again, scored_again, _ = optuna_search(changes, PYTORCH_MLP, 0, folds)
-
-    assert (best, scored) == (again, scored_again) and len(scored) == 3 and size == 0
-    winner = min(scored, key=lambda row: row["score"])
-    assert best == winner["settings"]
-    features, target = (
-        lag_features(changes, max_lag(PYTORCH_MLP)),
-        changes[max_lag(PYTORCH_MLP) :, 0],
+def test_unusable_scores_rank_last_and_the_lowest_score_is_champion() -> None:
+    """NaN ranks as infinity; within each family the lowest mean MASE wins: SMA (0.9) among the
+    econometric models at 1.0, KNN (0.5) among ML at 2.0 with Lasso unusable, GRU (1.1) among
+    the networks at 1.5."""
+    assert usable(np.nan) == np.inf and usable(0.5) == 0.5
+    econometric = (
+        "SARIMA",
+        "SARIMAX",
+        "SARIMA + naive average",
+        "VAR",
+        "VECM",
+        "SMA",
+        "exponential smoothing",
+        "Prophet",
     )
-    columns = lag_columns(best["lags"], max_lag(PYTORCH_MLP), 2)
-    errors = []
-    for start, end in folds:
-        first, last = start - max_lag(PYTORCH_MLP), end - max_lag(PYTORCH_MLP)
-        fitted = build_model(PYTORCH_MLP, best).fit(features[:first, columns], target[:first])
-        errors.append(target[first:last] - fitted.predict(features[first:last, columns]))
-    assert winner["score"] == pytest.approx(np.mean(np.abs(np.concatenate(errors))), rel=1e-6)
+    ml = ("Ridge", "Lasso", "random forest", "XGBoost", "KNN")
+    networks = (
+        "MLP",
+        "NumPy A1",
+        "NumPy A2",
+        "TensorFlow MLP",
+        "PyTorch MLP",
+        "LSTM",
+        "GRU",
+        "TCN",
+        "N-BEATS",
+        "DLinear",
+    )
+    by_model = {model: scored(1.0) for model in econometric}
+    by_model |= {model: scored(2.0) for model in ml} | {model: scored(1.5) for model in networks}
+    by_model |= {"SMA": scored(0.9), "Lasso": scored(np.nan), "KNN": scored(0.5)}
+    by_model |= {"GRU": scored(1.1)}
+
+    champions = choose_champions({0: by_model})
+
+    assert champions[0] == {
+        "econometric": "SMA",
+        "machine learning": "KNN",
+        "neural network": "GRU",
+    }
 
 
-def test_constant_quantiles_by_hand() -> None:
-    """Residuals 3 and -4 have a root mean square of sqrt((9 + 16) / 2) = 3.536, so the 97.5%
-    quantile is 1.960 x 3.536 = 6.930 for every fold month."""
-    quantiles = constant_quantiles(np.array([3.0, -4.0]), np.zeros(3))
+def test_origin_paths_ignore_later_months_and_match_one_fit() -> None:
+    """Forecasts run in parallel from each origin equal a direct fit on the months up to it, and
+    changing the months after an origin leaves its forecasts unchanged."""
+    levels = random_walks(60)
+    dates = np.arange(60)
+    changed = levels.copy()
+    changed[41:] += 5.0
 
-    assert quantiles.shape == (3, 5)
-    assert quantiles[:, -1] == pytest.approx(stats.norm.ppf(0.975) * np.sqrt(12.5))
+    paths = origin_paths(SMA, {"window": 3}, levels, dates, [30, 40], 59, [0])
+    after = origin_paths(SMA, {"window": 3}, changed, dates, [30, 40], 59, [0])
+    naive = origin_paths(NAIVE, {}, levels, dates, [40], 59, [0, 1])
 
-
-def test_volatility_quantiles_are_in_the_units_they_were_given() -> None:
-    """Multiplying the residuals by 10 multiplies the quantiles by 10 (arch rescales inside);
-    the median of a symmetric distribution is 0."""
-    residuals = np.random.default_rng(1).standard_t(6, size=150) * 0.05
-    setting = {"p": 1, "q": 1, "dist": "t", "break_adjusted": False}
-
-    small = volatility_quantiles("GARCH", setting, residuals[:120], residuals[120:])
-    large = volatility_quantiles("GARCH", setting, 10 * residuals[:120], 10 * residuals[120:])
-
-    assert large == pytest.approx(10 * small, rel=1e-3)
-    assert small[:, 2] == pytest.approx(0.0, abs=1e-12)
-
-
-def test_systems_share_their_fits_between_the_series() -> None:
-    """Scoring both series of a VAR re-uses one fit per month: 10 fold months give 10 cached
-    forecasts, not 20."""
-    levels = random_walks(71)
-    cache: dict[tuple[str, str, int], np.ndarray] = {}
-    setting = {"lags": 2, "trend": "c"}
-
-    for column in (0, 1):
-        system_one_step(levels, VAR_MODEL, setting, column, [(60, 70)], cache)
-
-    assert len(cache) == 10
+    assert paths[0][0] == pytest.approx(np.full(12, levels[28:31, 0].mean()))
+    assert np.array_equal(paths[0][1], after[0][1])
+    assert naive[1][0] == pytest.approx(np.full(12, levels[40, 1]))

@@ -48,7 +48,7 @@ def test_the_project_config_loads_with_reasoning_for_every_setting() -> None:
     assert len(loader.reasoning) == settings
     # Spot checks: JSON lists arrive as tuples, a JSON 2.0 as the float 2.0.
     assert hyperparameters.tests.significance_level == 0.05
-    assert hyperparameters.forecast_evaluation.horizons == (1, 3, 6, 12)
+    assert hyperparameters.forecast_evaluation.horizons == (1, 3, 6, 9, 12)
     assert hyperparameters.residual_checks.aic_tie_margin == 2.0
     # Search spaces stay as JSON gave them: lists, with null as None.
     assert hyperparameters.ml.random_forest["max_depth"][0] is None

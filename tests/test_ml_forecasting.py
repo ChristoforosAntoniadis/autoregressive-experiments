@@ -14,7 +14,6 @@ from autoregressive_experiments.ml_forecasting import (
     fit_model,
     lag_columns,
     lag_features,
-    ml_forecaster,
     recursive_forecast,
 )
 
@@ -164,25 +163,3 @@ def test_forest_and_xgboost_are_reproducible() -> None:
         first = build_model(model, settings).fit(features, target).predict(features)
         second = build_model(model, settings).fit(features, target).predict(features)
         assert np.array_equal(first, second)
-
-
-def test_ml_forecaster_ignores_everything_after_the_origin() -> None:
-    """Changing every month after the origin leaves the forecast unchanged, and a history that
-    doesn't match the harness's levels trips the leakage guard."""
-    levels = simulated_system(120)
-    origin = 90
-    # Each series has its own tuned lags, as after the tuning.
-    settings = [
-        {"lags": 3, "alpha": 0.01, "max_iter": 10000},
-        {"lags": 2, "alpha": 0.01, "max_iter": 10000},
-    ]
-    forecaster = ml_forecaster(LASSO, settings, levels, 1, {})
-
-    before = forecaster(levels[: origin + 1, 1], 6)["forecast"]
-    changed = levels.copy()
-    changed[origin + 1 :] += 100.0
-    after = ml_forecaster(LASSO, settings, changed, 1, {})(changed[: origin + 1, 1], 6)
-
-    assert np.array_equal(before, after["forecast"])
-    with pytest.raises(AssertionError):
-        forecaster(levels[: origin + 1, 0], 6)

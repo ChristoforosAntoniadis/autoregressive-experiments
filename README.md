@@ -9,12 +9,13 @@ Experiments on autoregressive approaches, from traditional econometrics (SARIMA,
 
 ## Plan
 
-- **Univariate (SARIMA, then ARCH / GARCH):** stationarity tests (ADF / KPSS on levels and first differences), ACF / PACF, and SARIMA order selection by AIC / AICc / BIC, residual checks of the selected models (Ljung-Box, Breusch-Godfrey), volatility checks (Engle's ARCH-LM, with and without a variance break), GARCH(1,1), EGARCH and GJR-GARCH on the residuals are done on the training split. Every model's settings are then tuned by time-aware random search on the training split (expanding cross-validation folds in time order), and its rolling-origin forecasts (expanding window, one fold per monthly origin) are scored on validation and then once on test, against naive, drift and seasonal-naive baselines: MAE, MSE, RMSE, MAPE, MASE and Diebold-Mariano tests at 1–12 months, plus quantile forecast intervals (80% / 95% coverage, pinball loss) with and without GARCH; see [`reports/`](reports/).
-- **Multivariate (VAR / VECM):** lag selection and the Johansen cointegration test are done on the training split; no cointegration was found, so the system is a VAR on the first differences. VAR(5) and a rank-1 VECM(5) are estimated, stable and pass the residual checks; Granger causality, impulse responses and the variance decomposition show a one-way link, from total assets to the monetary base. The tuned VAR and VECM are evaluated with the same harness, on validation and once on test, including a Diebold-Mariano comparison against SARIMA, as is SARIMAX (the tuned SARIMA plus the other series' lagged monthly changes).
-- **Lag-feature ML:** Ridge, Lasso, random forest, XGBoost and k-nearest neighbours on the last monthly changes of both series, every setting (the lag count included) tuned the same way, forecasting recursively through the same harness.
-- **Smoothing baselines and a combination:** a moving average and exponential smoothing (trend, damping, season, Box-Cox and initialization all tuned), and a weighted average of SARIMA and the naive forecast (weight tuned), all through the same harness.
-- **Neural networks:** a multilayer perceptron (scikit-learn's MLPRegressor) and two networks written by hand in NumPy (A1: one sigmoid hidden layer; A2: three ReLU hidden layers; SGD, momentum, AdaBelief or Muon), a TensorFlow (Keras) and a PyTorch multilayer perceptron (A1 or A2), and PyTorch sequence networks (LSTM, GRU, TCN, N-BEATS, DLinear) reading the same lags as a window; the TensorFlow and PyTorch networks are tuned with Optuna. All on the same lag features and evaluated the same way.
-- **Ready-made:** Prophet on each series' levels, refitted at every origin and tuned with Optuna, with intervals from its own uncertainty samples.
+- **Univariate (SARIMA, then ARCH / GARCH):** stationarity tests (ADF / KPSS on levels and first differences), ACF / PACF, and SARIMA order selection by AIC / AICc / BIC, residual checks of the selected models (Ljung-Box, Breusch-Godfrey), volatility checks (Engle's ARCH-LM, with and without a variance break), GARCH(1,1), EGARCH and GJR-GARCH on the residuals are done on the training split.
+- **Multivariate (VAR / VECM):** lag selection and the Johansen cointegration test are done on the training split; no cointegration was found, so the system is a VAR on the first differences. VAR(5) and a rank-1 VECM(5) are estimated, stable and pass the residual checks; Granger causality, impulse responses and the variance decomposition show a one-way link, from total assets to the monetary base. VAR, VECM and SARIMAX (SARIMA plus the other series' lagged monthly changes) join the forecast comparison below.
+- **Lag-feature ML:** Ridge, Lasso, random forest, XGBoost and k-nearest neighbours on the last monthly changes of both series, forecasting recursively.
+- **Smoothing baselines and a combination:** a moving average and exponential smoothing (trend, damping, season, Box-Cox and initialization all tuned), and a weighted average of SARIMA and the naive forecast (weight tuned).
+- **Neural networks:** a multilayer perceptron (scikit-learn's MLPRegressor) and two networks written by hand in NumPy (A1: one sigmoid hidden layer; A2: three ReLU hidden layers; SGD, momentum, AdaBelief or Muon), a TensorFlow (Keras) and a PyTorch multilayer perceptron (A1 or A2), and PyTorch sequence networks (LSTM, GRU, TCN, N-BEATS, DLinear) reading the same lags as a window.
+- **Prophet** on each series' levels, counted with the econometric models.
+- **Forecast comparison (train / validation / test, 60 / 20 / 20 in time order):** every model is fitted on an expanding window from the start of the data and forecasts 1, 3, 6, 9 and 12 months ahead. Its settings are tuned by Optuna on 14 validation origins, one every 4 months, scored by MASE averaged over the five horizons; the best model of each family (econometric, machine learning, neural network) is its champion. The champions and the naive forecast are then refitted at each of the 56 test months and scored once: MAE, MAPE, MASE, MSE and RMSE per horizon, Diebold-Mariano tests against naive, and 80% / 95% bands from the quantiles of each model's own past errors at that horizon (coverage, width, pinball loss); see [`reports/`](reports/).
 
 ## Quickstart
 
@@ -32,12 +33,12 @@ make residuals                    # Ljung-Box / Breusch-Godfrey on the selected 
 make volatility                   # ARCH-LM and a variance-break check on those models -> reports/
 make garch                        # GARCH(1,1) vs constant variance on those models, bootstrap checks (~3 min) -> reports/
 make asymmetric-garch             # EGARCH and GJR-GARCH vs that GARCH, bootstrap checks (~12 min) -> reports/
-make tune                         # tune every model by time-aware random search on train (~1 h 45 min) -> models/, reports/
-make evaluate                     # rolling-origin forecasts of every tuned model on validation and test (~1.5-2 h)
+make tune                         # tune every model on validation, choose each family's champion -> models/, reports/
+make evaluate                     # test the champions and naive once: metrics, bands, figures -> reports/
 make var                          # VAR lag order and Johansen cointegration test -> reports/
 make var-checks                   # fit VAR / VECM candidates; stability and Portmanteau checks -> reports/
 make var-analysis                 # Granger causality, impulse responses, variance decomposition -> reports/
-make all                          # every step above, in order (~4 h)
+make all                          # every step above, in order (~3.5-5 h)
 
 make test                         # unit tests
 make lint                         # check style and lint with ruff (changes nothing)
@@ -61,6 +62,7 @@ python -m autoregressive_experiments.residual_checks
 python -m autoregressive_experiments.volatility_checks
 python -m autoregressive_experiments.volatility_models
 python -m autoregressive_experiments.asymmetric_garch
+python -m autoregressive_experiments.tuning
 python -m autoregressive_experiments.forecast_evaluation
 python -m autoregressive_experiments.var_diagnostics
 python -m autoregressive_experiments.var_models
@@ -83,7 +85,7 @@ autoregressive-experiments/
 │   ├── processed/               # first-differenced data, regenerated by make features (not committed)
 │   └── raw/                     # the original Kaggle CSVs, never modified
 ├── docs/                        # (empty) detailed documentation
-├── models/                      # tuned_hyperparameters.json: every model's tuned settings
+├── models/                      # every model's tuned settings and each family's champion
 ├── notebooks/                   # (empty) Jupyter notebooks
 ├── references/                  # (empty) data dictionaries, manuals, papers
 ├── reports/                     # stationarity, ACF / PACF and information-criteria reports
@@ -103,11 +105,13 @@ autoregressive-experiments/
 │   ├── volatility_checks.py     # ARCH-LM, with and without an estimated variance break
 │   ├── volatility_models.py     # GARCH(1,1) (normal and Student-t) vs constant variance, by BIC; residual checks by parametric bootstrap
 │   ├── asymmetric_garch.py      # EGARCH and GJR-GARCH (Student-t), plain or break-adjusted, by BIC
-│   ├── tuning.py                # time-aware random search of every model's settings on train
-│   ├── forecast_evaluation.py   # rolling-origin forecasts of every tuned model vs baselines, validation and test
+│   ├── model_forecasts.py       # every model's fit and forecast from the months up to an origin
+│   ├── metrics.py               # MAE / MAPE / MASE / MSE / RMSE, Diebold-Mariano, error-quantile bands
+│   ├── tuning.py                # Optuna search of every model on validation; each family's champion
+│   ├── forecast_evaluation.py   # the champions and naive on test, once: metrics, bands, figures
 │   ├── ml_forecasting.py        # lag-feature ML: Ridge, Lasso, random forest, XGBoost, KNN
 │   ├── nn_forecasting.py        # neural networks: MLPs (scikit-learn, NumPy by hand, Keras, PyTorch), LSTM, GRU, TCN, N-BEATS, DLinear
-│   ├── prophet_forecasting.py   # ready-made: Prophet
+│   ├── prophet_forecasting.py   # Prophet
 │   ├── var_diagnostics.py       # VAR lag order (AIC / BIC / HQIC) and Johansen cointegration
 │   ├── var_models.py            # VAR / VECM candidates: estimation, stability, residual checks
 │   ├── var_analysis.py          # Granger causality, impulse responses, variance decomposition
@@ -122,7 +126,7 @@ Every setting (split, test lags, bootstrap size, forecast horizons, every model'
 
 Every make step writes a timestamped log of everything it prints to `logs/run_<date>_<time>_<step>.log` (not committed), with progress lines for long loops and a table of phase timings at the end.
 
-The empty folders hold a `.gitkeep` file so they exist for future use, as in the template. `configs/`, `runlog.py`, `diagnostics.py`, `residual_checks.py`, `volatility_checks.py`, `volatility_models.py`, `asymmetric_garch.py`, `tuning.py`, `forecast_evaluation.py`, `ml_forecasting.py`, `nn_forecasting.py`, `prophet_forecasting.py`, `var_diagnostics.py`, `var_models.py`, `var_analysis.py` and `tools/` are this project's additions to the template.
+The empty folders hold a `.gitkeep` file so they exist for future use, as in the template. `configs/`, `runlog.py`, `diagnostics.py`, `residual_checks.py`, `volatility_checks.py`, `volatility_models.py`, `asymmetric_garch.py`, `model_forecasts.py`, `metrics.py`, `tuning.py`, `forecast_evaluation.py`, `ml_forecasting.py`, `nn_forecasting.py`, `prophet_forecasting.py`, `var_diagnostics.py`, `var_models.py`, `var_analysis.py` and `tools/` are this project's additions to the template.
 
 ## Datasets & attribution
 

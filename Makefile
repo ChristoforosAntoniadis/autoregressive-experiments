@@ -76,13 +76,13 @@ asymmetric-garch: export MPLBACKEND = Agg
 asymmetric-garch:
 	$(PYTHON_INTERPRETER) -m $(PACKAGE).asymmetric_garch
 
-## Tune every model's settings by time-aware random search on train (no plot windows)
+## Tune every model on validation and choose each family's champion (no plot windows)
 .PHONY: tune
 tune: export MPLBACKEND = Agg
 tune:
 	$(PYTHON_INTERPRETER) -m $(PACKAGE).tuning
 
-## Score every tuned model's rolling-origin forecasts on validation and test (needs make tune)
+## Test the champions once, with metrics, uncertainty bands and figures (needs make tune)
 .PHONY: evaluate
 evaluate: export MPLBACKEND = Agg
 evaluate:
