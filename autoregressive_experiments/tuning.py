@@ -152,6 +152,29 @@ SCORES_PATH = REPORTS_DIR / "tuning_scores.csv"
 FIGURE_PATH = FIGURES_DIR / "tuning.png"
 
 
+def usable(score: float) -> float:
+    """
+    A score for ranking: itself when finite, infinity otherwise.
+
+    Parameters
+    ----------
+    score : float
+        A cross-validation score; NaN or infinite when a setting gave no usable forecast (for
+        example a multiplicative exponential-smoothing fit that broke down).
+
+    Returns
+    -------
+    float
+        `score`, or inf, so such a setting ranks last.
+
+    Notes
+    -----
+    Every comparison with NaN is false, so min() over scores that include NaN can return the
+    NaN one; ranking by usable() never does.
+    """
+    return score if np.isfinite(score) else np.inf
+
+
 def time_series_folds(count: int) -> list[Fold]:
     """
     The expanding, time-ordered folds over `count` monthly changes.
@@ -596,7 +619,7 @@ def ml_search(
         {"settings": dict(params), "score": -float(score)}
         for params, score in zip(results["params"], results["mean_test_score"])
     ]
-    winner = min(scored, key=lambda row: row["score"])
+    winner = min(scored, key=lambda row: usable(row["score"]))
     return dict(winner["settings"]), scored, len(ParameterGrid(space))
 
 
@@ -694,7 +717,7 @@ def run_optuna(
             else trial.suggest_categorical(name, spec)
             for name, spec in space.items()
         }
-        return score(setting)
+        return usable(score(setting))
 
     def report(study: Any, trial: Any) -> None:
         """
@@ -842,18 +865,18 @@ def search(
     Returns
     -------
     tuple of (dict of str to Any, list of dict of str to Any, int)
-        The best setting (the first drawn on a tie), every drawn setting with its score as
-        {"settings": ..., "score": ...} in draw order, and the number of valid settings in the
-        space.
+        The best setting (the first drawn on a tie; settings without a finite score rank
+        last), every drawn setting with its score as {"settings": ..., "score": ...} in draw
+        order, and the number of valid settings in the space.
     """
     candidates, size = draw_candidates(model, SPACES[model])
     progress = Progress(f"TUNE | {label} | {model}", len(candidates))
     scored: list[dict[str, Any]] = []
     for done, setting in enumerate(candidates, start=1):
         scored.append({"settings": setting, "score": float(score(setting))})
-        best = min(row["score"] for row in scored)
+        best = min(usable(row["score"]) for row in scored)
         progress.step(done, f"best so far {best:.5f}")
-    winner = min(scored, key=lambda row: row["score"])
+    winner = min(scored, key=lambda row: usable(row["score"]))
     return dict(winner["settings"]), scored, size
 
 
@@ -946,7 +969,8 @@ def tune_series(
                 "tried": len(scored),
                 "size": size,
                 "best": best,
-                "score": min(row["score"] for row in scored),
+                "score": min(usable(row["score"]) for row in scored),
+                "unusable": sum(not np.isfinite(row["score"]) for row in scored),
                 "reference": reference,
                 "failed": failures.get(model, 0),
                 "scores": scored,
@@ -1121,6 +1145,8 @@ def tuning_report(
             tried = f"{row['tried']} of {row['size']}" if row["size"] else f"{row['tried']} TPE"
             settings = ", ".join(f"{key}={value}" for key, value in row["best"].items())
             failed = f" ({row['failed']} fits didn't converge)" if row["failed"] else ""
+            if row["unusable"]:
+                failed += f" ({row['unusable']} settings gave no usable forecast)"
             lines.append(
                 f"  {row['model']:<24}{tried:>12}{row['metric']:>9}{row['score']:11.5f}"
                 f"{row['reference']:11.5f}{ratio:7.3f}   {settings}{failed}"
@@ -1174,6 +1200,8 @@ def tuning_figure(summaries: dict[str, list[dict[str, Any]]]) -> Figure:
         axis.set_facecolor(SURFACE)
         for position, row in enumerate(rows):
             ratios = np.array([entry["score"] for entry in row["scores"]]) / row["reference"]
+            # Settings without a usable forecast have no point to draw; the report counts them.
+            ratios = ratios[np.isfinite(ratios)]
             axis.scatter(
                 ratios,
                 np.full(len(ratios), position),

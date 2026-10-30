@@ -26,6 +26,7 @@ from autoregressive_experiments.tuning import (
     draw_candidates,
     ml_search,
     optuna_search,
+    search,
     smoothing_one_step,
     system_one_step,
     time_series_folds,
@@ -75,6 +76,17 @@ def test_draws_are_reproducible_and_small_spaces_are_tried_in_full() -> None:
     assert smoothing_size == 60 and len(smoothing) == 60
     assert not any(s["damped_trend"] and s["trend"] is None for s in smoothing)
     assert len(draw_candidates(SMA, SPACES[SMA])[0]) == 23
+
+
+def test_a_setting_without_a_usable_forecast_never_wins() -> None:
+    """SMA windows scored NaN for 2 and 3 months, inf for 4, and their own length otherwise:
+    the first draws can be unusable, but the winner is the smallest finite score."""
+    unusable = {2: np.nan, 3: np.nan, 4: np.inf}
+
+    best, scored, _ = search("check", SMA, lambda s: unusable.get(s["window"], s["window"]))
+
+    assert best == {"window": 5}
+    assert sum(not np.isfinite(row["score"]) for row in scored) == 3
 
 
 def test_moving_average_errors_by_hand() -> None:
