@@ -1,15 +1,15 @@
 """
-VAR / VECM diagnostics, steps V2 and V3: how many lags, and do the two series share a long-run
+VAR / VECM diagnostics: how many lags, and do the two series share a long-run
 equilibrium?
 
-V2 fits vector autoregressions on the first differences of both series together, with a constant
-(drift), for 0 to 10 lags on a common sample, and picks the lag order by AIC, BIC and HQIC. V3 runs
-the Johansen cointegration test (trace and maximum eigenvalue) on the levels, with a constant and
-the selected number of lagged differences. A cointegrating rank of 0 means a VAR on the
-differences; a rank of 1 means a VECM, which also pulls the series back towards their long-run
-relationship. BIC's lag order drives the decision (Johansen is about identification, which BIC
-targets); the other criteria's orders are checked too, so a rank that depends on the lag choice is
-visible.
+The lag-order step fits vector autoregressions on the first differences of both series together,
+with a constant (drift), for 0 to 10 lags on a common sample, and picks the lag order by AIC, BIC
+and HQIC. The Johansen step runs the cointegration test (trace and maximum eigenvalue) on the
+levels, with a constant and the selected number of lagged differences. A cointegrating rank of 0
+means a VAR on the differences; a rank of 1 means a VECM, which also pulls the series back towards
+their long-run relationship. BIC's lag order drives the decision (Johansen is about identification,
+which BIC targets); the other criteria's orders are checked too, so a rank that depends on the lag
+choice is visible.
 
 Input: ``data/interim/fed_balance_sheet_cleaned.csv`` and
 ``data/processed/fed_balance_sheet_first_difference.csv``, training split only.
@@ -58,7 +58,7 @@ from autoregressive_experiments.runlog import begin_phase, finish_run, start_run
 app = typer.Typer()
 
 # Settings; each value's reasoning is in configs/hyperparameters.json.
-# Lag orders tried in V2: 0..MAX_VAR_LAGS months.
+# Lag orders tried: 0..MAX_VAR_LAGS months.
 MAX_VAR_LAGS = HYPERPARAMETERS.var_diagnostics.max_lags
 CRITERIA = HYPERPARAMETERS.var_diagnostics.criteria
 # The criterion whose lag choice drives the Johansen decision.
@@ -77,7 +77,7 @@ CRITERION_COLORS = dict(zip(("aic", "bic", "hqic"), SERIES_PALETTE))
 
 def select_var_lags(differences: np.ndarray) -> tuple[dict[str, int], pd.DataFrame]:
     """
-    Choose the VAR lag order by AIC, BIC and HQIC (step V2).
+    Choose the VAR lag order by AIC, BIC and HQIC.
 
     Lag order chosen by each criterion, and every criterion's value for 0..MAX_VAR_LAGS lags,
     all fitted on the same sample so the values are comparable.
@@ -167,7 +167,7 @@ def johansen_rank(statistics: np.ndarray, critical_values: np.ndarray) -> int:
 
 def johansen_test(levels: np.ndarray, lagged_differences: int) -> dict[str, Any]:
     """
-    Run the Johansen cointegration test on the levels (step V3).
+    Run the Johansen cointegration test on the levels.
 
     Parameters
     ----------
@@ -177,7 +177,7 @@ def johansen_test(levels: np.ndarray, lagged_differences: int) -> dict[str, Any]
     lagged_differences : int
         Number of lagged differences in the test's error-correction model (k_ar_diff). A VAR
         on the differences with p lags matches a VECM with p lagged differences, so this is a
-        lag order chosen in V2.
+        lag order chosen by the information criteria.
 
     Returns
     -------
@@ -241,14 +241,15 @@ def decision(rank: int) -> str:
     str
         The decision, as a phrase for the report: rank 0, a VAR on the first differences;
         rank 1, a VECM; rank 2 (full), a warning, since full rank means the levels are
-        stationary, which contradicts the I(1) finding of step U1.
+        stationary, which contradicts the I(1) finding of the stationarity tests.
     """
     if rank == 0:
         return "no cointegration: model the first differences with a VAR"
     if rank == 1:
         return "one cointegrating relation: model the levels with a VECM (rank 1)"
     return (
-        "full rank: both series look stationary in levels, which contradicts U1; check the setup"
+        "full rank: both series look stationary in levels, which contradicts the stationarity "
+        "tests; check the setup"
     )
 
 
@@ -259,7 +260,7 @@ def var_report(
     periods: dict[str, str],
 ) -> str:
     """
-    Write the V2 / V3 text report.
+    Write the diagnostics text report.
 
     Parameters
     ----------
@@ -296,28 +297,28 @@ def var_report(
     reported as a check.
     """
     lines = [
-        "VAR / VECM diagnostics, steps V2 (lag order) and V3 (Johansen cointegration)",
+        "VAR / VECM diagnostics: lag order and Johansen cointegration",
         (
             f"Training split only: levels {periods['levels']}, first differences "
             f"{periods['differences']}. Series: {', '.join(VALUE_COLUMNS)}."
         ),
         (
-            f"V2: VARs on the first differences with a constant, 0 to {MAX_VAR_LAGS} lags, all on "
+            f"VARs on the first differences with a constant, 0 to {MAX_VAR_LAGS} lags, all on "
             "the same sample; lower is better."
         ),
         (
-            f"V3: Johansen on the levels with a constant (det_order={JOHANSEN_DETERMINISTIC}) and "
+            f"Johansen on the levels with a constant (det_order={JOHANSEN_DETERMINISTIC}) and "
             "the selected number of lagged differences (a VAR on the differences with p lags is a "
             "VECM with p lagged differences). Null of each row: rank <= r. Critical values at "
             f"{SIGNIFICANCE_LEVEL:.0%}; the rank is the first r that isn't rejected."
         ),
         (
             "Caveat: Johansen assumes errors with a constant variance. The residuals have a "
-            "variance break at 2008-09 and GARCH effects (steps U5, U5b), which can distort the "
-            "test's size, so read borderline results with care."
+            "variance break at 2008-09 and GARCH effects (volatility checks and GARCH), which can "
+            "distort the test's size, so read borderline results with care."
         ),
         "",
-        "V2: information criteria by number of lags",
+        "Information criteria by number of lags",
         f"  {'lags':>4}" + "".join(f"{criterion.upper():>10}" for criterion in CRITERIA),
     ]
     for lags, row in criteria.iterrows():
@@ -333,7 +334,7 @@ def var_report(
         + ", ".join(f"{criterion.upper()} {selected[criterion]}" for criterion in CRITERIA)
     )
     lines.append("")
-    lines.append("V3: Johansen cointegration test on the levels")
+    lines.append("Johansen cointegration test on the levels")
     for lags, test in tests.items():
         # Several criteria can pick the same order, so list every one that chose it.
         chosen_by = [c.upper() for c in CRITERIA if selected[c] == lags]
@@ -372,7 +373,7 @@ def var_figure(
     selected: dict[str, int], criteria: pd.DataFrame, test: dict[str, Any], levels: pd.DataFrame
 ) -> Figure:
     """
-    Draw the V2 / V3 figure in three panels.
+    Draw the diagnostics figure in three panels.
 
     Information criteria by lag, Johansen statistics against critical values, and the most
     stationary combination of the two series over time.
@@ -435,7 +436,7 @@ def var_figure(
     lag_axis.set_xlabel("Lags in the VAR on the differences")
     lag_axis.set_ylabel("Distance from the criterion's best value")
     lag_axis.set_title(
-        "V2: lag order\neach criterion's best lag sits at 0 (circled)", loc="left", fontsize=10
+        "Lag order\neach criterion's best lag sits at 0 (circled)", loc="left", fontsize=10
     )
     lag_axis.legend(loc="upper center", fontsize=9, frameon=False)
 
@@ -466,7 +467,7 @@ def var_figure(
     test_axis.set_xlim(0, max(max(r[1], r[2]) for r in rows) * 1.6)
     test_axis.set_xlabel("Statistic (bar) and 5% critical value (black tick)")
     test_axis.set_title(
-        f"V3: Johansen, {plural(test['lagged_differences'], 'lagged difference')} (BIC)\n"
+        f"Johansen, {plural(test['lagged_differences'], 'lagged difference')} (BIC)\n"
         "bar past the tick: reject that null",
         loc="left",
         fontsize=10,
@@ -499,7 +500,8 @@ def main(
     differences_path: Path = PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv",
 ) -> None:
     """
-    Run steps V2 and V3 on the training split and write the report and figure.
+    Run the lag-order selection and the Johansen test on the training split and write the report
+    and figure.
 
     Parameters
     ----------
@@ -523,12 +525,12 @@ def main(
     Processing:
     1. Load both files and keep only the training split. The boundaries come from the levels,
        so levels and differences are cut at the same months.
-    2. V2: choose the VAR lag order on the differences by each criterion.
-    3. V3: run Johansen on the levels once per distinct selected lag order.
+    2. Choose the VAR lag order on the differences by each criterion.
+    3. Run Johansen on the levels once per distinct selected lag order.
     4. Write and print the report; draw the figure for BIC's lag order.
     """
     start_run_log("var")
-    begin_phase("VAR lag order and Johansen (V2-V3)")
+    begin_phase("VAR lag order and Johansen")
     for path in (levels_path, differences_path):
         if not path.is_file():
             raise FileNotFoundError(f"{path} not found. Generate it with make features.")

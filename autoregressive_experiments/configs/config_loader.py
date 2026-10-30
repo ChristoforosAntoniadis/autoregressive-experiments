@@ -270,7 +270,7 @@ def cross_checks(hyperparameters: Hyperparameters) -> list[str]:
     -----
     - Train and validation must leave months for test.
     - The primary VAR criterion must be one of the reported criteria.
-    - The carried-forward VAR order must be one of the candidates checked in V4-V6.
+    - The carried-forward VAR order must be one of the candidates checked by var_models.
     - The impulse-response band's z must match the significance level (within
       BAND_Z_TOLERANCE), so the bands are the level every test uses.
     """

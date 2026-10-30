@@ -1,14 +1,14 @@
 """
-VAR / VECM interpretation, steps V7 and V8: does one series help predict the other, and how does
+VAR / VECM interpretation: does one series help predict the other, and how does
 a shock to one feed through to both?
 
-Runs on the two systems carried forward from step V6, VAR(5) on the first differences and VECM(5)
-on the levels, fitted on the training split.
+Runs on the two systems carried forward by the residual checks, VAR(5) on the first differences and
+VECM(5) on the levels, fitted on the training split.
 
-- V7: Granger causality in both directions. VAR: Wald test that all lags of the causing series
+- Granger causality in both directions. VAR: Wald test that all lags of the causing series
   are zero in the caused series' equation. VECM: statsmodels' F-test, which also covers the
   long-run error-correction term.
-- V8: orthogonalized impulse responses over 24 months, as responses of the **levels** (the VAR's
+- Orthogonalized impulse responses over 24 months, as responses of the **levels** (the VAR's
   cumulative responses, the VECM's direct ones), with 95% asymptotic bands for the VAR, and the
   forecast-error variance decomposition of the levels. Orthogonalizing needs an ordering: total
   assets first (the Fed sets its balance sheet and the monetary base largely follows), and the
@@ -61,7 +61,7 @@ from autoregressive_experiments.var_models import VECM_RANK
 app = typer.Typer()
 
 # Settings; each value's reasoning is in configs/hyperparameters.json.
-# The lag order carried forward from step V6.
+# The lag order carried forward by the residual checks.
 CARRIED_LAGS = HYPERPARAMETERS.var_analysis.carried_lags
 # Months the impulse responses and variance shares run after the shock, and those reported.
 HORIZON = HYPERPARAMETERS.var_analysis.horizon
@@ -99,7 +99,7 @@ def fit_systems(
     levels: pd.DataFrame, differences: pd.DataFrame
 ) -> dict[str, VARResultsWrapper | VECMResults]:
     """
-    Fit the two systems carried forward from step V6.
+    Fit the two systems carried forward by the residual checks.
 
     VAR(5) on the differences and VECM(5) on the levels, in the frames' column order.
 
@@ -121,9 +121,9 @@ def fit_systems(
 
     Notes
     -----
-    Same specifications as var_models' candidates, so V7 and V8 interpret exactly the models
-    V6 carried forward. The column order matters only for orthogonalized impulse responses
-    (the Cholesky factor follows it), which is why main refits with the columns reversed.
+    Same specifications as var_models' candidates, so the analysis interprets exactly the models
+    the residual checks carried forward. The column order matters only for orthogonalized impulse
+    responses (the Cholesky factor follows it), which is why main refits with the columns reversed.
     """
     return {
         f"VAR({CARRIED_LAGS})": VAR(differences).fit(CARRIED_LAGS, trend="c"),
@@ -137,7 +137,7 @@ def granger_tests(
     systems: dict[str, VARResultsWrapper | VECMResults], columns: list[str]
 ) -> pd.DataFrame:
     """
-    Run Granger-causality tests in both directions for each system (step V7).
+    Run Granger-causality tests in both directions for each system.
 
     Each system, each direction: does the causing series help predict the caused one?
 
@@ -194,7 +194,7 @@ def level_responses(
     name: str, fitted: VARResultsWrapper | VECMResults
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """
-    Compute one system's orthogonalized impulse responses of the levels (step V8).
+    Compute one system's orthogonalized impulse responses of the levels.
 
     Orthogonalized responses of the levels, [month, response, shock], and their standard
     errors (VAR only: statsmodels' VECM errors ignore the estimated long-run relation).
@@ -237,7 +237,7 @@ def level_responses(
 
 def variance_decomposition(responses: np.ndarray) -> np.ndarray:
     """
-    Compute the forecast-error variance decomposition from orthogonalized responses (V8).
+    Compute the forecast-error variance decomposition from orthogonalized responses.
 
     Share of each variable's h-step forecast-error variance that comes from each orthogonal
     shock: shares[h - 1, variable, shock] for h = 1..len(responses).
@@ -288,7 +288,7 @@ def analysis_report(
     columns: list[str],
 ) -> str:
     """
-    Write the V7 / V8 text report.
+    Write the interpretation text report.
 
     Parameters
     ----------
@@ -315,9 +315,9 @@ def analysis_report(
         shocks for every (system, ordering).
     """
     lines = [
-        "VAR / VECM interpretation, steps V7 (Granger causality) and V8 (impulse responses, FEVD)",
+        "VAR / VECM interpretation: Granger causality, impulse responses and FEVD",
         (
-            f"Training split only: {period}. Systems carried forward from V6: "
+            f"Training split only: {period}. Systems carried forward by the residual checks: "
             f"VAR({CARRIED_LAGS}) on the differences, VECM({CARRIED_LAGS}) on the levels."
         ),
         (
@@ -335,7 +335,7 @@ def analysis_report(
             "the other series' shocks. Ordering: total assets first (main), and reversed."
         ),
         "",
-        "V7: Granger causality",
+        "Granger causality",
     ]
     for row in granger.itertuples():
         verdict = "helps predict" if row.p_value < SIGNIFICANCE_LEVEL else "no significant help"
@@ -344,7 +344,7 @@ def analysis_report(
             f"statistic {row.statistic:8.3f}, p={row.p_value:.4f}: {verdict}"
         )
     lines.append("")
-    lines.append("V8: impulse responses of the levels (trillions), total assets ordered first")
+    lines.append("Impulse responses of the levels (trillions), total assets ordered first")
     for name, (values, errors) in responses.items():
         lines.append(f"  {name}")
         for shock_index, shock in enumerate(columns):
@@ -366,7 +366,7 @@ def analysis_report(
                 )
     lines.append("  * = the 95% band excludes zero (VAR only)")
     lines.append("")
-    lines.append("V8: share of each series' forecast-error variance from the other series' shocks")
+    lines.append("Share of each series' forecast-error variance from the other series' shocks")
     for (name, ordering), values in shares.items():
         cells = []
         for response_index, response in enumerate(columns):
@@ -394,7 +394,7 @@ def analysis_figure(
     columns: list[str],
 ) -> Figure:
     """
-    Draw the V7 / V8 figure: Granger tests, impulse responses and variance shares.
+    Draw the interpretation figure: Granger tests, impulse responses and variance shares.
 
     Parameters
     ----------
@@ -472,7 +472,7 @@ def analysis_figure(
     granger_axis.set_xlabel(
         "Granger p-value (left of the line: one series helps predict the other)"
     )
-    granger_axis.set_title("V7: Granger causality, both directions", loc="left", fontsize=10)
+    granger_axis.set_title("Granger causality, both directions", loc="left", fontsize=10)
 
     # fit_systems puts the VAR first, so the first entry is the one with standard errors.
     var_name, vecm_name = list(responses)
@@ -506,7 +506,7 @@ def analysis_figure(
             axis.set_xlabel("Months after the shock")
             axis.set_ylabel("Response of the level (trillions)")
             axis.set_title(
-                f"V8: {SHORT_NAMES[shock]} shock -> {SHORT_NAMES[response]}\n"
+                f"{SHORT_NAMES[shock]} shock -> {SHORT_NAMES[response]}\n"
                 "band clear of zero: a real response",
                 loc="left",
                 fontsize=10,
@@ -538,7 +538,7 @@ def analysis_figure(
         axis.set_xlabel("Forecast horizon (months)")
         axis.set_ylabel("% of forecast-error variance")
         axis.set_title(
-            f"V8: share of {possessive(SHORT_NAMES[response])} forecast uncertainty\n"
+            f"Share of {possessive(SHORT_NAMES[response])} forecast uncertainty\n"
             f"that comes from {SHORT_NAMES[columns[other]]} shocks",
             loc="left",
             fontsize=10,
@@ -555,7 +555,8 @@ def main(
     differences_path: Path = PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv",
 ) -> None:
     """
-    Run steps V7 and V8 on the training split and write the report and figure.
+    Run the Granger tests, impulse responses and FEVD on the training split and write the report
+    and figure.
 
     Parameters
     ----------
@@ -579,8 +580,8 @@ def main(
     Processing:
     1. Load both files, keep only the training split, and index them by month-end date.
     2. Fit VAR(5) and VECM(5) with total assets first.
-    3. V7: Granger tests in both directions.
-    4. V8: level impulse responses and their variance shares.
+    3. Granger tests in both directions.
+    4. Level impulse responses and their variance shares.
     5. Refit both systems with the columns reversed, compute their variance shares, and swap
        them back onto the main ordering's axes.
     6. Write and print the report; draw the figure.
@@ -589,7 +590,7 @@ def main(
     comes first, so a conclusion that holds under both orderings doesn't rest on that choice.
     """
     start_run_log("var-analysis")
-    begin_phase("Granger causality, impulse responses and FEVD (V7-V8)")
+    begin_phase("Granger causality, impulse responses and FEVD")
     for path in (levels_path, differences_path):
         if not path.is_file():
             raise FileNotFoundError(f"{path} not found. Generate it with make features.")

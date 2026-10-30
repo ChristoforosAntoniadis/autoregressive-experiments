@@ -1,10 +1,10 @@
-VAR / VECM diagnostics, steps V2 (lag order) and V3 (Johansen cointegration)
+VAR / VECM diagnostics: lag order and Johansen cointegration
 Training split only: levels 2002-12 to 2016-10 (167 months), first differences 2003-01 to 2016-10 (166 months). Series: fed_total_assets_T, monetary_base_T.
-V2: VARs on the first differences with a constant, 0 to 10 lags, all on the same sample; lower is better.
-V3: Johansen on the levels with a constant (det_order=0) and the selected number of lagged differences (a VAR on the differences with p lags is a VECM with p lagged differences). Null of each row: rank <= r. Critical values at 5%; the rank is the first r that isn't rejected.
-Caveat: Johansen assumes errors with a constant variance. The residuals have a variance break at 2008-09 and GARCH effects (steps U5, U5b), which can distort the test's size, so read borderline results with care.
+VARs on the first differences with a constant, 0 to 10 lags, all on the same sample; lower is better.
+Johansen on the levels with a constant (det_order=0) and the selected number of lagged differences (a VAR on the differences with p lags is a VECM with p lagged differences). Null of each row: rank <= r. Critical values at 5%; the rank is the first r that isn't rejected.
+Caveat: Johansen assumes errors with a constant variance. The residuals have a variance break at 2008-09 and GARCH effects (volatility checks and GARCH), which can distort the test's size, so read borderline results with care.
 
-V2: information criteria by number of lags
+Information criteria by number of lags
   lags       AIC       BIC      HQIC
      0  -10.7353  -10.6962  -10.7194 
      1  -11.2319  -11.1146* -11.1843 
@@ -19,7 +19,7 @@ V2: information criteria by number of lags
     10  -11.1786  -10.3575  -10.8451 
   * = selected: AIC 3, BIC 1, HQIC 3
 
-V3: Johansen cointegration test on the levels
+Johansen cointegration test on the levels
   1 lagged difference, chosen by BIC (drives the decision)
     trace           rank <= 0: statistic    9.491, critical  15.494 -> don't reject
     trace           rank <= 1: statistic    0.243, critical   3.841 -> don't reject

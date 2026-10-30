@@ -64,7 +64,7 @@ def main(
 
     The correlation is between the levels, which both trend upwards, so a value near 1
     mostly reflects the shared trend; it isn't evidence of a causal or cointegrating link
-    (the Johansen test, step V3, finds none on train).
+    (the Johansen test finds none on train).
     """
     start_run_log("plots")
     begin_phase("Plot the cleaned series")

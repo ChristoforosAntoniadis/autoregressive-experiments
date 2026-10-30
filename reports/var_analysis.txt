@@ -1,16 +1,16 @@
-VAR / VECM interpretation, steps V7 (Granger causality) and V8 (impulse responses, FEVD)
-Training split only: 2002-12 to 2016-10. Systems carried forward from V6: VAR(5) on the differences, VECM(5) on the levels.
+VAR / VECM interpretation: Granger causality, impulse responses and FEVD
+Training split only: 2002-12 to 2016-10. Systems carried forward by the residual checks: VAR(5) on the differences, VECM(5) on the levels.
 Granger: VAR, Wald chi-squared test; VECM, F-test including the error-correction term. Null: the causing series doesn't help predict the caused one. Significance level 5%.
 Impulse responses: orthogonalized, one-standard-deviation shocks, responses of the levels in trillions (the VAR's cumulative responses). 95% asymptotic bands for the VAR only.
 Variance shares: of each series' level forecast-error variance, from its own and the other series' shocks. Ordering: total assets first (main), and reversed.
 
-V7: Granger causality
+Granger causality
   VAR(5)      total assets -> monetary base  statistic   83.762, p=0.0000: helps predict
   VAR(5)     monetary base -> total assets   statistic    2.717, p=0.7435: no significant help
   VECM(5)     total assets -> monetary base  statistic   14.921, p=0.0000: helps predict
   VECM(5)    monetary base -> total assets   statistic    0.735, p=0.6217: no significant help
 
-V8: impulse responses of the levels (trillions), total assets ordered first
+Impulse responses of the levels (trillions), total assets ordered first
   VAR(5)
       total assets shock -> total assets   1m +0.0970*  6m +0.1197*  12m +0.1318*  24m +0.1342*
       total assets shock -> monetary base  1m +0.0474*  6m +0.0939*  12m +0.1082*  24m +0.1117*
@@ -23,7 +23,7 @@ V8: impulse responses of the levels (trillions), total assets ordered first
      monetary base shock -> monetary base  1m +0.0483  6m +0.0477  12m +0.0565  24m +0.0709
   * = the 95% band excludes zero (VAR only)
 
-V8: share of each series' forecast-error variance from the other series' shocks
+Share of each series' forecast-error variance from the other series' shocks
   VAR(5), total assets first
     total assets   from monetary base: 1m 0%, 6m 1%, 12m 1%, 24m 1%
     monetary base  from total assets: 1m 11%, 6m 68%, 12m 76%, 24m 80%

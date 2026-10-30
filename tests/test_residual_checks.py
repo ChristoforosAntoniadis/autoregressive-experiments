@@ -1,5 +1,5 @@
 """
-Tests for the residual checks (step U4) in autoregressive_experiments.residual_checks.
+Tests for the residual checks in autoregressive_experiments.residual_checks.
 """
 
 import numpy as np
@@ -9,12 +9,13 @@ from autoregressive_experiments.residual_checks import passes, recommended_order
 
 
 def candidate_table() -> pd.DataFrame:
-    """A small hand-made U3 grid result: two series, with AIC / AICc / BIC per candidate.
+    """A small hand-made information-criteria grid result: two series, with AIC / AICc / BIC per
+    candidate.
 
     Returns
     -------
     pandas.DataFrame
-        One row per SARIMA candidate, with the columns of the U3 information-criteria table:
+        One row per SARIMA candidate, with the columns of the information-criteria table:
         series, p, d, q, P, Q, converged, AIC, AICc and BIC.
 
     Notes

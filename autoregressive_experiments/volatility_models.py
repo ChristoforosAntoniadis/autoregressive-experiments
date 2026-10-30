@@ -1,5 +1,5 @@
 """
-Volatility models (step U5b): does GARCH(1,1) earn its place on top of each SARIMA model?
+Volatility models: does GARCH(1,1) earn its place on top of each SARIMA model?
 
 Two-step estimation: the SARIMA mean models stay as fitted, and four variance models are fitted
 to their residuals with the ``arch`` package: a constant variance, GARCH(1,1) with normal errors,
@@ -88,8 +88,8 @@ GARCH_T_BREAK = GARCH_T + BREAK_SUFFIX
 # The regime scaling adds two parameters: the ratio of the two regimes' scales (the overall
 # scale is GARCH's omega) and the break date.
 BREAK_PARAMETERS = 2
-# Asymmetric GARCH (step U5c): volatility may react more to falls than to rises. Separate new
-# models; U5b's choice above is final and doesn't consider them.
+# Asymmetric GARCH: volatility may react more to falls than to rises. Separate new
+# models; the GARCH choice above doesn't consider them.
 EGARCH_T = "EGARCH(1,1), Student-t"
 GJR_T = "GJR-GARCH(1,1), Student-t"
 # o = 1 adds one asymmetric (leverage) term; arch's GJR is its GARCH volatility with o > 0.
@@ -267,7 +267,7 @@ def fit_candidate(residuals: np.ndarray | pd.Series, name: str) -> dict[str, Any
     2. Convert the log-likelihood and the conditional volatility back from arch's scale c.
 
     Processing, break-adjusted model:
-    1. Find U5's variance break and each month's regime scale s (volatility_checks).
+    1. Find the variance break and each month's regime scale s (volatility_checks).
     2. Fit arch on u = e / s.
     3. Log-likelihood of e: by the change of variables u = e / s, log f(e) = log f(u) -
        log s, so subtract the sum of log s over the months (the Jacobian term). This puts
@@ -303,7 +303,7 @@ def fit_candidate(residuals: np.ndarray | pd.Series, name: str) -> dict[str, Any
 
 def variance_candidates(residuals: np.ndarray | pd.Series) -> dict[str, dict[str, Any]]:
     """
-    All four U5b variance models, fitted on the same residuals.
+    All four GARCH-step variance models, fitted on the same residuals.
 
     With log-likelihoods of the same residuals in trillions, their parameter counts, and
     each model's monthly standard deviation in trillions.
@@ -317,7 +317,7 @@ def variance_candidates(residuals: np.ndarray | pd.Series) -> dict[str, dict[str
     -------
     dict of str to dict of str to Any
         Maps CONSTANT, GARCH_NORMAL, GARCH_T and GARCH_T_BREAK to their fit_candidate()
-        results. The asymmetric models (U5c) are not included.
+        results. The asymmetric models (asymmetric_garch) are not included.
     """
     return {name: fit_candidate(residuals, name) for name in [*VARIANCE_MODELS, GARCH_T_BREAK]}
 
@@ -346,7 +346,7 @@ def garch_variance_path(
 
     Notes
     -----
-    A named front end to variance_forecast(), for the variants of steps U5b and U5c.
+    A named front end to variance_forecast(), for the GARCH and asymmetric GARCH variants.
     """
     variances, shape = variance_forecast(
         residuals, variance_spec(variant), variant.endswith(BREAK_SUFFIX), steps
@@ -370,7 +370,7 @@ def variance_forecast(
     spec : dict of str to Any
         Keyword arguments for arch_model(): "vol", "p", "o", "q" and "dist".
     break_adjusted : bool
-        Whether to fit on the residuals with step U5's variance break removed.
+        Whether to fit on the residuals with the variance break (volatility_checks) removed.
     steps : int
         The forecast horizon in months.
 
@@ -628,15 +628,15 @@ def garch_check(
     residuals : np.ndarray or pd.Series
         One SARIMA model's residuals, shape (n,), in trillions.
     replications : int, default=BOOTSTRAP_REPLICATIONS
-        Bootstrap replications for the checks; 0 skips the checks and the verdict, for
-        callers that only need the BIC choice (the forecast evaluation, U5c's reference).
+        Bootstrap replications for the checks; 0 skips the checks and the verdict, for callers that
+        only need the BIC choice (the forecast evaluation, the asymmetric GARCH reference).
     label : str, default=""
         Names the model in the progress lines, e.g. "monetary_base_T SARIMA(0,1,1)".
 
     Returns
     -------
     dict of str to Any
-        - "information_criteria": dict of model name to (AIC, BIC), all four U5b models
+        - "information_criteria": dict of model name to (AIC, BIC), all four GARCH-step models
         - "best": str, the model with the lowest BIC
         - "garch_name": str, the GARCH variant examined: "best" itself, or the best GARCH
           by BIC when the constant variance wins
@@ -728,7 +728,7 @@ def garch_report(results: list[dict[str, Any]], train: pd.DataFrame) -> str:
     """
     dates = train[DATE_COLUMN]
     lines = [
-        "GARCH(1,1) on the residuals of the models that passed the residual checks (step U5b)",
+        "GARCH(1,1) on the residuals of the models that passed the residual checks",
         (
             f"Training split only: {dates.min():%Y-%m} to {dates.max():%Y-%m}, "
             f"{len(train)} first differences."
@@ -911,12 +911,13 @@ def main(
     -------
     None
         Writes REPORT_PATH and FIGURE_PATH, and prints the report. Only the models that
-        passed the residual checks (U4) are examined.
+        passed the residual checks are examined.
     """
     start_run_log("garch")
-    begin_phase("GARCH fits and bootstrap checks (U5b)")
+    begin_phase("GARCH fits and bootstrap checks")
     checked, train = checked_models(levels_path, differences_path, candidates_path)
-    # Each result keeps its U4 fields (series, orders, residuals) and gains the U5b ones.
+    # Each result keeps its residual-check fields (series, orders, residuals) and gains the GARCH
+    # ones.
     results = [
         {
             **result,

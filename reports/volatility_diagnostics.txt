@@ -1,4 +1,4 @@
-Volatility checks of the models that passed the residual checks (step U5)
+Volatility checks of the models that passed the residual checks
 Training split only: 2003-01 to 2016-10, 166 first differences.
 Engle's ARCH-LM null hypothesis: no ARCH effects (constant conditional variance). Significance level: 5%; lags 1, 6, 12.
 Variance break: the split that best fits one variance before and another after, with at least 15% of the months on each side. A searched break has a non-standard test distribution, so the decisive evidence is ARCH-LM after removing it.

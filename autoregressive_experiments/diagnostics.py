@@ -655,7 +655,8 @@ def main(
     differences_path: Path = PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv",
 ) -> None:
     """
-    Run steps U1-U3 on the training split and write their reports (make diagnostics).
+    Run the stationarity tests, ACF / PACF and SARIMA grid on the training split and write their
+    reports (make diagnostics).
 
     Parameters
     ----------
@@ -680,16 +681,16 @@ def main(
     Processing:
     1. Read the levels, take the split boundaries from them, and keep the training part of
        both the levels and the differences.
-    2. U1: ADF / KPSS on the levels (constant and trend) and on the differences (constant).
-    3. U2: ACF / PACF of the differences; save the figure and the report.
-    4. U3: fit the SARIMA grid on the differences; save the candidate table and the summary.
+    2. ADF / KPSS on the levels (constant and trend) and on the differences (constant).
+    3. ACF / PACF of the differences; save the figure and the report.
+    4. Fit the SARIMA grid on the differences; save the candidate table and the summary.
 
     Only train is used, so nothing in the order selection has seen a validation or test
     month. The boundaries come from the levels for both inputs, so the differences are cut
     at the same months (train has 167 levels and 166 differences).
     """
     start_run_log("diagnostics")
-    begin_phase("Stationarity, ACF / PACF and the SARIMA grid (U1-U3)")
+    begin_phase("Stationarity, ACF / PACF and the SARIMA grid")
     for path in (levels_path, differences_path):
         if not path.is_file():
             raise FileNotFoundError(f"{path} not found. Generate it with make features.")

@@ -1,21 +1,21 @@
 """
-VAR / VECM estimation and checks, steps V4 to V6: fit the candidate systems, check they're
+VAR / VECM estimation and checks: fit the candidate systems, check they're
 stable, and check their residuals carry no autocorrelation left.
 
-Candidates: VARs on the first differences, with a constant, and a rank-1
-VECM on the levels with a constant, even though Johansen found no cointegration (step V3), so
-forecast accuracy can decide later whether a long-run link helps. Lag orders 1 (BIC) and 3 (AIC,
-HQIC) come from step V2; both leave autocorrelated residuals, so the order was raised (the usual
-remedy) to 5, the smallest that passes. Only candidates that are stable and pass the residual
-checks are carried forward to the evaluation: VAR(5) and VECM(5).
+Candidates: VARs on the first differences, with a constant, and a rank-1 VECM on the levels with a
+constant, even though Johansen found no cointegration, so forecast accuracy can decide later
+whether a long-run link helps. Lag orders 1 (BIC) and 3 (AIC, HQIC) come from the lag-order
+selection; both leave autocorrelated residuals, so the order was raised (the usual remedy) to 5,
+the smallest that passes. Only candidates that are stable and pass the residual checks are carried
+forward to the evaluation: VAR(5) and VECM(5).
 
-- V4: estimate each candidate on the training split (OLS per equation for the VARs, Johansen's
+- Estimate each candidate on the training split (OLS per equation for the VARs, Johansen's
   maximum likelihood for the VECMs).
-- V5: stability. A VAR on the differences is stable when every inverse root of its characteristic
+- Stability. A VAR on the differences is stable when every inverse root of its characteristic
   polynomial lies inside the unit circle (moduli below 1). A rank-1 VECM on two I(1) series has,
   by construction, exactly one unit root (one shared stochastic trend); it's stable when that is
   the only root on the circle and every other one lies inside.
-- V6: multivariate Portmanteau test (adjusted) on the system residuals at lags 6, 12 and 24;
+- Multivariate Portmanteau test (adjusted) on the system residuals at lags 6, 12 and 24;
   no autocorrelation left means the lag order captured the dynamics.
 
 Input: ``data/interim/fed_balance_sheet_cleaned.csv`` and
@@ -153,9 +153,10 @@ def is_stable(moduli: np.ndarray, unit_roots: int) -> bool:
 
 def fit_candidates(levels: pd.DataFrame, differences: pd.DataFrame) -> dict[str, dict[str, Any]]:
     """
-    Fit every VAR and VECM candidate (step V4).
+    Fit every VAR and VECM candidate.
 
-    Every candidate fitted on the given (training) data, with what V5 and V6 need.
+    Every candidate fitted on the given (training) data, with what the stability and residual
+    checks need.
 
     Parameters
     ----------
@@ -221,7 +222,7 @@ def fit_candidates(levels: pd.DataFrame, differences: pd.DataFrame) -> dict[str,
 
 def check_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     """
-    Run the V5 stability and V6 residual checks on one candidate and give its verdict.
+    Run the stability and residual checks on one candidate and give its verdict.
 
     Parameters
     ----------
@@ -236,7 +237,7 @@ def check_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
 
         - "portmanteau": dict of int to float, the adjusted Portmanteau p-value at every lag
           from model_lags + 1 to PLOT_LAGS.
-        - "stable": bool, the V5 result (is_stable).
+        - "stable": bool, the stability result (is_stable).
         - "white": bool, True when every TEST_LAGS lag that can be tested has a p-value at or
           above SIGNIFICANCE_LEVEL (no autocorrelation left); False if none can be tested.
         - "verdict": "CARRY FORWARD" if stable and white, otherwise "FAIL".
@@ -253,7 +254,7 @@ def check_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     lags in VAR form, so it only exists for h > p: lag 6 can't be tested for VECM(5), whose
     VAR form has 6 lags. The adjusted version (Hosking's small-sample correction) is used
     because the training sample is short. The test assumes a constant error variance, so the
-    GARCH effects found in U5 can make it reject too often.
+    GARCH effects found by the volatility checks can make it reject too often.
     """
     fitted = candidate["fitted"]
     portmanteau = {
@@ -276,7 +277,7 @@ def check_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
 
 def coefficient_lines(candidate: dict[str, Any]) -> list[str]:
     """
-    Describe one candidate's estimated coefficients (V4), for the report.
+    Describe one candidate's estimated coefficients, for the report.
 
     Parameters
     ----------
@@ -325,7 +326,7 @@ def coefficient_lines(candidate: dict[str, Any]) -> list[str]:
 
 def models_report(results: dict[str, dict[str, Any]], period: str) -> str:
     """
-    Write the V4 to V6 text report.
+    Write the estimation and checks text report.
 
     Parameters
     ----------
@@ -343,7 +344,7 @@ def models_report(results: dict[str, dict[str, Any]], period: str) -> str:
         residual result, and finally the candidates carried forward.
     """
     lines = [
-        "VAR / VECM estimation and checks, steps V4 (estimate), V5 (stability), V6 (residuals)",
+        "VAR / VECM estimation and checks: estimates, stability, residuals",
         f"Training split only: {period}. Series: {', '.join(VALUE_COLUMNS)}.",
         (
             "VAR(p): first differences, constant, p lags, OLS per equation. VECM(p): levels, "
@@ -363,12 +364,11 @@ def models_report(results: dict[str, dict[str, Any]], period: str) -> str:
     ]
     for name, result in results.items():
         lines.append(f"{name}  [{result['verdict']}]")
-        lines.append("  V4 coefficients:")
+        lines.append("  coefficients:")
         lines.extend(coefficient_lines(result))
         moduli = ", ".join(f"{value:.4f}" for value in np.abs(result["roots"]))
         lines.append(
-            f"  V5 inverse-root moduli: {moduli} -> "
-            f"{'stable' if result['stable'] else 'NOT stable'}"
+            f"  inverse-root moduli: {moduli} -> {'stable' if result['stable'] else 'NOT stable'}"
         )
         portmanteau = ", ".join(
             f"lag {lag} p={result['portmanteau'][lag]:.4f}"
@@ -377,7 +377,7 @@ def models_report(results: dict[str, dict[str, Any]], period: str) -> str:
             for lag in TEST_LAGS
         )
         lines.append(
-            f"  V6 Portmanteau: {portmanteau} -> "
+            f"  Portmanteau: {portmanteau} -> "
             f"{'no autocorrelation left' if result['white'] else 'autocorrelation remains'}"
         )
         lines.append("")
@@ -389,7 +389,7 @@ def models_report(results: dict[str, dict[str, Any]], period: str) -> str:
 
 def models_figure(results: dict[str, dict[str, Any]]) -> Figure:
     """
-    Draw the V5 / V6 figure, one row per candidate.
+    Draw the checks figure, one row per candidate.
 
     Per candidate: its roots against the unit circle, and the Portmanteau p-value by lag.
 
@@ -499,7 +499,7 @@ def main(
     differences_path: Path = PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv",
 ) -> None:
     """
-    Run steps V4 to V6 on the training split and write the report and figure.
+    Run the VAR / VECM estimation and checks on the training split and write the report and figure.
 
     Parameters
     ----------
@@ -523,12 +523,12 @@ def main(
     Processing:
     1. Load both files and keep only the training split (boundaries from the levels).
     2. Index both by month-end date with an explicit monthly frequency.
-    3. V4: fit every candidate.
-    4. V5, V6: check each one and give its verdict.
+    3. Fit every candidate.
+    4. Check each one and give its verdict.
     5. Write and print the report; draw the figure.
     """
     start_run_log("var-checks")
-    begin_phase("VAR / VECM candidates and their checks (V4-V6)")
+    begin_phase("VAR / VECM candidates and their checks")
     for path in (levels_path, differences_path):
         if not path.is_file():
             raise FileNotFoundError(f"{path} not found. Generate it with make features.")

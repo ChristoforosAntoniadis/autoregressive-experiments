@@ -1,5 +1,5 @@
 """
-Volatility checks (step U5): is the variance of each model's errors constant, and if not, is it
+Volatility checks: is the variance of each model's errors constant, and if not, is it
 one shift in variance or ongoing volatility clustering?
 
 The two need different fixes. Clustering (large errors follow large errors throughout) calls for
@@ -302,7 +302,7 @@ def volatility_report(results: list[dict[str, Any]], train: pd.DataFrame) -> str
     """
     dates = train[DATE_COLUMN]
     lines = [
-        "Volatility checks of the models that passed the residual checks (step U5)",
+        "Volatility checks of the models that passed the residual checks",
         (
             f"Training split only: {dates.min():%Y-%m} to {dates.max():%Y-%m}, "
             f"{len(train)} first differences."
@@ -475,12 +475,13 @@ def main(
     -------
     None
         Writes REPORT_PATH and FIGURE_PATH, and prints the report. Only the models that
-        passed the residual checks (U4) are examined.
+        passed the residual checks are examined.
     """
     start_run_log("volatility")
-    begin_phase("ARCH-LM and the variance break (U5)")
+    begin_phase("ARCH-LM and the variance break")
     checked, train = checked_models(levels_path, differences_path, candidates_path)
-    # Each result keeps its U4 fields (series, orders, residuals) and gains the U5 ones.
+    # Each result keeps its residual-check fields (series, orders, residuals) and gains the
+    # volatility ones.
     results = [
         {**result, **volatility_check(result["residuals"])}
         for result in checked

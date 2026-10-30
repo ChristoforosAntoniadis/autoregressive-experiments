@@ -1,4 +1,4 @@
-Residual checks of the recommended SARIMA models (step U4)
+Residual checks of the recommended SARIMA models
 Training split only: 2003-01 to 2016-10, 166 first differences. Models are fitted exactly as in the information-criteria grid.
 Recommended = best by AIC, AICc and BIC, plus the AIC runner-up when it is within 2 AIC of the best.
 Both tests' null hypothesis: no autocorrelation up to the lag. Significance level: 5%.

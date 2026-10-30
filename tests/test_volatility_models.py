@@ -1,5 +1,5 @@
 """
-Tests for the GARCH(1,1) step (U5b) in autoregressive_experiments.volatility_models.
+Tests for the GARCH(1,1) step in autoregressive_experiments.volatility_models.
 """
 
 import numpy as np

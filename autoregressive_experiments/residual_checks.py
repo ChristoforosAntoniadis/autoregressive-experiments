@@ -1,5 +1,5 @@
 """
-Residual checks (step U4): do the recommended SARIMA models leave autocorrelation behind?
+Residual checks: do the recommended SARIMA models leave autocorrelation behind?
 
 Input: ``data/interim/fed_balance_sheet_cleaned.csv`` and
 ``data/processed/fed_balance_sheet_first_difference.csv`` (training split only), and
@@ -371,7 +371,7 @@ def residual_report(results: list[dict[str, Any]], train: pd.DataFrame) -> str:
     """
     dates = train[DATE_COLUMN]
     lines = [
-        "Residual checks of the recommended SARIMA models (step U4)",
+        "Residual checks of the recommended SARIMA models",
         (
             f"Training split only: {dates.min():%Y-%m} to {dates.max():%Y-%m}, "
             f"{len(train)} first differences. Models are fitted exactly as in the information-"
@@ -584,8 +584,8 @@ def checked_models(
     """
     Fit and check the recommended models on the training split; also returns that split.
 
-    Shared entry point of the U4, U5, U5b and U5c modules, so they all examine the same
-    models fitted on the same data.
+    Shared entry point of the residual, volatility, GARCH and asymmetric GARCH modules, so they all
+    examine the same models fitted on the same data.
 
     Parameters
     ----------
@@ -666,7 +666,7 @@ def main(
         Writes REPORT_PATH and FIGURE_PATH, and prints the report.
     """
     start_run_log("residuals")
-    begin_phase("Residual checks of the recommended SARIMAs (U4)")
+    begin_phase("Residual checks of the recommended SARIMAs")
     results, train = checked_models(levels_path, differences_path, candidates_path)
 
     report = residual_report(results, train)

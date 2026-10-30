@@ -1,5 +1,5 @@
 """
-Tests for the volatility checks (step U5) in autoregressive_experiments.volatility_checks.
+Tests for the volatility checks in autoregressive_experiments.volatility_checks.
 """
 
 import numpy as np

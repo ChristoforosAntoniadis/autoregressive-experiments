@@ -1,11 +1,11 @@
-Asymmetric GARCH on the residuals of the models that passed the residual checks (U5c)
-Training split only. New models next to U5b's GARCH choice, which stays unchanged.
-Per family, BIC picks plain or break-adjusted; delta BIC = family BIC - U5b's chosen variant's BIC (negative: the asymmetric model fits better). All in original units.
+Asymmetric GARCH on the residuals of the models that passed the residual checks
+Training split only. New models next to the GARCH choice, which stays unchanged.
+Per family, BIC picks plain or break-adjusted; delta BIC = family BIC - the chosen GARCH variant's BIC (negative: the asymmetric model fits better). All in original units.
 Asymmetry: GJR gamma > 0, or EGARCH gamma < 0, means falls raise volatility more than rises; p-value against gamma = 0 at 5%.
 Verdict: BETTER / NOT BETTER THAN GARCH by BIC, or FALLS SHORT when ARCH effects remain in the standardized residuals or the variance isn't stationary.
 p-values by parametric bootstrap: 999 series simulated from the fitted variance model and re-estimated the same way (break search included); p = (1 + simulated statistics >= observed) / (replications + 1). The chi-squared tables don't hold for residuals standardized by a fitted model (Li & Mak 1994).
 
-fed_total_assets_T  SARIMA(2,1,2)  (U5b GARCH: GARCH(1,1), Student-t, BIC -654.57)
+fed_total_assets_T  SARIMA(2,1,2)  (GARCH: GARCH(1,1), Student-t, BIC -654.57)
   EGARCH(1,1), Student-t                     BIC   -665.57  (delta  -11.01)  gamma +0.397 (p=0.001)  nu 4.9  persistence 0.781
     standardized residuals: lag 1 ARCH-LM p=0.980 / LB p=0.973, lag 6 ARCH-LM p=0.998 / LB p=0.989, lag 12 ARCH-LM p=0.999 / LB p=0.990; 43 of 999 bootstrap re-estimations didn't converge (kept)
     Verdict: BETTER THAN GARCH
@@ -13,7 +13,7 @@ fed_total_assets_T  SARIMA(2,1,2)  (U5b GARCH: GARCH(1,1), Student-t, BIC -654.5
     standardized residuals: lag 1 ARCH-LM p=0.414 / LB p=0.409, lag 6 ARCH-LM p=0.970 / LB p=0.969, lag 12 ARCH-LM p=0.992 / LB p=0.991; 0 of 999 bootstrap re-estimations didn't converge (kept)
     Verdict: BETTER THAN GARCH
 
-fed_total_assets_T  SARIMA(0,1,4)  (U5b GARCH: GARCH(1,1), Student-t, BIC -644.68)
+fed_total_assets_T  SARIMA(0,1,4)  (GARCH: GARCH(1,1), Student-t, BIC -644.68)
   EGARCH(1,1), Student-t                     BIC   -658.46  (delta  -13.78)  gamma +0.434 (p=0.000)  nu 4.8  persistence 0.760
     standardized residuals: lag 1 ARCH-LM p=0.988 / LB p=0.986, lag 6 ARCH-LM p=0.999 / LB p=0.997, lag 12 ARCH-LM p=0.999 / LB p=0.996; 49 of 999 bootstrap re-estimations didn't converge (kept)
     Verdict: BETTER THAN GARCH
@@ -21,7 +21,7 @@ fed_total_assets_T  SARIMA(0,1,4)  (U5b GARCH: GARCH(1,1), Student-t, BIC -644.6
     standardized residuals: lag 1 ARCH-LM p=0.415 / LB p=0.413, lag 6 ARCH-LM p=0.964 / LB p=0.956, lag 12 ARCH-LM p=0.985 / LB p=0.984; 0 of 999 bootstrap re-estimations didn't converge (kept)
     Verdict: BETTER THAN GARCH
 
-monetary_base_T  SARIMA(0,1,1)x(1,0,1,12)  (U5b GARCH: GARCH(1,1), Student-t, break-adjusted, BIC -632.98)
+monetary_base_T  SARIMA(0,1,1)x(1,0,1,12)  (GARCH: GARCH(1,1), Student-t, break-adjusted, BIC -632.98)
   EGARCH(1,1), Student-t, break-adjusted     BIC   -627.57  (delta   +5.42)  gamma -0.050 (p=0.400)  nu 34.8  persistence 0.845
     standardized residuals: lag 1 ARCH-LM p=0.092 / LB p=0.091, lag 6 ARCH-LM p=0.202 / LB p=0.167, lag 12 ARCH-LM p=0.240 / LB p=0.178; 53 of 999 bootstrap re-estimations didn't converge (kept)
     Verdict: NOT BETTER THAN GARCH
@@ -29,7 +29,7 @@ monetary_base_T  SARIMA(0,1,1)x(1,0,1,12)  (U5b GARCH: GARCH(1,1), Student-t, br
     standardized residuals: lag 1 ARCH-LM p=0.186 / LB p=0.186, lag 6 ARCH-LM p=0.253 / LB p=0.192, lag 12 ARCH-LM p=0.151 / LB p=0.113; 0 of 999 bootstrap re-estimations didn't converge (kept)
     Verdict: NOT BETTER THAN GARCH
 
-monetary_base_T  SARIMA(0,1,1)  (U5b GARCH: GARCH(1,1), Student-t, break-adjusted, BIC -638.20)
+monetary_base_T  SARIMA(0,1,1)  (GARCH: GARCH(1,1), Student-t, break-adjusted, BIC -638.20)
   EGARCH(1,1), Student-t, break-adjusted     BIC   -632.44  (delta   +5.76)  gamma -0.050 (p=0.599)  nu 133.8  persistence 0.650
     standardized residuals: lag 1 ARCH-LM p=0.045 / LB p=0.046, lag 6 ARCH-LM p=0.120 / LB p=0.099, lag 12 ARCH-LM p=0.027 / LB p=0.029; 23 of 999 bootstrap re-estimations didn't converge (kept)
     Verdict: FALLS SHORT
@@ -37,7 +37,7 @@ monetary_base_T  SARIMA(0,1,1)  (U5b GARCH: GARCH(1,1), Student-t, break-adjuste
     standardized residuals: lag 1 ARCH-LM p=0.141 / LB p=0.140, lag 6 ARCH-LM p=0.236 / LB p=0.182, lag 12 ARCH-LM p=0.015 / LB p=0.019; 0 of 999 bootstrap re-estimations didn't converge (kept)
     Verdict: FALLS SHORT
 
-monetary_base_T  SARIMA(1,1,1)x(1,0,1,12)  (U5b GARCH: GARCH(1,1), Student-t, break-adjusted, BIC -633.72)
+monetary_base_T  SARIMA(1,1,1)x(1,0,1,12)  (GARCH: GARCH(1,1), Student-t, break-adjusted, BIC -633.72)
   EGARCH(1,1), Student-t, break-adjusted     BIC   -628.33  (delta   +5.39)  gamma -0.051 (p=0.398)  nu 33.9  persistence 0.845
     standardized residuals: lag 1 ARCH-LM p=0.079 / LB p=0.077, lag 6 ARCH-LM p=0.200 / LB p=0.157, lag 12 ARCH-LM p=0.217 / LB p=0.152; 52 of 999 bootstrap re-estimations didn't converge (kept)
     Verdict: NOT BETTER THAN GARCH

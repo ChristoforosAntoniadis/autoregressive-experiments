@@ -70,7 +70,7 @@ garch: export MPLBACKEND = Agg
 garch:
 	$(PYTHON_INTERPRETER) -m $(PACKAGE).volatility_models
 
-## EGARCH and GJR-GARCH on the passing models' residuals vs U5b's GARCH (no plot windows)
+## EGARCH and GJR-GARCH on the passing models' residuals vs the GARCH model (no plot windows)
 .PHONY: asymmetric-garch
 asymmetric-garch: export MPLBACKEND = Agg
 asymmetric-garch:
@@ -132,10 +132,10 @@ format:
 	$(PYTHON_INTERPRETER) -m ruff check --fix
 	$(PYTHON_INTERPRETER) -m ruff format
 
-## Delete Python caches and compiled files
+## Delete Python, test, lint and type-check caches and build metadata
 .PHONY: clean
 clean:
-	$(PYTHON_INTERPRETER) -c "import pathlib, shutil; [shutil.rmtree(p) for p in pathlib.Path('.').rglob('__pycache__') if '.venv' not in p.parts]; [shutil.rmtree(p, ignore_errors=True) for p in ('.pytest_cache', '.ruff_cache')]"
+	$(PYTHON_INTERPRETER) -c "import pathlib, shutil; [shutil.rmtree(p) for p in pathlib.Path('.').rglob('__pycache__') if '.venv' not in p.parts]; [shutil.rmtree(p, ignore_errors=True) for p in ('.pytest_cache', '.ruff_cache', '.mypy_cache', 'autoregressive_experiments.egg-info')]"
 
 #################################################################################
 # Self Documenting Commands                                                     #

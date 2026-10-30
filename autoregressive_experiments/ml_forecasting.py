@@ -7,7 +7,7 @@ Each model is refitted at every forecast origin on that origin's data only, one 
 series, and forecasts several months ahead recursively: each month's predicted changes of both
 series become the inputs for the next month, as a VAR does (a nonlinear VAR, in effect). The
 forecast changes are added onto the last level, as for SARIMA. The models work on changes, not
-levels, because both series are I(1) (step U1) and because trees and neighbours can't predict
+levels, because both series are I(1) and because trees and neighbours can't predict
 outside the range they were trained on, which the test levels leave.
 
 Every setting, the lag count k included, is chosen by ``tuning`` on the validation split

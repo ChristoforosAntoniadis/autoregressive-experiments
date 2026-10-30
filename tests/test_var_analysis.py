@@ -1,5 +1,5 @@
 """
-Tests for Granger causality, impulse responses and the variance decomposition (V7, V8) in
+Tests for Granger causality, impulse responses and the variance decomposition in
 autoregressive_experiments.var_analysis.
 """
 

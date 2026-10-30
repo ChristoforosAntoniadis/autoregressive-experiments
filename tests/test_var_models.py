@@ -1,5 +1,5 @@
 """
-Tests for VAR / VECM estimation and checks (V4 to V6) in autoregressive_experiments.var_models.
+Tests for VAR / VECM estimation and checks in autoregressive_experiments.var_models.
 """
 
 import numpy as np

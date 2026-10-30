@@ -1,5 +1,5 @@
 """
-Tests for the asymmetric GARCH step (U5c) in autoregressive_experiments.asymmetric_garch, and
+Tests for the asymmetric GARCH step in autoregressive_experiments.asymmetric_garch, and
 for the EGARCH / GJR-GARCH variance paths it adds to volatility_models.
 """
 

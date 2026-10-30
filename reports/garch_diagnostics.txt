@@ -1,4 +1,4 @@
-GARCH(1,1) on the residuals of the models that passed the residual checks (step U5b)
+GARCH(1,1) on the residuals of the models that passed the residual checks
 Training split only: 2003-01 to 2016-10, 166 first differences.
 Two-step estimation: the SARIMA mean model as fitted, then each variance model on its residuals (zero mean). BIC picks the variance model; AIC is shown alongside.
 Break-adjusted: GARCH-t on the residuals divided by each regime's standard deviation, at the variance break from the volatility checks. Its likelihood is converted back to the residuals, and it counts 2 extra parameters (the regime scale ratio and the break date), so all four AIC / BIC values are comparable.

@@ -18,7 +18,7 @@
   "diagnostics": {
     "max_acf_lags": {
       "value": 36,
-      "reasoning": "Three years of monthly lags, so the seasonal lags 12, 24 and 36 all show in the ACF / PACF (step U2)."
+      "reasoning": "Three years of monthly lags, so the seasonal lags 12, 24 and 36 all show in the ACF / PACF."
     },
     "max_order_sum": {
       "value": 5,
@@ -26,7 +26,7 @@
     },
     "differencing_order": {
       "value": 1,
-      "reasoning": "ADF and KPSS agree on train (step U1): both series are I(1), and one difference makes them stationary. Applied by fitting on the first differences."
+      "reasoning": "ADF and KPSS agree on train: both series are I(1), and one difference makes them stationary. Applied by fitting on the first differences."
     },
     "seasonal_ar_orders": {
       "value": [0, 1],
@@ -60,7 +60,7 @@
   "residual_checks": {
     "test_lags": {
       "value": [6, 12, 24],
-      "reasoning": "Half a year, one year and two years: short-run, seasonal and longer autocorrelation left in the SARIMA residuals (step U4)."
+      "reasoning": "Half a year, one year and two years: short-run, seasonal and longer autocorrelation left in the SARIMA residuals."
     },
     "aic_tie_margin": {
       "value": 2.0,
@@ -74,7 +74,7 @@
   "volatility_checks": {
     "arch_test_lags": {
       "value": [1, 6, 12],
-      "reasoning": "Last month, half a year and one year: short-lived and persistent volatility clustering (step U5)."
+      "reasoning": "Last month, half a year and one year: short-lived and persistent volatility clustering."
     },
     "plot_lags": {
       "value": 12,
@@ -102,7 +102,7 @@
   "var_diagnostics": {
     "max_lags": {
       "value": 10,
-      "reasoning": "VAR lag orders 0..10 tried (step V2): at 10 lags each equation has 20 lag coefficients plus a constant, from 156 usable training months, about 7 observations per coefficient."
+      "reasoning": "VAR lag orders 0..10 tried: at 10 lags each equation has 20 lag coefficients plus a constant, from 156 usable training months, about 7 observations per coefficient."
     },
     "criteria": {
       "value": ["aic", "bic", "hqic"],
@@ -120,11 +120,11 @@
   "var_models": {
     "var_lags": {
       "value": [1, 3, 5],
-      "reasoning": "1 (BIC) and 3 (AIC, HQIC) from step V2, and 5: the smallest order whose residuals pass the Portmanteau test (step V6), added by the rule to raise the lag order when residuals are autocorrelated."
+      "reasoning": "1 (BIC) and 3 (AIC, HQIC) from the lag-order selection, and 5: the smallest order whose residuals pass the Portmanteau test, added by the rule to raise the lag order when residuals are autocorrelated."
     },
     "test_lags": {
       "value": [6, 12, 24],
-      "reasoning": "Half a year, one year and two years, as in the univariate residual checks (step U4)."
+      "reasoning": "Half a year, one year and two years, as in the univariate residual checks."
     },
     "plot_lags": {
       "value": 24,
@@ -142,7 +142,7 @@
   "var_analysis": {
     "carried_lags": {
       "value": 5,
-      "reasoning": "The smallest order whose residuals pass the Portmanteau test (step V6) for both VAR and VECM; orders 1 to 4 fail."
+      "reasoning": "The smallest order whose residuals pass the Portmanteau test for both VAR and VECM; orders 1 to 4 fail."
     },
     "horizon": {
       "value": 24,
@@ -184,14 +184,14 @@
         "Q": [0, 1],
         "trend": ["n", "c"]
       },
-      "reasoning": "p and q under the same budget as step U3, p + d + q <= 5 (diagnostics.max_order_sum, d = 1): 15 pairs, now chosen by out-of-sample error instead of AIC. P and Q: none or one seasonal term, since the training split holds about 14 yearly cycles. trend: with a drift (a constant on the differences) or without; the drift learned during QE kept forecasting growth during QT, so 'no drift' must be a candidate. d = 1 and D = 0 are not tuned: the stationarity tests of step U1 set them. 120 settings, 60 drawn."
+      "reasoning": "p and q under the same budget as the information-criteria grid, p + d + q <= 5 (diagnostics.max_order_sum, d = 1): 15 pairs, now chosen by out-of-sample error instead of AIC. P and Q: none or one seasonal term, since the training split holds about 14 yearly cycles. trend: with a drift (a constant on the differences) or without; the drift learned during QE kept forecasting growth during QT, so 'no drift' must be a candidate. d = 1 and D = 0 are not tuned: the stationarity tests on train set them. 120 settings, 60 drawn."
     },
     "var": {
       "value": {
         "lags": [1, 2, 3, 4, 5, 6, 7, 8],
         "trend": ["c", "ct"]
       },
-      "reasoning": "Lags 1 to 8: step V2's criteria chose 1 (BIC) and 3 (AIC, HQIC), step V6's residual checks 5, and 8 leaves room above them while the smallest fit (166 changes) still has about 9 rows per coefficient. Deterministic terms: a constant (drift in the levels) or a constant and a linear trend. 16 settings, all tried."
+      "reasoning": "Lags 1 to 8: the lag-order criteria chose 1 (BIC) and 3 (AIC, HQIC), the Portmanteau residual checks 5, and 8 leaves room above them while the smallest fit (166 changes) still has about 9 rows per coefficient. Deterministic terms: a constant (drift in the levels) or a constant and a linear trend. 16 settings, all tried."
     },
     "vecm": {
       "value": {

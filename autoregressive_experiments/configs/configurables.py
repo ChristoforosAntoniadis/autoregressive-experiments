@@ -437,7 +437,7 @@ class StatisticalTestSettings:
 @dataclass(frozen=True)
 class DiagnosticsSettings:
     """
-    Steps U1-U3 (diagnostics.py): stationarity tests, ACF / PACF and the SARIMA grid.
+    Settings of diagnostics.py: stationarity tests, ACF / PACF and the SARIMA grid.
 
     Attributes
     ----------
@@ -478,7 +478,7 @@ class DiagnosticsSettings:
 @dataclass(frozen=True)
 class ResidualCheckSettings:
     """
-    Step U4 (residual_checks.py): Ljung-Box and Breusch-Godfrey on the SARIMA residuals.
+    Settings of residual_checks.py: Ljung-Box and Breusch-Godfrey on the SARIMA residuals.
 
     Attributes
     ----------
@@ -498,7 +498,7 @@ class ResidualCheckSettings:
 @dataclass(frozen=True)
 class VolatilityCheckSettings:
     """
-    Step U5 (volatility_checks.py): ARCH-LM and the variance-break search.
+    Settings of volatility_checks.py: ARCH-LM and the variance-break search.
 
     Attributes
     ----------
@@ -518,7 +518,7 @@ class VolatilityCheckSettings:
 @dataclass(frozen=True)
 class VolatilityModelSettings:
     """
-    Steps U5b / U5c (volatility_models.py, asymmetric_garch.py): simulation and bootstrap.
+    Settings of volatility_models.py, asymmetric_garch.py: simulation and bootstrap.
 
     Attributes
     ----------
@@ -538,7 +538,7 @@ class VolatilityModelSettings:
 @dataclass(frozen=True)
 class VarDiagnosticsSettings:
     """
-    Steps V2-V3 (var_diagnostics.py): VAR lag order and the Johansen test.
+    Settings of var_diagnostics.py: VAR lag order and the Johansen test.
 
     Attributes
     ----------
@@ -566,12 +566,12 @@ class VarDiagnosticsSettings:
 @dataclass(frozen=True)
 class VarModelSettings:
     """
-    Steps V4-V6 (var_models.py): the VAR / VECM candidates and their checks.
+    Settings of var_models.py: the VAR / VECM candidates and their checks.
 
     Attributes
     ----------
     var_lags : tuple of int
-        Lag orders of the candidates checked in steps V4-V6.
+        Lag orders of the candidates checked by var_models.
     test_lags : tuple of int
         Portmanteau lags that decide the verdict.
     plot_lags : int
@@ -592,7 +592,7 @@ class VarModelSettings:
 @dataclass(frozen=True)
 class VarAnalysisSettings:
     """
-    Steps V7-V8 (var_analysis.py): Granger tests, impulse responses and FEVD.
+    Settings of var_analysis.py: Granger tests, impulse responses and FEVD.
 
     Attributes
     ----------

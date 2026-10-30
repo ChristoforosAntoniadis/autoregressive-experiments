@@ -1,5 +1,5 @@
 """
-Tests for the VAR lag selection and Johansen cointegration steps (V2, V3) in
+Tests for the VAR lag selection and Johansen cointegration steps in
 autoregressive_experiments.var_diagnostics.
 """
 

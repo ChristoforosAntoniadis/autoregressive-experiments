@@ -1,12 +1,12 @@
 """
-Asymmetric GARCH (step U5c): does volatility react differently to falls than to rises, and do
-EGARCH or GJR-GARCH fit the SARIMA residuals better than step U5b's GARCH?
+Asymmetric GARCH: does volatility react differently to falls than to rises, and do
+EGARCH or GJR-GARCH fit the SARIMA residuals better than the GARCH model?
 
-These are new volatility models next to U5b's choice, which is final (its test run is done) and
-stays unchanged. For each SARIMA model that passed the residual checks, EGARCH(1,1) and
-GJR-GARCH(1,1), both with Student-t errors, are fitted plain and break-adjusted (each regime
-divided by its own standard deviation, as in U5b); BIC picks one version per family. Likelihoods
-are in original units, so the BIC compares directly with U5b's chosen variant.
+These are new volatility models next to the GARCH choice, which stays as it is and stays unchanged.
+For each SARIMA model that passed the residual checks, EGARCH(1,1) and GJR-GARCH(1,1), both with
+Student-t errors, are fitted plain and break-adjusted (each regime divided by its own standard
+deviation, as in volatility_models); BIC picks one version per family. Likelihoods are in original
+units, so the BIC compares directly with the chosen GARCH variant.
 
 - GJR: variance_t = omega + (alpha + gamma * [e_(t-1) < 0]) e_(t-1)^2 + beta variance_(t-1);
   gamma > 0 means falls raise volatility more. Persistence alpha + gamma / 2 + beta.
@@ -18,9 +18,9 @@ Input: the same as ``residual_checks``: the training split and
 
 Output, in ``reports/``:
 
-- ``asymmetric_garch.txt``: per model and family, the BIC against U5b's GARCH, the asymmetry
+- ``asymmetric_garch.txt``: per model and family, the BIC against the GARCH model, the asymmetry
   coefficient with its p-value, persistence, the standardized-residual checks, and a verdict
-- ``figures/asymmetric_garch.png``: each family's BIC difference from U5b's GARCH, and the
+- ``figures/asymmetric_garch.png``: each family's BIC difference from the GARCH model, and the
   asymmetry coefficient with its 95% interval
 """
 
@@ -116,10 +116,10 @@ def asymmetric_check(
     label: str = "",
 ) -> dict[str, Any]:
     """
-    Fit EGARCH and GJR-GARCH and compare them with U5b's chosen GARCH variant.
+    Fit EGARCH and GJR-GARCH and compare them with the chosen GARCH variant.
 
     Per family, the better of the plain and break-adjusted version by BIC, its BIC difference
-    from U5b's chosen GARCH variant (negative: better), its asymmetry and its checks.
+    from the chosen GARCH variant (negative: better), its asymmetry and its checks.
 
     Parameters
     ----------
@@ -134,7 +134,7 @@ def asymmetric_check(
     Returns
     -------
     dict of str to Any
-        - "reference": str, U5b's chosen GARCH variant (garch_check()'s "garch_name")
+        - "reference": str, the chosen GARCH variant (garch_check()'s "garch_name")
         - "reference_bic": float, its BIC
         - one entry per family in FAMILIES (EGARCH_T, GJR_T), a dict with:
 
@@ -151,10 +151,10 @@ def asymmetric_check(
     Notes
     -----
     Processing:
-    1. Rerun U5b's garch_check() to get the reference variant and its BIC.
+    1. Rerun volatility_models' garch_check() to get the reference variant and its BIC.
     2. Per family, fit the plain and the break-adjusted version with fit_candidate(), whose
        likelihoods are in original units (Jacobian included), and keep the lower BIC.
-    3. Check the chosen version as U5b does: ARCH-LM and Ljung-Box on the squared
+    3. Check the chosen version as volatility_models does: ARCH-LM and Ljung-Box on the squared
        standardized residuals with bootstrap p-values (bootstrap_checks()), and a
        stationary variance (|persistence| < 1).
     4. Verdict: "FALLS SHORT" if a check fails; otherwise "BETTER THAN GARCH" when its BIC
@@ -232,11 +232,12 @@ def asymmetric_report(results: list[dict[str, Any]]) -> str:
         the figure's path.
     """
     lines = [
-        "Asymmetric GARCH on the residuals of the models that passed the residual checks (U5c)",
-        "Training split only. New models next to U5b's GARCH choice, which stays unchanged.",
+        "Asymmetric GARCH on the residuals of the models that passed the residual checks",
+        "Training split only. New models next to the GARCH choice, which stays unchanged.",
         (
-            "Per family, BIC picks plain or break-adjusted; delta BIC = family BIC - U5b's chosen "
-            "variant's BIC (negative: the asymmetric model fits better). All in original units."
+            "Per family, BIC picks plain or break-adjusted; delta BIC = family BIC - the chosen "
+            "GARCH variant's BIC (negative: the asymmetric model fits better). All in "
+            "original units."
         ),
         (
             "Asymmetry: GJR gamma > 0, or EGARCH gamma < 0, means falls raise volatility more "
@@ -252,7 +253,7 @@ def asymmetric_report(results: list[dict[str, Any]]) -> str:
     for column in VALUE_COLUMNS:
         for result in (r for r in results if r["series"] == column):
             lines.append(
-                f"{column}  {model_label(result)}  (U5b GARCH: {result['reference']}, "
+                f"{column}  {model_label(result)}  (GARCH: {result['reference']}, "
                 f"BIC {result['reference_bic']:.2f})"
             )
             for family in FAMILIES:
@@ -278,7 +279,7 @@ def asymmetric_report(results: list[dict[str, Any]]) -> str:
 
 def asymmetric_figure(results: list[dict[str, Any]]) -> Figure:
     """
-    Each family's BIC difference from U5b's GARCH, and its asymmetry coefficient.
+    Each family's BIC difference from the GARCH model, and its asymmetry coefficient.
 
     Parameters
     ----------
@@ -294,8 +295,8 @@ def asymmetric_figure(results: list[dict[str, Any]]) -> Figure:
     Notes
     -----
     Processing:
-    1. Left: per model, one horizontal bar per family with its BIC difference from U5b's
-       GARCH; a bar left of 0 means the asymmetric model fits better.
+    1. Left: per model, one horizontal bar per family with its BIC difference from the
+       GARCH model; a bar left of 0 means the asymmetric model fits better.
     2. Right: per model and family, gamma with its 95% interval (+/- 1.96 standard errors);
        an interval clear of 0 means falls and rises move volatility differently.
 
@@ -330,9 +331,9 @@ def asymmetric_figure(results: list[dict[str, Any]]) -> Figure:
         axis.set_yticks(positions, labels)
         # Grid lines behind the bars and points.
         axis.set_axisbelow(True)
-    bic_axis.set_xlabel("BIC difference from U5b's GARCH (left of 0: fits better)")
+    bic_axis.set_xlabel("BIC difference from the GARCH model (left of 0: fits better)")
     bic_axis.set_title(
-        "U5c: does an asymmetric GARCH fit better than U5b's GARCH?", loc="left", fontsize=10
+        "Does an asymmetric GARCH fit better than the GARCH model?", loc="left", fontsize=10
     )
     bic_axis.legend(loc="upper right", fontsize=8, frameon=False)
     # Same tick positions as the left panel, without repeating the labels.
@@ -372,13 +373,14 @@ def main(
     -------
     None
         Writes REPORT_PATH and FIGURE_PATH, and prints the report. Only the models that
-        passed the residual checks (U4) are examined.
+        passed the residual checks are examined.
     """
     start_run_log("asymmetric-garch")
-    begin_phase("EGARCH / GJR fits and bootstrap checks (U5c)")
+    begin_phase("EGARCH / GJR fits and bootstrap checks")
     # The training frame isn't needed: this report doesn't print dates.
     checked, _ = checked_models(levels_path, differences_path, candidates_path)
-    # Each result keeps its U4 fields (series, orders, residuals) and gains the U5c ones.
+    # Each result keeps its residual-check fields (series, orders, residuals) and gains the
+    # asymmetric ones.
     results = [
         {
             **result,
