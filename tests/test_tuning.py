@@ -5,16 +5,27 @@ Tests for the time-aware random search in autoregressive_experiments.tuning.
 import numpy as np
 import pytest
 from scipy import stats
+from sklearn.base import clone
 
+from autoregressive_experiments import tuning
 from autoregressive_experiments.forecast_evaluation import EXPONENTIAL, SARIMA, SMA, VAR_MODEL
-from autoregressive_experiments.ml_forecasting import RIDGE
+from autoregressive_experiments.ml_forecasting import (
+    MAX_LAG,
+    RIDGE,
+    build_model,
+    lag_columns,
+    lag_features,
+)
+from autoregressive_experiments.nn_forecasting import PYTORCH_MLP
 from autoregressive_experiments.tuning import (
     CANDIDATES,
     SPACES,
+    TunableModel,
     arima_one_step,
     constant_quantiles,
     draw_candidates,
-    ml_one_step,
+    ml_search,
+    optuna_search,
     smoothing_one_step,
     system_one_step,
     time_series_folds,
@@ -94,17 +105,65 @@ def test_sarima_fold_errors_ignore_everything_after_the_fold() -> None:
     assert [len(run_on) for _, run_on in residuals] == [10, 10]
 
 
-def test_ml_fold_errors_ignore_everything_after_the_fold() -> None:
-    """The same for an ML model: the first fold's errors don't move when later months do."""
+def test_tunable_model_survives_cloning_and_takes_new_settings() -> None:
+    """RandomizedSearchCV clones the estimator and sets each drawn setting on the copy: the copy
+    keeps the model and settings, and set_params replaces only what it is given."""
+    original = TunableModel(RIDGE, lags=2, alpha=1.0)
+
+    copy = clone(original).set_params(alpha=10.0)
+
+    assert original.get_params() == {"model": RIDGE, "lags": 2, "alpha": 1.0}
+    assert copy.get_params() == {"model": RIDGE, "lags": 2, "alpha": 10.0}
+
+
+def test_randomized_search_scores_equal_fitting_each_fold_on_earlier_months() -> None:
+    """Every setting's score from RandomizedSearchCV equals the MAE of fitting it on the months
+    before each fold and predicting the fold's months by hand: the search uses the
+    time-ordered folds, not its default ones."""
     changes = np.diff(random_walks(81), axis=0)
-    setting = {"lags": 2, "alpha": 1.0}
-    folds = [(50, 60), (60, 70)]
+    folds = [(50, 60), (60, 70), (70, 80)]
 
-    before = ml_one_step(changes, RIDGE, setting, 0, folds)
-    changed = changes.copy()
-    changed[60:] += 5.0
+    best, scored, size = ml_search(changes, RIDGE, 0, folds)
 
-    assert np.array_equal(before[:10], ml_one_step(changed, RIDGE, setting, 0, folds)[:10])
+    features, target = lag_features(changes, MAX_LAG), changes[MAX_LAG:, 0]
+    for entry in scored[:3]:
+        setting = entry["settings"]
+        columns = lag_columns(setting["lags"], MAX_LAG, 2)
+        errors = []
+        for start, end in folds:
+            first, last = start - MAX_LAG, end - MAX_LAG
+            fitted = build_model(RIDGE, setting).fit(features[:first, columns], target[:first])
+            errors.append(target[first:last] - fitted.predict(features[first:last, columns]))
+        assert entry["score"] == pytest.approx(np.mean(np.abs(np.concatenate(errors))))
+    # Ridge's space: 8 lag counts x 8 penalties.
+    assert size == 64 and len(scored) == CANDIDATES
+    assert best == min(scored, key=lambda row: row["score"])["settings"]
+
+
+def test_optuna_search_is_seeded_and_scores_every_trial_on_the_folds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Three Optuna trials of the PyTorch network: two searches choose the same settings and
+    scores (seeded TPE, deterministic fits), the best is the lowest-scoring trial, and its score
+    is the MAE of fitting it on each fold's earlier months, as for every other model."""
+    monkeypatch.setattr(tuning, "CANDIDATES", 3)
+    changes = np.diff(random_walks(81), axis=0)
+    folds = [(50, 60), (60, 70), (70, 80)]
+
+    best, scored, size = optuna_search(changes, PYTORCH_MLP, 0, folds)
+    again, scored_again, _ = optuna_search(changes, PYTORCH_MLP, 0, folds)
+
+    assert (best, scored) == (again, scored_again) and len(scored) == 3 and size == 0
+    winner = min(scored, key=lambda row: row["score"])
+    assert best == winner["settings"]
+    features, target = lag_features(changes, MAX_LAG), changes[MAX_LAG:, 0]
+    columns = lag_columns(best["lags"], MAX_LAG, 2)
+    errors = []
+    for start, end in folds:
+        first, last = start - MAX_LAG, end - MAX_LAG
+        fitted = build_model(PYTORCH_MLP, best).fit(features[:first, columns], target[:first])
+        errors.append(target[first:last] - fitted.predict(features[first:last, columns]))
+    assert winner["score"] == pytest.approx(np.mean(np.abs(np.concatenate(errors))), rel=1e-6)
 
 
 def test_constant_quantiles_by_hand() -> None:

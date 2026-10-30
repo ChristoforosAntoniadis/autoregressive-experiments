@@ -13,7 +13,7 @@ Experiments on autoregressive approaches, from traditional econometrics (SARIMA,
 - **Multivariate (VAR / VECM):** lag selection and the Johansen cointegration test are done on the training split; no cointegration was found, so the system is a VAR on the first differences. VAR(5) and a rank-1 VECM(5) are estimated, stable and pass the residual checks; Granger causality, impulse responses and the variance decomposition show a one-way link, from total assets to the monetary base. The tuned VAR and VECM are evaluated with the same harness, on validation and once on test, including a Diebold-Mariano comparison against SARIMA, as is SARIMAX (the tuned SARIMA plus the other series' lagged monthly changes).
 - **Lag-feature ML:** Ridge, Lasso, random forest, XGBoost and k-nearest neighbours on the last monthly changes of both series, every setting (the lag count included) tuned the same way, forecasting recursively through the same harness.
 - **Smoothing baselines and a combination:** a moving average and exponential smoothing (trend, damping, season, Box-Cox and initialization all tuned), and a weighted average of SARIMA and the naive forecast (weight tuned), all through the same harness.
-- **Neural networks (next):** models on lookback windows (MLP, N-BEATS, DLinear) and recurrent networks (LSTM, GRU), evaluated on the same chronological 60 / 20 / 20 split.
+- **Neural networks:** a multilayer perceptron (scikit-learn's MLPRegressor) and two networks written by hand in NumPy (A1: one sigmoid hidden layer; A2: three ReLU hidden layers; SGD, momentum, AdaBelief or Muon), and a TensorFlow (Keras) and a PyTorch multilayer perceptron (A1 or A2, tuned with Optuna), on the same lag features and evaluated the same way; next, models on lookback windows (MLP, N-BEATS, DLinear) and recurrent networks (LSTM, GRU), evaluated on the same chronological 60 / 20 / 20 split.
 
 ## Quickstart
 
@@ -31,12 +31,12 @@ make residuals                    # Ljung-Box / Breusch-Godfrey on the selected 
 make volatility                   # ARCH-LM and a variance-break check on those models -> reports/
 make garch                        # GARCH(1,1) vs constant variance on those models, bootstrap checks (~3 min) -> reports/
 make asymmetric-garch             # EGARCH and GJR-GARCH vs that GARCH, bootstrap checks (~12 min) -> reports/
-make tune                         # tune every model by time-aware random search on train (~30 min) -> models/, reports/
-make evaluate                     # rolling-origin forecasts of every tuned model on validation and test (~45 min)
+make tune                         # tune every model by time-aware random search on train (~50 min) -> models/, reports/
+make evaluate                     # rolling-origin forecasts of every tuned model on validation and test (~60 min)
 make var                          # VAR lag order and Johansen cointegration test -> reports/
 make var-checks                   # fit VAR / VECM candidates; stability and Portmanteau checks -> reports/
 make var-analysis                 # Granger causality, impulse responses, variance decomposition -> reports/
-make all                          # every step above, in order (~95 min)
+make all                          # every step above, in order (~2.25 h)
 
 make test                         # unit tests
 make lint                         # check style and lint with ruff (changes nothing)
@@ -105,11 +105,13 @@ autoregressive-experiments/
 │   ├── tuning.py                # time-aware random search of every model's settings on train
 │   ├── forecast_evaluation.py   # rolling-origin forecasts of every tuned model vs baselines, validation and test
 │   ├── ml_forecasting.py        # lag-feature ML: Ridge, Lasso, random forest, XGBoost, KNN
+│   ├── nn_forecasting.py        # neural networks: scikit-learn's MLP, NumPy-by-hand A1 / A2, Keras and PyTorch MLPs
 │   ├── var_diagnostics.py       # VAR lag order (AIC / BIC / HQIC) and Johansen cointegration
 │   ├── var_models.py            # VAR / VECM candidates: estimation, stability, residual checks
 │   ├── var_analysis.py          # Granger causality, impulse responses, variance decomposition
 │   └── modeling/
-│       └── train.py             # (template stub) model training
+│       ├── train.py             # (template stub) model training
+│       └── utilities/           # the networks: NumPy by hand (activations, optimizers, network), Keras, PyTorch
 ├── tests/                       # pytest: the split, each diagnostic step, GARCH, forecast metrics and baselines
 └── tools/                       # make help
 ```
@@ -118,7 +120,7 @@ Every setting (split, test lags, bootstrap size, forecast horizons, every model'
 
 Every make step writes a timestamped log of everything it prints to `logs/run_<date>_<time>_<step>.log` (not committed), with progress lines for long loops and a table of phase timings at the end.
 
-The empty folders hold a `.gitkeep` file so they exist for future use, as in the template. `configs/`, `runlog.py`, `diagnostics.py`, `residual_checks.py`, `volatility_checks.py`, `volatility_models.py`, `asymmetric_garch.py`, `tuning.py`, `forecast_evaluation.py`, `ml_forecasting.py`, `var_diagnostics.py`, `var_models.py`, `var_analysis.py` and `tools/` are this project's additions to the template.
+The empty folders hold a `.gitkeep` file so they exist for future use, as in the template. `configs/`, `runlog.py`, `diagnostics.py`, `residual_checks.py`, `volatility_checks.py`, `volatility_models.py`, `asymmetric_garch.py`, `tuning.py`, `forecast_evaluation.py`, `ml_forecasting.py`, `nn_forecasting.py`, `var_diagnostics.py`, `var_models.py`, `var_analysis.py` and `tools/` are this project's additions to the template.
 
 ## Datasets & attribution
 

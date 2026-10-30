@@ -104,6 +104,11 @@ def test_the_project_config_loads_with_reasoning_for_every_setting() -> None:
             "tuning.sma: ",
         ),
         (
+            "a search range whose low end isn't below its high end",
+            lambda c: c["nn"]["pytorch_mlp"]["value"]["dropout"].update(low=0.5),
+            "nn.pytorch_mlp: ",
+        ),
+        (
             "no months left for test",
             lambda c: c["split"]["train_percent"].update(value=80),
             "train_percent + validation_percent must leave months for test",

@@ -23,6 +23,10 @@ dependencies = [
     "scikit-learn==1.9.1",
     # The lag-feature ML family's gradient boosting.
     "xgboost==3.4.1",
+    # The neural-network family: the Keras and PyTorch networks, and Optuna to tune them.
+    "tensorflow==2.21.0",
+    "torch==2.15.0",
+    "optuna==5.0.0",
     "kagglehub==1.0.3",
     "loguru==0.7.3",
     "typer==0.27.3",

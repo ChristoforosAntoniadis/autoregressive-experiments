@@ -23,6 +23,10 @@ from typing import Any
 # This module's folder; hyperparameters.json sits beside it.
 CONFIG_DIR = Path(__file__).resolve().parent
 HYPERPARAMETERS_PATH = CONFIG_DIR / "hyperparameters.json"
+# The one seed of every random draw in the project: EGARCH's simulated variances, the
+# bootstrap, the tuning's draws, the random forest and XGBoost. Fixed so every rerun gives
+# identical numbers; the value itself carries no meaning.
+RANDOM_SEED = 1337
 # The settings each model's search space must name: exactly these keys, each with a list of
 # values to try (a single value fixes the setting).
 SPACES: dict[str, frozenset[str]] = {
@@ -70,6 +74,86 @@ SPACES: dict[str, frozenset[str]] = {
         }
     ),
     "knn": frozenset({"lags", "n_neighbors", "weights", "p"}),
+    "tensorflow_mlp": frozenset(
+        {
+            "lags",
+            "use_bias",
+            "architecture",
+            "hidden_units",
+            "optimizer",
+            "learning_rate",
+            "weight_decay",
+            "dropout",
+            "batch_size",
+            "epochs",
+            "patience",
+            "min_delta",
+            "min_epochs",
+            "validation_share",
+        }
+    ),
+    "pytorch_mlp": frozenset(
+        {
+            "lags",
+            "use_bias",
+            "architecture",
+            "hidden_units",
+            "optimizer",
+            "learning_rate",
+            "weight_decay",
+            "dropout",
+            "batch_size",
+            "epochs",
+            "patience",
+            "min_delta",
+            "min_epochs",
+            "validation_share",
+        }
+    ),
+    "numpy_a2": frozenset(
+        {
+            "lags",
+            "use_bias",
+            "dropout",
+            "hidden_units",
+            "optimizer",
+            "learning_rate",
+            "batch_size",
+            "epochs",
+            "patience",
+            "min_delta",
+            "min_epochs",
+            "validation_share",
+        }
+    ),
+    "numpy_a1": frozenset(
+        {
+            "lags",
+            "use_bias",
+            "dropout",
+            "hidden_units",
+            "optimizer",
+            "learning_rate",
+            "batch_size",
+            "epochs",
+            "patience",
+            "min_delta",
+            "min_epochs",
+            "validation_share",
+        }
+    ),
+    "mlp": frozenset(
+        {
+            "lags",
+            "hidden_layer_sizes",
+            "activation",
+            "solver",
+            "alpha",
+            "learning_rate_init",
+            "max_iter",
+            "early_stopping",
+        }
+    ),
 }
 
 
@@ -145,10 +229,33 @@ def orders(values: tuple[int, ...]) -> bool:
     return len(values) > 0 and min(values) >= 0 and all(a < b for a, b in pairwise(values))
 
 
+def search_range(spec: Any) -> bool:
+    """
+    Whether a setting's search range is usable: {"low": a, "high": b, "log": flag}.
+
+    Parameters
+    ----------
+    spec : Any
+        The setting's entry in a search space, as read from the JSON.
+
+    Returns
+    -------
+    bool
+        True when it has exactly the keys low, high and log, low and high are numbers with
+        low < high, log is true or false, and a log scale starts above 0.
+    """
+    if not isinstance(spec, dict) or set(spec) != {"low", "high", "log"}:
+        return False
+    low, high, log = spec["low"], spec["high"], spec["log"]
+    numbers = all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (low, high))
+    return numbers and isinstance(log, bool) and low < high and (not log or low > 0)
+
+
 def space(name: str) -> Any:
     """
     A required search-space field: an object naming exactly the model's settings, each with a
-    non-empty list of distinct values to try.
+    non-empty list of distinct values to try, or a numeric range (search_range) for the models
+    tuned by Optuna.
 
     Parameters
     ----------
@@ -176,16 +283,23 @@ def space(name: str) -> Any:
         -------
         bool
             True when the keys are exactly `keys` and every value is a non-empty list of
-            distinct values.
+            distinct values or a usable numeric range.
         """
         return set(values) == keys and all(
-            isinstance(options, list)
-            and len(options) > 0
-            and len(set(map(repr, options))) == len(options)
+            search_range(options)
+            or (
+                isinstance(options, list)
+                and len(options) > 0
+                and len(set(map(repr, options))) == len(options)
+            )
             for options in values.values()
         )
 
-    return setting(check, f"exactly the settings {sorted(keys)}, each a non-empty list")
+    return setting(
+        check,
+        f"exactly the settings {sorted(keys)}, each a non-empty list or a "
+        '{"low", "high", "log"} range',
+    )
 
 
 @dataclass(frozen=True)
@@ -311,20 +425,14 @@ class VolatilityModelSettings:
     ----------
     simulations : int
         Paths simulated for EGARCH's multi-step variance forecasts.
-    simulation_seed : int
-        Seed of those simulations.
     bootstrap_replications : int
         Series simulated per model for the bootstrap p-values.
-    bootstrap_seed : int
-        Seed of the bootstrap.
     burn_in : int
         Months simulated and dropped before each bootstrap series.
     """
 
     simulations: int = setting(lambda v: v >= 1, "at least 1")
-    simulation_seed: int = setting(lambda v: v >= 0, "at least 0")
     bootstrap_replications: int = setting(lambda v: v >= 1, "at least 1")
-    bootstrap_seed: int = setting(lambda v: v >= 0, "at least 0")
     burn_in: int = setting(lambda v: v >= 0, "at least 0")
 
 
@@ -443,8 +551,6 @@ class TuningSettings:
         Months the first fold trains on, at least.
     candidates : int
         Settings drawn at random per model and series; smaller spaces are tried in full.
-    seed : int
-        Seed of those draws.
     sarima, variance, var, vecm, sma, exponential_smoothing, sarimax, combination
         Mapping of str to list: each model's settings and the values tried (variance applies
         to GARCH, EGARCH and GJR-GARCH alike).
@@ -453,7 +559,6 @@ class TuningSettings:
     folds: int = setting(lambda v: v >= 2, "at least 2")
     min_train_months: int = setting(lambda v: v >= 24, "at least 24 (two seasonal cycles)")
     candidates: int = setting(lambda v: v >= 1, "at least 1")
-    seed: int = setting(lambda v: v >= 0, "at least 0")
     sarima: Mapping[str, Any] = space("sarima")
     variance: Mapping[str, Any] = space("variance")
     var: Mapping[str, Any] = space("var")
@@ -468,15 +573,13 @@ class TuningSettings:
 class MlSettings:
     """
     The lag-feature ML family (ml_forecasting.py): each model's search space, tuned by
-    tuning.py, and the seed of the random models.
+    tuning.py.
 
     Attributes
     ----------
     ridge, lasso, random_forest, xgboost, knn
         Mapping of str to list: the model's settings (scikit-learn / XGBoost keyword names,
         plus "lags") and the values tried.
-    random_seed : int
-        Seed of the random forest and XGBoost.
     """
 
     ridge: Mapping[str, Any] = space("ridge")
@@ -484,7 +587,32 @@ class MlSettings:
     random_forest: Mapping[str, Any] = space("random_forest")
     xgboost: Mapping[str, Any] = space("xgboost")
     knn: Mapping[str, Any] = space("knn")
-    random_seed: int = setting(lambda v: v >= 0, "at least 0")
+
+
+@dataclass(frozen=True)
+class NnSettings:
+    """
+    The neural-network family (nn_forecasting.py): each network's search space, tuned by
+    tuning.py.
+
+    Attributes
+    ----------
+    mlp
+        Mapping of str to list: scikit-learn MLPRegressor's settings (keyword names, plus
+        "lags") and the values tried.
+    numpy_a1, numpy_a2
+        Mapping of str to list: the hand-written NumPy networks' settings (NumpyNetwork's
+        keyword names, plus "lags") and the values tried.
+    tensorflow_mlp, pytorch_mlp
+        Mapping of str to list or range: the Keras and PyTorch networks' settings (their
+        keyword names, plus "lags"), searched by Optuna.
+    """
+
+    mlp: Mapping[str, Any] = space("mlp")
+    numpy_a1: Mapping[str, Any] = space("numpy_a1")
+    numpy_a2: Mapping[str, Any] = space("numpy_a2")
+    tensorflow_mlp: Mapping[str, Any] = space("tensorflow_mlp")
+    pytorch_mlp: Mapping[str, Any] = space("pytorch_mlp")
 
 
 @dataclass(frozen=True)
@@ -495,7 +623,7 @@ class Hyperparameters:
     Attributes
     ----------
     split, tests, diagnostics, residual_checks, volatility_checks, volatility_models,
-    var_diagnostics, var_models, var_analysis, forecast_evaluation, tuning, ml
+    var_diagnostics, var_models, var_analysis, forecast_evaluation, tuning, ml, nn
         The sections, in pipeline order; see each class.
     """
 
@@ -511,3 +639,4 @@ class Hyperparameters:
     forecast_evaluation: ForecastEvaluationSettings
     tuning: TuningSettings
     ml: MlSettings
+    nn: NnSettings

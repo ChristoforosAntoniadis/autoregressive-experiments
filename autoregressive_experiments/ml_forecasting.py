@@ -1,6 +1,7 @@
 """
 The lag-feature ML family: Ridge, Lasso, random forest, XGBoost and k-nearest neighbours, each
 predicting next month's change of one series from the last k monthly changes of both series.
+The networks of ``nn_forecasting`` use the same lag-feature pipeline defined here.
 
 Each model is refitted at every forecast origin on that origin's data only, one model per
 series, and forecasts several months ahead recursively: each month's predicted changes of both
@@ -34,12 +35,16 @@ from sklearn.preprocessing import StandardScaler
 from xgboost import XGBRegressor
 
 from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
+from autoregressive_experiments.configs.configurables import RANDOM_SEED
 from autoregressive_experiments.features import lagged_exog
+from autoregressive_experiments.nn_forecasting import NN_MODELS, NN_SPACES, build_network
 
 # Settings; each value's reasoning is in configs/hyperparameters.json.
 SETTINGS = HYPERPARAMETERS.ml
 RIDGE, LASSO, FOREST, XGBOOST, KNN = "Ridge", "Lasso", "random forest", "XGBoost", "KNN"
 ML_MODELS = (RIDGE, LASSO, FOREST, XGBOOST, KNN)
+# Every model on lag features: the ML family, then the neural networks of nn_forecasting.
+LAG_MODELS = (*ML_MODELS, *NN_MODELS)
 # Model -> its search space: setting name -> the values tried.
 ML_SPACES: dict[str, Mapping[str, Any]] = {
     RIDGE: SETTINGS.ridge,
@@ -49,7 +54,7 @@ ML_SPACES: dict[str, Mapping[str, Any]] = {
     KNN: SETTINGS.knn,
 }
 # The longest lag any search space tries; the tuning builds its features once with it.
-MAX_LAG = max(max(space["lags"]) for space in ML_SPACES.values())
+MAX_LAG = max(max(space["lags"]) for space in (*ML_SPACES.values(), *NN_SPACES.values()))
 
 
 def lag_features(changes: np.ndarray, lags: int) -> np.ndarray:
@@ -102,12 +107,13 @@ def lag_columns(lags: int, max_lag: int, series: int) -> list[int]:
 
 def build_model(model: str, settings: Mapping[str, Any]) -> TransformedTargetRegressor:
     """
-    An unfitted ML model with the given settings, standardizing its features and its target.
+    An unfitted lag-feature model with the given settings, standardizing its features and its
+    target.
 
     Parameters
     ----------
     model : str
-        One of ML_MODELS.
+        One of LAG_MODELS: an ML model, or a network built by nn_forecasting.build_network.
     settings : Mapping of str to Any
         The model's keyword arguments from its search space, plus "lags" (ignored here).
 
@@ -120,7 +126,7 @@ def build_model(model: str, settings: Mapping[str, Any]) -> TransformedTargetReg
     Raises
     ------
     ValueError
-        If `model` isn't one of ML_MODELS.
+        If `model` isn't one of LAG_MODELS.
 
     Notes
     -----
@@ -139,13 +145,15 @@ def build_model(model: str, settings: Mapping[str, Any]) -> TransformedTargetReg
     elif model == FOREST:
         # One thread: with several, the trees' predictions are summed in the order the threads
         # finish, which changes the last bit of a forecast from run to run.
-        base = RandomForestRegressor(**options, random_state=SETTINGS.random_seed, n_jobs=1)
+        base = RandomForestRegressor(**options, random_state=RANDOM_SEED, n_jobs=1)
     elif model == XGBOOST:
-        base = XGBRegressor(**options, random_state=SETTINGS.random_seed, verbosity=0)
+        base = XGBRegressor(**options, random_state=RANDOM_SEED, verbosity=0)
     elif model == KNN:
         base = KNeighborsRegressor(**options)
+    elif model in NN_MODELS:
+        base = build_network(model, options)
     else:
-        raise ValueError(f"unknown ML model {model!r}")
+        raise ValueError(f"unknown lag-feature model {model!r}")
     return TransformedTargetRegressor(
         regressor=make_pipeline(StandardScaler(), base), transformer=StandardScaler()
     )
@@ -160,7 +168,7 @@ def fit_model(
     Parameters
     ----------
     model : str
-        One of ML_MODELS.
+        One of LAG_MODELS.
     settings : Mapping of str to Any
         Its tuned settings, including "lags".
     changes : np.ndarray
@@ -233,7 +241,7 @@ def ml_forecast(
     Parameters
     ----------
     model : str
-        One of ML_MODELS.
+        One of LAG_MODELS.
     settings : Sequence of Mapping of str to Any
         Each series' tuned settings for this model, in column order.
     history : np.ndarray
@@ -276,7 +284,7 @@ def ml_forecaster(
     Parameters
     ----------
     model : str
-        One of ML_MODELS.
+        One of LAG_MODELS.
     settings : Sequence of Mapping of str to Any
         Each series' tuned settings for this model, in VALUE_COLUMNS order.
     all_levels : np.ndarray

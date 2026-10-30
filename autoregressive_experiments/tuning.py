@@ -20,8 +20,12 @@ How each model forecasts a fold's months:
 - VAR, VECM, SMA and exponential smoothing: re-estimated at every month of the fold, exactly as
   the evaluation does (they are cheap to fit)
 - the SARIMA + naive average: each weight applied to the tuned SARIMA's fold forecasts
-- ML: fitted once per fold, as scikit-learn's cross-validation does, and predicting the fold's
-  rows, whose features are actual past changes
+- ML and neural networks: searched with scikit-learn's RandomizedSearchCV on the same folds, the
+  settings run in parallel: fitted once per fold and predicting the fold's rows, whose features
+  are actual past changes
+- the TensorFlow and PyTorch networks: the same folds and score, but searched by Optuna's TPE
+  sampler (CANDIDATES trials, one after another, seeded with RANDOM_SEED, no pruning), which
+  chooses each trial's settings from the scores of the earlier ones
 
 SARIMA is tuned first: its tuned orders feed the volatility models, SARIMAX and the average.
 
@@ -51,12 +55,19 @@ from matplotlib.ticker import FuncFormatter
 import numpy as np
 import pandas as pd
 from scipy import stats
-from sklearn.model_selection import ParameterGrid, TimeSeriesSplit
+from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.model_selection import (
+    ParameterGrid,
+    RandomizedSearchCV,
+    TimeSeriesSplit,
+    cross_val_score,
+)
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 import typer
 
 from autoregressive_experiments.config import FIGURES_DIR, INTERIM_DATA_DIR, REPORTS_DIR
 from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
+from autoregressive_experiments.configs.configurables import RANDOM_SEED
 from autoregressive_experiments.diagnostics import (
     DIFFERENCING_ORDER,
     MAX_ORDER_SUM,
@@ -83,13 +94,15 @@ from autoregressive_experiments.forecast_evaluation import (
     volatility_spec,
 )
 from autoregressive_experiments.ml_forecasting import (
+    LAG_MODELS,
     MAX_LAG,
-    ML_MODELS,
     ML_SPACES,
+    RIDGE,
     build_model,
     lag_columns,
     lag_features,
 )
+from autoregressive_experiments.nn_forecasting import NN_SPACES, OPTUNA_MODELS
 from autoregressive_experiments.residual_checks import (
     MUTED_INK,
     PRIMARY_INK,
@@ -108,7 +121,6 @@ SETTINGS = HYPERPARAMETERS.tuning
 FOLDS = SETTINGS.folds
 MIN_TRAIN_MONTHS = SETTINGS.min_train_months
 CANDIDATES = SETTINGS.candidates
-SEED = SETTINGS.seed
 COMBINATION = "combination"
 # Model key -> its search space, in tuning order: SARIMA first, since the volatility models,
 # SARIMAX and the average build on its tuned orders. The volatility models share one space.
@@ -122,6 +134,7 @@ SPACES: dict[str, Mapping[str, Any]] = {
     SMA: SETTINGS.sma,
     EXPONENTIAL: SETTINGS.exponential_smoothing,
     **ML_SPACES,
+    **NN_SPACES,
 }
 # A cross-validation fold: (first month it tests, first month after it), as positions in the
 # training split's monthly changes; the fold trains on every change before its first test month.
@@ -198,11 +211,11 @@ def draw_candidates(model: str, space: Mapping[str, Any]) -> tuple[list[dict[str
 
     Notes
     -----
-    The draw is seeded with SEED afresh for every model, so each model's draw is reproducible
-    on its own, whatever is tuned before it.
+    The draw is seeded with RANDOM_SEED afresh for every model, so each model's draw is
+    reproducible on its own, whatever is tuned before it.
     """
     grid = [setting for setting in ParameterGrid(dict(space)) if valid_setting(model, setting)]
-    generator = np.random.default_rng(SEED)
+    generator = np.random.default_rng(RANDOM_SEED)
     picks = generator.choice(len(grid), size=min(CANDIDATES, len(grid)), replace=False)
     return [grid[int(index)] for index in picks], len(grid)
 
@@ -421,20 +434,115 @@ def smoothing_one_step(
     return np.array(errors)
 
 
-def ml_one_step(
-    changes: np.ndarray, model: str, setting: Mapping[str, Any], column: int, folds: list[Fold]
-) -> np.ndarray:
+class TunableModel(RegressorMixin, BaseEstimator):
     """
-    One-month errors of an ML model over every fold, fitted once per fold.
+    One ML model as a scikit-learn estimator whose settings, the lag count included, can be set
+    by RandomizedSearchCV.
+
+    Parameters
+    ----------
+    model : str, default=RIDGE
+        One of LAG_MODELS.
+    **settings : Any
+        Its settings (search-space names), including "lags".
+
+    Notes
+    -----
+    The features it receives hold MAX_LAG lags of both series; fit and predict keep the columns
+    of settings["lags"] (lag_columns), so the lag count is searched like any other setting.
+    The model itself comes from ml_forecasting.build_model, the same builder the evaluation
+    uses, so Lasso with a zero penalty is a linear regression here too. get_params and
+    set_params are written out because the settings differ by model and arrive as keywords.
+    """
+
+    def __init__(self, model: str = RIDGE, **settings: Any) -> None:
+        self.model = model
+        self.settings = settings
+
+    def get_params(self, deep: bool = True) -> dict[str, Any]:
+        """
+        The model name and its settings, as scikit-learn's search and clone read them.
+
+        Parameters
+        ----------
+        deep : bool, default=True
+            Unused: there are no nested estimators to expand.
+
+        Returns
+        -------
+        dict of str to Any
+            {"model": ..., setting: value, ...}.
+        """
+        return {"model": self.model, **self.settings}
+
+    def set_params(self, **params: Any) -> "TunableModel":
+        """
+        Change the model name or any settings.
+
+        Parameters
+        ----------
+        **params : Any
+            "model" and / or settings to replace.
+
+        Returns
+        -------
+        TunableModel
+            Itself, as scikit-learn expects.
+        """
+        self.model = params.pop("model", self.model)
+        self.settings = {**self.settings, **params}
+        return self
+
+    def fit(self, features: np.ndarray, target: np.ndarray) -> "TunableModel":
+        """
+        Fit the model on the lag columns its settings ask for.
+
+        Parameters
+        ----------
+        features : np.ndarray
+            lag_features(changes, MAX_LAG) rows, shape (rows, 2 x MAX_LAG).
+        target : np.ndarray
+            The series' changes for those rows, shape (rows,), trillions.
+
+        Returns
+        -------
+        TunableModel
+            Itself, fitted.
+        """
+        columns = lag_columns(self.settings["lags"], MAX_LAG, 2)
+        self.fitted_ = build_model(self.model, self.settings).fit(features[:, columns], target)
+        return self
+
+    def predict(self, features: np.ndarray) -> np.ndarray:
+        """
+        Predict the series' changes for the given rows.
+
+        Parameters
+        ----------
+        features : np.ndarray
+            lag_features(changes, MAX_LAG) rows, shape (rows, 2 x MAX_LAG).
+
+        Returns
+        -------
+        np.ndarray
+            Predicted changes, shape (rows,), trillions.
+        """
+        columns = lag_columns(self.settings["lags"], MAX_LAG, 2)
+        return np.asarray(self.fitted_.predict(features[:, columns]))
+
+
+def ml_search(
+    changes: np.ndarray, model: str, column: int, folds: list[Fold]
+) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
+    """
+    Tune one ML model or network for one series with scikit-learn's RandomizedSearchCV.
 
     Parameters
     ----------
     changes : np.ndarray
         Both series' training changes, shape (n, 2), trillions.
     model : str
-        One of ML_MODELS.
-    setting : Mapping of str to Any
-        Its settings, including "lags".
+        One of LAG_MODELS.
     column : int
         The series predicted.
     folds : list of tuple of (int, int)
@@ -442,30 +550,187 @@ def ml_one_step(
 
     Returns
     -------
-    np.ndarray
-        One-month errors, every fold month, trillions.
+    tuple of (dict of str to Any, list of dict of str to Any, int)
+        As search(): the best setting, every drawn setting with its score (MAE, trillions) in
+        draw order, and the number of settings in the space.
 
     Notes
     -----
-    The features are built once with MAX_LAG lags, so every lag count is trained and scored on
-    the same months (from MAX_LAG on); the columns of the wanted lags are then picked. Row r's
-    target is change r + MAX_LAG, so a fold's training rows are those whose target comes
-    before the fold.
+    Processing:
+    1. Build the features once with MAX_LAG lags, so every lag count is trained and scored on
+       the same months (from MAX_LAG on).
+    2. Turn the folds into row indices: row r's target is change r + MAX_LAG, so a fold trains
+       on the rows whose target comes before it and tests the rows inside it. Passing them
+       explicitly matters: RandomizedSearchCV's default folds ignore time order.
+    3. Draw CANDIDATES settings (seed RANDOM_SEED; all of them when the space is smaller), fit
+       each on every fold in parallel, and score it by mean absolute error. The folds are equally
+       long, so the mean of the fold MAEs is the MAE over all tested months, as for the other
+       models. No final refit: the evaluation refits at every origin.
     """
-    features = lag_features(changes, MAX_LAG)[:, lag_columns(setting["lags"], MAX_LAG, 2)]
+    features, target, splits = lag_splits(changes, column, folds)
+    space = dict(SPACES[model])
+    logger.info(f"TUNE | {model}: {CANDIDATES} settings x {len(folds)} folds, in parallel")
+    searcher = RandomizedSearchCV(
+        TunableModel(model),
+        param_distributions=space,
+        n_iter=CANDIDATES,
+        scoring="neg_mean_absolute_error",
+        cv=splits,
+        refit=False,
+        random_state=RANDOM_SEED,
+        n_jobs=-1,
+        error_score="raise",
+    ).fit(features, target)
+    results = searcher.cv_results_
+    scored: list[dict[str, Any]] = [
+        {"settings": dict(params), "score": -float(score)}
+        for params, score in zip(results["params"], results["mean_test_score"])
+    ]
+    winner = min(scored, key=lambda row: row["score"])
+    return dict(winner["settings"]), scored, len(ParameterGrid(space))
+
+
+def lag_splits(
+    changes: np.ndarray, column: int, folds: list[Fold]
+) -> tuple[np.ndarray, np.ndarray, list[tuple[np.ndarray, np.ndarray]]]:
+    """
+    The lag features, targets and fold row indices shared by the ML and network searches.
+
+    Parameters
+    ----------
+    changes : np.ndarray
+        Both series' training changes, shape (n, 2), trillions.
+    column : int
+        The series predicted.
+    folds : list of tuple of (int, int)
+        Folds over the n monthly changes; their first test month must be at least MAX_LAG.
+
+    Returns
+    -------
+    tuple of (np.ndarray, np.ndarray, list of tuple of (np.ndarray, np.ndarray))
+        Features with MAX_LAG lags, shape (n - MAX_LAG, 2 x MAX_LAG); the targets, shape
+        (n - MAX_LAG,); and per fold the training rows (targets before the fold) and the test
+        rows (targets inside it).
+
+    Notes
+    -----
+    Row r's target is change r + MAX_LAG, so every lag count is trained and scored on the same
+    months. Passing the folds explicitly matters: scikit-learn's default folds ignore time
+    order.
+    """
+    features = lag_features(changes, MAX_LAG)
     target = changes[MAX_LAG:, column]
-    errors = []
-    for start, end in folds:
-        first, last = start - MAX_LAG, end - MAX_LAG
-        fitted = build_model(model, setting).fit(features[:first], target[:first])
-        errors.append(target[first:last] - fitted.predict(features[first:last]))
-    return np.concatenate(errors)
+    rows = np.arange(len(target))
+    splits = [
+        (rows[: start - MAX_LAG], rows[start - MAX_LAG : end - MAX_LAG]) for start, end in folds
+    ]
+    return features, target, splits
+
+
+def optuna_search(
+    changes: np.ndarray, model: str, column: int, folds: list[Fold]
+) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
+    """
+    Tune one network for one series with Optuna's TPE sampler.
+
+    Parameters
+    ----------
+    changes : np.ndarray
+        Both series' training changes, shape (n, 2), trillions.
+    model : str
+        One of OPTUNA_MODELS.
+    column : int
+        The series predicted.
+    folds : list of tuple of (int, int)
+        Folds over the n monthly changes.
+
+    Returns
+    -------
+    tuple of (dict of str to Any, list of dict of str to Any, int)
+        As search(): the best setting, every trial's setting and score (MAE, trillions) in
+        trial order, and 0 for the space's size (it has continuous ranges).
+
+    Notes
+    -----
+    Processing:
+    1. Each trial suggests one value per setting: a choice from a list, or a float from a
+       {"low", "high", "log"} range (on a log scale when "log" is true).
+    2. It is scored like every other ML model: fitted on each fold's earlier months and scored
+       by the mean absolute error of the fold's months (cross_val_score on lag_splits' rows).
+    3. CANDIDATES trials run one after another, so the seeded sampler's choices repeat
+       exactly; no pruning, so every trial is scored on every fold.
+    """
+    import optuna
+
+    features, target, splits = lag_splits(changes, column, folds)
+    space = SPACES[model]
+    progress = Progress(f"TUNE | {series_title(VALUE_COLUMNS[column])} | {model}", CANDIDATES)
+
+    def objective(trial: Any) -> float:
+        """
+        Cross-validation MAE of the trial's settings.
+
+        Parameters
+        ----------
+        trial : optuna.trial.Trial
+            The trial suggesting the settings.
+
+        Returns
+        -------
+        float
+            Mean absolute one-month error over the fold months, trillions.
+        """
+        setting = {
+            name: trial.suggest_float(name, spec["low"], spec["high"], log=spec["log"])
+            if isinstance(spec, dict)
+            else trial.suggest_categorical(name, spec)
+            for name, spec in space.items()
+        }
+        scores = cross_val_score(
+            TunableModel(model, **setting),
+            features,
+            target,
+            cv=splits,
+            scoring="neg_mean_absolute_error",
+            error_score="raise",
+        )
+        return -float(np.mean(scores))
+
+    def report(study: Any, trial: Any) -> None:
+        """
+        One progress line now and then, with the best score so far.
+
+        Parameters
+        ----------
+        study : optuna.study.Study
+            The running study.
+        trial : optuna.trial.FrozenTrial
+            The trial just finished.
+
+        Returns
+        -------
+        None
+        """
+        progress.step(trial.number + 1, f"best so far {study.best_value:.5f}")
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    study = optuna.create_study(
+        direction="minimize", sampler=optuna.samplers.TPESampler(seed=RANDOM_SEED)
+    )
+    study.optimize(objective, n_trials=CANDIDATES, callbacks=[report])
+    # Every trial completes or raises (error_score="raise"), so each has a value.
+    scored = [
+        {"settings": dict(trial.params), "score": float(trial.value)}
+        for trial in study.trials
+        if trial.value is not None
+    ]
+    return dict(study.best_params), scored, 0
 
 
 def search(
     label: str,
     model: str,
-    score: Callable[[Mapping[str, Any]], float],
+    score: Callable[..., float],
 ) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
     """
     Score every drawn setting of one model and return the best.
@@ -531,7 +796,9 @@ def tune_series(
     1. SARIMA, scored by MAE; then the tuned SARIMA's fold residuals and errors.
     2. GARCH, EGARCH and GJR-GARCH on those, scored by pinball loss against constant variance.
     3. SARIMAX (the tuned orders plus the other series' lags) and the SARIMA + naive weight.
-    4. VAR and VECM, SMA and exponential smoothing, and the ML models, scored by MAE.
+    4. VAR and VECM, SMA and exponential smoothing, scored by MAE.
+    5. The ML models and neural networks, by RandomizedSearchCV (ml_search), or by Optuna
+       for the TensorFlow and PyTorch networks (optuna_search), scored by MAE.
 
     Naive's one-month forecast is no change, so its error is the change itself and its MAE the
     mean absolute change over the fold months: the reference every point model is shown
@@ -546,9 +813,14 @@ def tune_series(
     summaries: list[dict[str, Any]] = []
     failures = {SARIMA: 0, SARIMAX: 0}
 
-    def record(model: str, metric: str, reference: float, score: Callable[..., float]) -> None:
+    def record(
+        model: str,
+        metric: str,
+        reference: float,
+        result: tuple[dict[str, Any], list[dict[str, Any]], int],
+    ) -> None:
         """
-        Run the search for one model and store its winner and summary.
+        Store one model's search result: its winner and summary.
 
         Parameters
         ----------
@@ -558,15 +830,15 @@ def tune_series(
             "MAE" or "pinball", for the report.
         reference : float
             The reference score the report and figure divide by.
-        score : callable
-            Setting -> its cross-validation score.
+        result : tuple of (dict of str to Any, list of dict of str to Any, int)
+            What search() or ml_search() returned.
 
         Returns
         -------
         None
             Fills `tuned` and appends to `summaries`.
         """
-        best, scored, size = search(label, model, score)
+        best, scored, size = result
         tuned[model] = best
         summaries.append(
             {
@@ -603,10 +875,11 @@ def tune_series(
         failures[SARIMAX if exog is not None else SARIMA] += failed
         return float(np.mean(np.abs(errors)))
 
-    record(SARIMA, "MAE", naive_mae, arima_mae)
+    record(SARIMA, "MAE", naive_mae, search(label, SARIMA, arima_mae))
     errors, residuals, _ = arima_one_step(own, tuned[SARIMA], folds)
+    fold_errors = np.concatenate([run_on for _, run_on in residuals])
     reference = pinball_loss(
-        np.concatenate([run_on for _, run_on in residuals]),
+        fold_errors,
         np.vstack([constant_quantiles(fit_on, run_on) for fit_on, run_on in residuals]),
     )
     for model in VOLATILITY_SPECS:
@@ -614,13 +887,17 @@ def tune_series(
             model,
             "pinball",
             reference,
-            lambda setting, model=model: pinball_loss(
-                np.concatenate([run_on for _, run_on in residuals]),
-                np.vstack(
-                    [
-                        volatility_quantiles(model, setting, fit_on, run_on)
-                        for fit_on, run_on in residuals
-                    ]
+            search(
+                label,
+                model,
+                lambda setting, model=model: pinball_loss(
+                    fold_errors,
+                    np.vstack(
+                        [
+                            volatility_quantiles(model, setting, fit_on, run_on)
+                            for fit_on, run_on in residuals
+                        ]
+                    ),
                 ),
             ),
         )
@@ -628,7 +905,11 @@ def tune_series(
         SARIMAX,
         "MAE",
         naive_mae,
-        lambda setting: arima_mae(tuned[SARIMA], lagged_exog(other, setting["lags"])),
+        search(
+            label,
+            SARIMAX,
+            lambda setting: arima_mae(tuned[SARIMA], lagged_exog(other, setting["lags"])),
+        ),
     )
     # The average forecasts weight x SARIMA's change + (1 - weight) x naive's (none), so its
     # error is (1 - weight) x the change + weight x SARIMA's error.
@@ -636,8 +917,12 @@ def tune_series(
         COMBINATION,
         "MAE",
         naive_mae,
-        lambda setting: float(
-            np.mean(np.abs((1 - setting["weight"]) * tested + setting["weight"] * errors))
+        search(
+            label,
+            COMBINATION,
+            lambda setting: float(
+                np.mean(np.abs((1 - setting["weight"]) * tested + setting["weight"] * errors))
+            ),
         ),
     )
     for kind in (VAR_MODEL, VECM_MODEL):
@@ -645,10 +930,14 @@ def tune_series(
             kind,
             "MAE",
             naive_mae,
-            lambda setting, kind=kind: float(
-                np.mean(
-                    np.abs(system_one_step(levels, kind, setting, target, folds, system_cache))
-                )
+            search(
+                label,
+                kind,
+                lambda setting, kind=kind: float(
+                    np.mean(
+                        np.abs(system_one_step(levels, kind, setting, target, folds, system_cache))
+                    )
+                ),
             ),
         )
     for model in (SMA, EXPONENTIAL):
@@ -656,19 +945,17 @@ def tune_series(
             model,
             "MAE",
             naive_mae,
-            lambda setting, model=model: float(
-                np.mean(np.abs(smoothing_one_step(levels[:, target], model, setting, folds)))
+            search(
+                label,
+                model,
+                lambda setting, model=model: float(
+                    np.mean(np.abs(smoothing_one_step(levels[:, target], model, setting, folds)))
+                ),
             ),
         )
-    for model in ML_MODELS:
-        record(
-            model,
-            "MAE",
-            naive_mae,
-            lambda setting, model=model: float(
-                np.mean(np.abs(ml_one_step(changes, model, setting, target, folds)))
-            ),
-        )
+    for model in LAG_MODELS:
+        search_model = optuna_search if model in OPTUNA_MODELS else ml_search
+        record(model, "MAE", naive_mae, search_model(changes, model, target, folds))
     return tuned, summaries
 
 
@@ -696,9 +983,9 @@ def tuning_report(
         "Hyperparameter tuning: time-aware random search on the training split",
         (
             f"Each model's settings are drawn at random from its search space ({CANDIDATES} "
-            f"per model and series, or all when the space is smaller; seed {SEED}) and scored "
-            f"by {FOLDS} expanding cross-validation folds in time order: each fold is fitted "
-            "on the months before it only and forecasts each of its months one month ahead "
+            f"per model and series, or all when the space is smaller; seed {RANDOM_SEED}) and "
+            f"scored by {FOLDS} expanding cross-validation folds in time order: each fold is "
+            "fitted on the months before it only and forecasts each of its months one month ahead "
             "from the actual past. Point models: mean absolute error (trillions); volatility "
             "models: mean pinball loss of the one-month quantiles. The lowest wins and is "
             "fixed for the evaluation. Search spaces and their reasoning: "
@@ -720,7 +1007,7 @@ def tuning_report(
         )
         for row in rows:
             ratio = row["score"] / row["reference"]
-            tried = f"{row['tried']} of {row['size']}"
+            tried = f"{row['tried']} of {row['size']}" if row["size"] else f"{row['tried']} TPE"
             settings = ", ".join(f"{key}={value}" for key, value in row["best"].items())
             failed = f" ({row['failed']} fits didn't converge)" if row["failed"] else ""
             lines.append(

@@ -6,6 +6,9 @@ arch==8.0.0
 scipy==1.18.1
 scikit-learn==1.9.1
 xgboost==3.4.1
+optuna==5.0.0
+tensorflow==2.21.0
+torch==2.15.0
 kagglehub==1.0.3
 loguru==0.7.3
 typer==0.27.3

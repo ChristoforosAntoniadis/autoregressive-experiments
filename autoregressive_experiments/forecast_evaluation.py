@@ -24,7 +24,9 @@ a simple moving average and exponential smoothing on the levels; the SARIMA + na
 average; SARIMAX: the tuned SARIMA plus the other series' last monthly changes as regressors (for
 forecast months whose regressors aren't known yet, the other series' own SARIMA forecasts stand
 in); lag-feature ML (ml_forecasting): Ridge, Lasso, random forest, XGBoost and k-nearest
-neighbours on the last monthly changes of both series, forecasting recursively. Smoothing, the
+neighbours on the last monthly changes of both series, forecasting recursively; neural
+networks (nn_forecasting): a multilayer perceptron on the same features, forecasting the same
+way. Smoothing, the
 combination, SARIMAX and ML give point forecasts only.
 
 Point accuracy per split, series, model and horizon: MAE, MSE, RMSE (trillions, trillions
@@ -98,7 +100,8 @@ from autoregressive_experiments.features import (
     split_boundaries,
     split_by_time,
 )
-from autoregressive_experiments.ml_forecasting import ML_MODELS, ml_forecaster
+from autoregressive_experiments.ml_forecasting import LAG_MODELS, ML_MODELS, ml_forecaster
+from autoregressive_experiments.nn_forecasting import NN_MODELS
 from autoregressive_experiments.residual_checks import (
     BASELINE,
     MUTED_INK,
@@ -367,7 +370,7 @@ def model_names(tuned: Mapping[str, Mapping[str, Any]]) -> dict[str, str]:
         SMA: f"SMA({tuned[SMA]['window']})",
         EXPONENTIAL: EXPONENTIAL,
         SARIMAX: f"SARIMAX ({lags} exog lag{'' if lags == 1 else 's'})",
-        **{model: model for model in ML_MODELS},
+        **{model: model for model in LAG_MODELS},
     }
 
 
@@ -1999,7 +2002,8 @@ def ml_figure(metrics: pd.DataFrame, selected_by_family: dict[str, dict[str, str
        the selected smoothing model for comparison.
     2. Filled points are significantly different from naive (DM, absolute loss, 5%).
 
-    Palette slots 1-5 go to the five ML models; the SARIMA and the smoothing model are drawn
+    Palette slots 1-5 go to the five ML models and the networks reuse them with dashed lines,
+    named in the legend; the SARIMA and the smoothing model are drawn
     in the secondary and muted greys, as references.
     """
     apply_chart_style()
@@ -2011,19 +2015,34 @@ def ml_figure(metrics: pd.DataFrame, selected_by_family: dict[str, dict[str, str
         facecolor=SURFACE,
     )
     for row, column in enumerate(VALUE_COLUMNS):
-        styles = {name: (color, 2.0) for name, color in zip(ML_MODELS, SERIES_PALETTE)}
-        styles[selected_by_family["SARIMA"][column]] = (SECONDARY_INK, 1.5)
-        styles[selected_by_family["smoothing"][column]] = (MUTED_INK, 1.5)
+        # Five validated colours for six models: past the fifth, the colours repeat dashed.
+        styles = {
+            name: (
+                SERIES_PALETTE[index % len(SERIES_PALETTE)],
+                2.0,
+                "-" if index < len(SERIES_PALETTE) else "--",
+            )
+            for index, name in enumerate(LAG_MODELS)
+        }
+        styles[selected_by_family["SARIMA"][column]] = (SECONDARY_INK, 1.5, "-")
+        styles[selected_by_family["smoothing"][column]] = (MUTED_INK, 1.5, "-")
         for split, axis in zip(SPLITS, axes[row]):
             axis.set_facecolor(SURFACE)
             split_metrics = metrics[(metrics["series"] == column) & (metrics["split"] == split)]
             naive_mase = split_metrics[split_metrics["model"] == NAIVE].set_index("horizon")[
                 "MASE"
             ]
-            for name, (color, width) in styles.items():
+            for name, (color, width, dashes) in styles.items():
                 model_metrics = split_metrics[split_metrics["model"] == name].set_index("horizon")
                 relative = model_metrics["MASE"] / naive_mase
-                axis.plot(relative.index, relative, color=color, linewidth=width, label=name)
+                axis.plot(
+                    relative.index,
+                    relative,
+                    color=color,
+                    linewidth=width,
+                    linestyle=dashes,
+                    label=name,
+                )
                 # Filled: significantly different from naive (DM, absolute loss); hollow: not.
                 significant = model_metrics["DM_absolute_p"] < SIGNIFICANCE_LEVEL
                 for filled, face in ((significant, color), (~significant, SURFACE)):
@@ -2041,7 +2060,7 @@ def ml_figure(metrics: pd.DataFrame, selected_by_family: dict[str, dict[str, str
             axis.set_xlabel("Horizon (months)")
             axis.set_ylabel("MAE relative to naive")
             axis.set_title(
-                f"{series_title(column)}, {split}: each tuned ML model\n"
+                f"{series_title(column)}, {split}: each tuned ML model and network\n"
                 "vs the SARIMA and the smoothing pick; below 1: more accurate than naive\n"
                 "filled point: significantly different from naive (Diebold-Mariano, 5%)",
                 loc="left",
@@ -2175,7 +2194,7 @@ def main(
                     target,
                     ml_fits,
                 )
-                for model in ML_MODELS
+                for model in LAG_MODELS
             }
             forecasts = rolling_forecasts(
                 dates,
@@ -2211,6 +2230,7 @@ def main(
         "smoothing": (SMA, EXPONENTIAL),
         "SARIMAX": (SARIMAX,),
         "ML": ML_MODELS,
+        "neural network": NN_MODELS,
     }
     validation_one_month = metrics[
         (metrics["split"] == "validation") & (metrics["horizon"] == 1)

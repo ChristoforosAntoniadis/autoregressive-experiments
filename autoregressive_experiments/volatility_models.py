@@ -43,6 +43,7 @@ from autoregressive_experiments.config import (
     REPORTS_DIR,
 )
 from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
+from autoregressive_experiments.configs.configurables import RANDOM_SEED
 from autoregressive_experiments.diagnostics import (
     CANDIDATES_PATH,
     SIGNIFICANCE_LEVEL,
@@ -97,15 +98,13 @@ ASYMMETRIC_MODELS: dict[str, dict[str, Any]] = {
     GJR_T: {"vol": "GARCH", "p": 1, "o": 1, "q": 1, "dist": "t"},
 }
 # Settings; each value's reasoning is in configs/hyperparameters.json.
-# EGARCH has no closed-form multi-step variance forecast, so it is simulated, with a fixed
-# seed so every rerun gives identical numbers.
+# EGARCH has no closed-form multi-step variance forecast, so it is simulated, seeded with
+# RANDOM_SEED so every rerun gives identical numbers.
 SIMULATIONS = HYPERPARAMETERS.volatility_models.simulations
-SIMULATION_SEED = HYPERPARAMETERS.volatility_models.simulation_seed
 # Parametric bootstrap of the standardized-residual checks (Davison & Hinkley 1997, ch. 4): the
 # chi-squared tables don't hold for residuals standardized by a fitted variance model (Li & Mak
 # 1994), so each model's own simulations give the null distribution.
 BOOTSTRAP_REPLICATIONS = HYPERPARAMETERS.volatility_models.bootstrap_replications
-BOOTSTRAP_SEED = HYPERPARAMETERS.volatility_models.bootstrap_seed
 # Months simulated and dropped before each bootstrap series, so it starts from the model's
 # stationary distribution, not arch's starting value.
 BURN_IN = HYPERPARAMETERS.volatility_models.burn_in
@@ -392,7 +391,7 @@ def variance_forecast(
        by simulation (EGARCH works on log variance, so its multi-step forecast has no closed
        form). The simulation uses SIMULATIONS paths whose standardized shocks are drawn by
        inverting the fitted error distribution at uniforms from a generator seeded with
-       SIMULATION_SEED, created afresh at each call, so the same inputs always give the
+       RANDOM_SEED, created afresh at each call, so the same inputs always give the
        same path.
     4. Undo arch's rescaling (divide by c^2) and multiply by the latest regime's scale
        squared, so the forecasts are in trillions squared and assume the post-break regime
@@ -412,7 +411,7 @@ def variance_forecast(
     options: dict[str, Any] = {}
     # One step ahead, EGARCH's variance is known exactly from the fit, so analytic is fine.
     if spec["vol"] == "EGARCH" and steps > 1:
-        generator = np.random.default_rng(SIMULATION_SEED)
+        generator = np.random.default_rng(RANDOM_SEED)
         options = {
             "method": "simulation",
             "simulations": SIMULATIONS,
@@ -593,10 +592,10 @@ def bootstrap_checks(
     autocorrelation left in its own standardized residuals, which the chi-squared tables
     ignore. The SARIMA mean model stays fixed: estimating an ARMA mean doesn't change the
     large-sample distribution of squared-residual autocorrelations (McLeod & Li 1983). A new
-    generator seeded with BOOTSTRAP_SEED per call makes every model's p-values reproducible,
+    generator seeded with RANDOM_SEED per call makes every model's p-values reproducible,
     whatever order the models are checked in.
     """
-    generator = np.random.default_rng(BOOTSTRAP_SEED)
+    generator = np.random.default_rng(RANDOM_SEED)
     observed = check_statistics(np.asarray(candidate["fit"].std_resid))
     simulated = np.empty((replications, observed.size))
     failed = 0

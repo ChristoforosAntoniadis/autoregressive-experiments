@@ -90,17 +90,9 @@
       "value": 2000,
       "reasoning": "EGARCH's multi-step variance has no closed form and is simulated. A variance estimated from 2,000 draws has a relative Monte Carlo error of about sqrt(2 / 2000) = 3% (normal shocks), small next to the forecast spread itself."
     },
-    "simulation_seed": {
-      "value": 0,
-      "reasoning": "Fixed so every rerun gives identical numbers; the value itself carries no meaning."
-    },
     "bootstrap_replications": {
       "value": 999,
       "reasoning": "Davison and Hinkley (1997, ch. 4): with 999 replications 0.05 x (999 + 1) = 50 simulated statistics lie in the tail, so the 5% test is exact, and the Monte Carlo error at p = 0.05 is sqrt(0.05 x 0.95 / 999) = 0.007."
-    },
-    "bootstrap_seed": {
-      "value": 0,
-      "reasoning": "Fixed so every rerun gives identical p-values; the value itself carries no meaning."
     },
     "burn_in": {
       "value": 500,
@@ -187,10 +179,6 @@
     "candidates": {
       "value": 60,
       "reasoning": "Random search (Bergstra and Bengio 2012): if the best 5% of a space counts as good, 60 independent draws include at least one of them with probability 1 - 0.95^60 = 0.954, however many settings the space has. Spaces with 60 or fewer settings are searched in full."
-    },
-    "seed": {
-      "value": 0,
-      "reasoning": "Fixed so every rerun draws the same candidates; the value itself carries no meaning."
     },
     "sarima": {
       "value": {
@@ -286,7 +274,7 @@
         "max_samples": [null, 0.5, 0.7, 0.9],
         "ccp_alpha": [0.0, 0.001, 0.01]
       },
-      "reasoning": "Every setting of scikit-learn's RandomForestRegressor that changes the fitted forest. Trees: 100 to 1000 (gains flatten after a few hundred; Probst and Boulesteix 2018). criterion: the three regression losses that accept negative targets (Poisson needs non-negative ones, and the target is a monthly change). max_depth, min_samples_split, min_samples_leaf, max_leaf_nodes, min_impurity_decrease and ccp_alpha all limit tree size, from fully grown (scikit-learn's defaults) to a few splits, since 50 to 160 training rows support only small trees; the last two are in units of the standardized target's variance (1). max_features: all features (the regression default) down to 30%, the decorrelation Breiman (2001) recommends. bootstrap is fixed on, since max_samples (half the rows to all) needs it. min_weight_fraction_leaf is fixed at 0: with unweighted rows it only repeats min_samples_leaf. Not searched: verbose, warm_start and oob_score don't change the forest; n_jobs is fixed at 1 so reruns are identical to the last bit (with several threads the trees' predictions are summed in a varying order); random_state is random_seed below. Lags as for Ridge."
+      "reasoning": "Every setting of scikit-learn's RandomForestRegressor that changes the fitted forest. Trees: 100 to 1000 (gains flatten after a few hundred; Probst and Boulesteix 2018). criterion: the three regression losses that accept negative targets (Poisson needs non-negative ones, and the target is a monthly change). max_depth, min_samples_split, min_samples_leaf, max_leaf_nodes, min_impurity_decrease and ccp_alpha all limit tree size, from fully grown (scikit-learn's defaults) to a few splits, since 50 to 160 training rows support only small trees; the last two are in units of the standardized target's variance (1). max_features: all features (the regression default) down to 30%, the decorrelation Breiman (2001) recommends. bootstrap is fixed on, since max_samples (half the rows to all) needs it. min_weight_fraction_leaf is fixed at 0: with unweighted rows it only repeats min_samples_leaf. Not searched: verbose, warm_start and oob_score don't change the forest; n_jobs is fixed at 1 so reruns are identical to the last bit (with several threads the trees' predictions are summed in a varying order); random_state is the project's RANDOM_SEED. Lags as for Ridge."
     },
     "xgboost": {
       "value": {
@@ -301,7 +289,7 @@
         "reg_alpha": [0.0, 0.01, 0.1, 1.0],
         "reg_lambda": [0.1, 1.0, 5.0, 10.0]
       },
-      "reasoning": "XGBoost's tree-boosting settings. Learning rate from XGBoost's default 0.3 down to 0.01, the small steps Friedman (2001) recommends, against 100 to 1000 trees so slow learning gets enough of them. max_depth 2 to 6 (6 is the default; shallow trees suit 50 to 160 rows). min_child_weight counts rows here, since squared-error loss has a Hessian of 1 per row. subsample and colsample_bytree from half to all: stochastic gradient boosting (Friedman 2002). gamma, reg_alpha and reg_lambda are in units of the standardized target: from no pruning or shrinkage to strong, with the default lambda of 1 inside. Not searched: tree_method stays XGBoost's default 'hist', the objective squared error (the evaluation scores errors); n_jobs and verbosity don't change the model; random_state is random_seed below. Lags as for Ridge."
+      "reasoning": "XGBoost's tree-boosting settings. Learning rate from XGBoost's default 0.3 down to 0.01, the small steps Friedman (2001) recommends, against 100 to 1000 trees so slow learning gets enough of them. max_depth 2 to 6 (6 is the default; shallow trees suit 50 to 160 rows). min_child_weight counts rows here, since squared-error loss has a Hessian of 1 per row. subsample and colsample_bytree from half to all: stochastic gradient boosting (Friedman 2002). gamma, reg_alpha and reg_lambda are in units of the standardized target: from no pruning or shrinkage to strong, with the default lambda of 1 inside. Not searched: tree_method stays XGBoost's default 'hist', the objective squared error (the evaluation scores errors); n_jobs and verbosity don't change the model; random_state is the project's RANDOM_SEED. Lags as for Ridge."
     },
     "knn": {
       "value": {
@@ -311,10 +299,93 @@
         "p": [1, 2]
       },
       "reasoning": "Standardized features, so every lag counts equally in the distance. Neighbours from 1 (memorizes the training rows) to 30, over half of the smallest fold's 53 training rows, where predictions approach the average change. Equal or inverse-distance weights; Manhattan (p = 1) or Euclidean (p = 2) distance. Lags as for Ridge. 288 settings, 60 drawn."
+    }
+  },
+  "nn": {
+    "mlp": {
+      "value": {
+        "lags": [1, 2, 3, 4, 5, 6, 7, 8],
+        "hidden_layer_sizes": [[4], [8], [16], [32], [8, 4], [16, 8], [32, 16]],
+        "activation": ["relu", "tanh"],
+        "solver": ["lbfgs", "adam"],
+        "alpha": [1e-05, 0.0001, 0.001, 0.01, 0.1, 1.0, 10.0],
+        "learning_rate_init": [0.0001, 0.001, 0.01],
+        "max_iter": [5000],
+        "early_stopping": [false, true]
+      },
+      "reasoning": "scikit-learn's MLPRegressor, a feed-forward network on the same lag features. Hidden layers: one or two, 4 to 32 units; with 50 to 160 training rows and up to 16 inputs, a 32-unit layer already has more weights (577) than rows, so the L2 penalty alpha (standardized target, from almost none to strong) must be able to rein it in. Activations: ReLU (the default) or tanh. Solvers: L-BFGS, which scikit-learn recommends for small datasets, or Adam (the default), with initial learning rates around Adam's default of 0.001 (Kingma and Ba 2015; used by Adam only). max_iter is a cap, fixed high so fits end by convergence rather than by the cap. early_stopping off or on (Adam only), and the time-ordered cross-validation decides: scikit-learn's version holds out a random 10% of the training rows (its fit takes no holdout of its own), so a held-out month sits between training months and its error flatters the fit; it never sees the fold being scored, so it can't leak, but whether it stops at a useful point is an empirical question. Not searched: batch_size stays 'auto', min(200, rows), so every fit here uses all its rows at once and shuffle has no effect; learning_rate, momentum, nesterovs_momentum and power_t apply to the SGD solver only, which isn't used; beta_1, beta_2 and epsilon keep Adam's published defaults; tol, n_iter_no_change and max_fun keep scikit-learn's convergence defaults; random_state is the project's RANDOM_SEED. Lags as for Ridge. 9,408 settings, 60 drawn."
     },
-    "random_seed": {
-      "value": 0,
-      "reasoning": "Fixed so every rerun gives identical forests and boosted trees; the value itself carries no meaning."
+    "numpy_a1": {
+      "value": {
+        "lags": [1, 2, 3, 4, 5, 6, 7, 8],
+        "hidden_units": [4, 8, 16, 32],
+        "optimizer": ["sgd", "momentum", "adabelief", "muon"],
+        "learning_rate": [0.1, 0.001],
+        "use_bias": [false, true],
+        "dropout": [0.0, 0.1, 0.2, 0.3],
+        "batch_size": [8, 16, 32],
+        "epochs": [100],
+        "patience": [10],
+        "min_delta": [0.0001],
+        "min_epochs": [20],
+        "validation_share": [0.25]
+      },
+      "reasoning": "A1, written by hand in NumPy (nn_forecasting): one hidden layer of sigmoid units and a linear output unit, no biases, weights from N(0, 0.1^2), mean squared error. Optimizers, learning rates, epochs and early stopping are the original networks' own: SGD, momentum SGD (beta 0.9), AdaBelief (Zhuang et al. 2020; 0.9, 0.999, 1e-8) and Muon (Jordan et al. 2024; momentum 0.95, Nesterov, 5 Newton-Schulz steps), each at 0.1 or 0.001, for at most 100 epochs, stopping after 10 epochs without a holdout improvement of 0.0001, never before epoch 20. Biases (off as in the original A1 and A2, or on every layer, starting at 0, as in its A2-bias variant; with Muon they get AdaBelief, as in the original) and dropout after every hidden layer (0, 0.1, 0.2 or 0.3: none up to the original Optuna tuning's ceiling, with the 0.2 of its A1-dropout variant inside; inverted dropout, masks seeded with RANDOM_SEED + 1 as in the original) are searched, so cross-validation decides whether either helps. The width and the batch size differ from the original, since this data is far smaller (2 to 16 inputs, 40 to 200 training rows per fit): hidden_units 4 to 32, the original's 32 the widest; batch_size 8, 16 (the original's smaller size) or 32, all below the smallest fit's 40 training rows, where the original's 64 would leave one batch per epoch. validation_share: the holdout that decides when to stop is the last 25% of each fit's rows, in time order, mirroring the project's 20:60 validation-to-train ratio as the original's separate validation split did; a random holdout would let later months decide for earlier ones. Features and target are standardized inside every fit. Lags as for Ridge. 6,144 settings, 60 drawn."
+    },
+    "numpy_a2": {
+      "value": {
+        "lags": [1, 2, 3, 4, 5, 6, 7, 8],
+        "hidden_units": [4, 8, 16, 32],
+        "optimizer": ["sgd", "momentum", "adabelief", "muon"],
+        "learning_rate": [0.1, 0.001],
+        "use_bias": [false, true],
+        "dropout": [0.0, 0.1, 0.2, 0.3],
+        "batch_size": [8, 16, 32],
+        "epochs": [100],
+        "patience": [10],
+        "min_delta": [0.0001],
+        "min_epochs": [20],
+        "validation_share": [0.25]
+      },
+      "reasoning": "A2, written by hand in NumPy (nn_forecasting): three hidden layers of ReLU units and a linear output unit, no biases, weights from N(0, 0.1^2), mean squared error. Optimizers, learning rates, epochs and early stopping are the original networks' own: SGD, momentum SGD (beta 0.9), AdaBelief (Zhuang et al. 2020; 0.9, 0.999, 1e-8) and Muon (Jordan et al. 2024; momentum 0.95, Nesterov, 5 Newton-Schulz steps), each at 0.1 or 0.001, for at most 100 epochs, stopping after 10 epochs without a holdout improvement of 0.0001, never before epoch 20. Biases (off as in the original A1 and A2, or on every layer, starting at 0, as in its A2-bias variant; with Muon they get AdaBelief, as in the original) and dropout after every hidden layer (0, 0.1, 0.2 or 0.3: none up to the original Optuna tuning's ceiling, with the 0.2 of its A1-dropout variant inside; inverted dropout, masks seeded with RANDOM_SEED + 1 as in the original) are searched, so cross-validation decides whether either helps. The width and the batch size differ from the original, since this data is far smaller (2 to 16 inputs, 40 to 200 training rows per fit): hidden_units 4 to 32, the original's 32 the widest; batch_size 8, 16 (the original's smaller size) or 32, all below the smallest fit's 40 training rows, where the original's 64 would leave one batch per epoch. validation_share: the holdout that decides when to stop is the last 25% of each fit's rows, in time order, mirroring the project's 20:60 validation-to-train ratio as the original's separate validation split did; a random holdout would let later months decide for earlier ones. Features and target are standardized inside every fit. Lags as for Ridge. 6,144 settings, 60 drawn."
+    },
+    "tensorflow_mlp": {
+      "value": {
+        "lags": [1, 2, 3, 4, 5, 6, 7, 8],
+        "architecture": ["A1", "A2"],
+        "hidden_units": [4, 8, 16, 32],
+        "use_bias": [false, true],
+        "optimizer": ["sgd", "momentum", "adam", "muon"],
+        "learning_rate": {"low": 0.0001, "high": 0.3, "log": true},
+        "weight_decay": {"low": 1e-06, "high": 0.01, "log": true},
+        "dropout": {"low": 0.0, "high": 0.3, "log": false},
+        "batch_size": [8, 16, 32],
+        "epochs": [100],
+        "patience": [10],
+        "min_delta": [0.0001],
+        "min_epochs": [20],
+        "validation_share": [0.25]
+      },
+      "reasoning": "The TensorFlow (Keras) multilayer perceptron (nn_forecasting). Layers as A1 (one sigmoid hidden layer) or A2 (three ReLU hidden layers) and a linear output unit, with no biases (as in the original A1 and A2) or biases on every layer (as in its A2-bias variant), searched so cross-validation decides; and the framework's own defaults for everything else, as in the neural-network-numpy project's Keras networks. Searched by Optuna's TPE sampler (seed RANDOM_SEED, 60 trials one after another, no pruning), over the same space as that project's tuning: optimizer SGD, momentum SGD (0.9), Adam (in place of AdaBelief, which Keras doesn't ship) or Muon; learning rate 0.0001 to 0.3 and weight decay 0.000001 to 0.01 on a log scale; dropout after every hidden layer, 0 to 0.3. Width 4 to 32 and batch size 8, 16 or 32 as for the NumPy networks, since this data has 2 to 16 inputs and 40 to 200 training rows per fit. Trained by a compiled TensorFlow loop (tf.function) rather than Keras's fit(), whose fixed cost per epoch dominated on this little data (about 8 s per fit instead of about 2 s); the training itself is the same as the NumPy networks': at most 100 epochs, early stopping after 10 epochs without a holdout improvement of 0.0001, never before epoch 20, keeping the best weights; the holdout is the last 25% of each fit's rows in time order. Features and target are standardized inside every fit. Lags as for Ridge."
+    },
+    "pytorch_mlp": {
+      "value": {
+        "lags": [1, 2, 3, 4, 5, 6, 7, 8],
+        "architecture": ["A1", "A2"],
+        "hidden_units": [4, 8, 16, 32],
+        "use_bias": [false, true],
+        "optimizer": ["sgd", "momentum", "adam", "muon"],
+        "learning_rate": {"low": 0.0001, "high": 0.3, "log": true},
+        "weight_decay": {"low": 1e-06, "high": 0.01, "log": true},
+        "dropout": {"low": 0.0, "high": 0.3, "log": false},
+        "batch_size": [8, 16, 32],
+        "epochs": [100],
+        "patience": [10],
+        "min_delta": [0.0001],
+        "min_epochs": [20],
+        "validation_share": [0.25]
+      },
+      "reasoning": "The PyTorch multilayer perceptron (nn_forecasting). Layers as A1 (one sigmoid hidden layer) or A2 (three ReLU hidden layers) and a linear output unit, with no biases (as in the original A1 and A2) or biases on every layer (as in its A2-bias variant), searched so cross-validation decides; and the framework's own defaults for everything else, as in the neural-network-numpy project's PyTorch networks. Searched by Optuna's TPE sampler (seed RANDOM_SEED, 60 trials one after another, no pruning), over the same space as that project's tuning: optimizer SGD, momentum SGD (0.9), Adam (in place of AdaBelief, which PyTorch doesn't ship) or Muon; learning rate 0.0001 to 0.3 and weight decay 0.000001 to 0.01 on a log scale; dropout after every hidden layer, 0 to 0.3. Width 4 to 32 and batch size 8, 16 or 32 as for the NumPy networks, since this data has 2 to 16 inputs and 40 to 200 training rows per fit. Training as the NumPy networks: at most 100 epochs, early stopping after 10 epochs without a holdout improvement of 0.0001, never before epoch 20, keeping the best weights; the holdout is the last 25% of each fit's rows in time order. Features and target are standardized inside every fit. Lags as for Ridge."
     }
   }
 }
