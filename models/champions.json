@@ -1,136 +1,145 @@
 {
   "fed_total_assets_T": {
     "econometric": {
-      "model": "exponential smoothing",
+      "model": "SARIMAX",
       "settings": {
-        "trend": "add",
-        "damped_trend": true,
-        "seasonal": null,
-        "use_boxcox": true,
-        "initialization_method": "heuristic"
+        "outliers": "clip",
+        "lags": 1
       },
-      "validation_mean_MASE": 15.56395869094084,
+      "validation_mean_MASE": 15.352815280943052,
       "validation_MASE": {
-        "1": 3.0801158289488955,
-        "3": 7.463533753026394,
-        "6": 15.371670753581464,
-        "9": 22.010752853947228,
-        "12": 29.893720265200212
+        "1": 2.8877674383675016,
+        "3": 7.68032458441112,
+        "6": 15.263158232906642,
+        "9": 21.49237630176639,
+        "12": 29.4404498472636
       }
     },
     "machine learning": {
       "model": "XGBoost",
       "settings": {
-        "lags": 4,
-        "n_estimators": 800,
+        "outliers": "clip",
+        "loss": "mse",
+        "lags": 7,
+        "n_estimators": 200,
         "learning_rate": 0.05,
-        "max_depth": 2,
-        "min_child_weight": 2,
-        "subsample": 0.85,
-        "colsample_bytree": 1.0,
-        "gamma": 0.5,
+        "max_depth": 3,
+        "min_child_weight": 4,
+        "subsample": 0.5,
+        "colsample_bytree": 0.5,
+        "gamma": 0.0,
         "reg_alpha": 0.1,
-        "reg_lambda": 0.1
+        "reg_lambda": 5.0
       },
-      "validation_mean_MASE": 13.232181962118887,
+      "validation_mean_MASE": 14.123321842207769,
       "validation_MASE": {
-        "1": 3.45648968871055,
-        "3": 9.314547895750184,
-        "6": 10.704114380491609,
-        "9": 16.295038654731485,
-        "12": 26.3907191909106
+        "1": 2.8645148766802144,
+        "3": 7.813911245626212,
+        "6": 14.302069351576767,
+        "9": 19.30072291286821,
+        "12": 26.335390824287447
       }
     },
     "neural network": {
-      "model": "NumPy A1",
+      "model": "LSTM",
       "settings": {
-        "lags": 1,
-        "hidden_units": 32,
-        "optimizer": "adabelief",
-        "learning_rate": 0.1,
+        "outliers": "none",
+        "loss": "mse",
+        "lags": 3,
+        "hidden_units": 16,
+        "layers": 2,
+        "dropout": 0.023788792870816335,
+        "optimizer": "sgd",
+        "learning_rate": 0.23456714042857235,
+        "weight_decay": 0.0011363399306360876,
+        "batch_size": 8,
         "use_bias": true,
-        "dropout": 0.1,
-        "batch_size": 32,
         "epochs": 100,
         "patience": 10,
         "min_delta": 0.0001,
         "min_epochs": 20,
         "validation_share": 0.25
       },
-      "validation_mean_MASE": 13.068884674539792,
+      "validation_mean_MASE": 13.474676859592899,
       "validation_MASE": {
-        "1": 3.5586080537153832,
-        "3": 8.899935351456293,
-        "6": 12.58893791890151,
-        "9": 17.474396024465257,
-        "12": 22.822546024160513
+        "1": 3.4415838570461954,
+        "3": 9.146916646448606,
+        "6": 13.20605734273161,
+        "9": 17.786617235617292,
+        "12": 23.792209216120785
       }
     }
   },
   "monetary_base_T": {
     "econometric": {
-      "model": "VECM",
+      "model": "SARIMAX",
       "settings": {
-        "lags": 2,
-        "deterministic": "ci"
+        "outliers": "dummies",
+        "lags": 6
       },
-      "validation_mean_MASE": 9.186682033831987,
+      "validation_mean_MASE": 8.703081662497276,
       "validation_MASE": {
-        "1": 2.517788692999046,
-        "3": 5.009265717238097,
-        "6": 10.400133783908656,
-        "9": 11.587828247380678,
-        "12": 16.418393727633458
+        "1": 2.3938375605053714,
+        "3": 5.414554148929337,
+        "6": 9.940887496476243,
+        "9": 10.483743857380004,
+        "12": 15.282385249195421
       }
     },
     "machine learning": {
-      "model": "XGBoost",
+      "model": "random forest",
       "settings": {
-        "lags": 4,
-        "n_estimators": 800,
-        "learning_rate": 0.05,
-        "max_depth": 2,
-        "min_child_weight": 2,
-        "subsample": 0.85,
-        "colsample_bytree": 1.0,
-        "gamma": 0.5,
-        "reg_alpha": 0.1,
-        "reg_lambda": 0.1
+        "outliers": "none",
+        "lags": 1,
+        "n_estimators": 100,
+        "criterion": "squared_error",
+        "max_depth": 5,
+        "min_samples_split": 20,
+        "min_samples_leaf": 4,
+        "min_weight_fraction_leaf": 0.0,
+        "max_features": 1.0,
+        "max_leaf_nodes": null,
+        "min_impurity_decrease": 0.0,
+        "bootstrap": true,
+        "max_samples": null,
+        "ccp_alpha": 0.001
       },
-      "validation_mean_MASE": 8.168100936708914,
+      "validation_mean_MASE": 7.669058936914565,
       "validation_MASE": {
-        "1": 2.326764552210226,
-        "3": 6.362380114827578,
-        "6": 7.918249543235855,
-        "9": 9.78880693657304,
-        "12": 14.444303536697873
+        "1": 2.76428775359418,
+        "3": 5.468705770085184,
+        "6": 8.376291310252556,
+        "9": 8.944811969099785,
+        "12": 12.791197881541121
       }
     },
     "neural network": {
-      "model": "PyTorch MLP",
+      "model": "GRU",
       "settings": {
-        "lags": 5,
-        "architecture": "A1",
-        "hidden_units": 32,
+        "outliers": "none",
+        "loss": "mse",
+        "lags": 6,
+        "hidden_units": 4,
+        "layers": 2,
+        "dropout": 0.14556544248262065,
+        "optimizer": "sgd",
+        "learning_rate": 0.1878057604286291,
+        "weight_decay": 0.003375528947096233,
+        "batch_size": 32,
         "use_bias": false,
-        "optimizer": "muon",
-        "learning_rate": 0.04641071739310981,
-        "weight_decay": 9.147831760537897e-06,
-        "dropout": 0.05089284642519271,
-        "batch_size": 16,
         "epochs": 100,
         "patience": 10,
         "min_delta": 0.0001,
         "min_epochs": 20,
         "validation_share": 0.25
       },
-      "validation_mean_MASE": 6.976857569124642,
+      "validation_mean_MASE": 7.6969697652097695,
       "validation_MASE": {
-        "1": 2.8199877318125255,
-        "3": 5.238933305584336,
-        "6": 6.798249867329938,
-        "9": 7.859034447418188,
-        "12": 12.168082493478227
+        "1": 3.1493428608841123,
+        "3": 5.774488575397849,
+        "6": 8.548106540140898,
+        "9": 8.482395908116407,
+        "12": 12.530514941509578
       }
     }
   }

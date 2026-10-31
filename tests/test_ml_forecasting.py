@@ -126,6 +126,55 @@ def test_recursive_forecast_lets_each_series_use_its_own_lags() -> None:
     assert path.tolist() == [[2.5, 20.0], [3.5, 20.0]]
 
 
+class Overflowing:
+    """A stand-in model whose prediction fails as a scaler does on an infinite value."""
+
+    def __init__(self, message: str) -> None:
+        """
+        Remember the error to raise.
+
+        Parameters
+        ----------
+        message : str
+            The ValueError's message.
+        """
+        self.message = message
+
+    def predict(self, row: np.ndarray) -> np.ndarray:
+        """
+        Fail with the stored message.
+
+        Parameters
+        ----------
+        row : np.ndarray
+            Ignored.
+
+        Returns
+        -------
+        np.ndarray
+            Never; always raises.
+
+        Raises
+        ------
+        ValueError
+            Always, with the stored message.
+        """
+        raise ValueError(self.message)
+
+
+def test_an_overflowing_recursion_gives_no_forecast_but_other_errors_still_raise() -> None:
+    """A prediction that overflows to infinity makes the whole path NaN (no usable forecast);
+    any other ValueError still stops the run."""
+    changes = np.array([[1.0, 1.0], [2.0, 2.0]])
+    overflow = Overflowing("Input contains infinity or a value too large for dtype('float64').")
+
+    path = recursive_forecast([(LinearRule([1.0, 0.0]), 1), (overflow, 1)], changes, 3)
+
+    assert path.shape == (3, 2) and np.isnan(path).all()
+    with pytest.raises(ValueError, match="shapes"):
+        recursive_forecast([(Overflowing("shapes do not match"), 1)], changes, 3)
+
+
 def test_ridge_recovers_the_simulated_rule() -> None:
     """On 400 simulated months with one lag and no penalty, Ridge's one-month predictions follow
     the true rule (y' = 0.8 x, x' = 0.5 x) within the noise, in the data's own units although

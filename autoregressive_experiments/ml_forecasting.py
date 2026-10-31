@@ -243,6 +243,10 @@ def recursive_forecast(
     The row layout matches lag_features exactly, so each model sees inputs arranged as in
     training; from the second month on they include forecast changes, never actual future ones.
     The series' models may use different lag counts, since each was tuned on its own series.
+
+    A model whose forecasts grow without bound (a diverged network fed its own output) can
+    overflow to infinity, which the target scaler refuses; such a model has no usable forecast,
+    so the whole path is NaN and the tuning ranks the setting last.
     """
     history = list(changes)
     path = []
@@ -252,7 +256,12 @@ def recursive_forecast(
             recent = np.array(history[-lags:])
             # Each series' last `lags` changes, most recent first, series after series.
             row = recent[::-1].T.reshape(1, -1)
-            step.append(float(fitted.predict(row)[0]))
+            try:
+                step.append(float(fitted.predict(row)[0]))
+            except ValueError as error:
+                if "infinity" not in str(error) and "NaN" not in str(error):
+                    raise
+                return np.full((steps, len(models)), np.nan)
         history.append(np.array(step))
         path.append(step)
     return np.array(path)
