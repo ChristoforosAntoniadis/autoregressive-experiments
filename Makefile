@@ -76,6 +76,12 @@ asymmetric-garch: export MPLBACKEND = Agg
 asymmetric-garch:
 	$(PYTHON_INTERPRETER) -m $(PACKAGE).asymmetric_garch
 
+## Flag unusual monthly changes in the train and validation history (no plot windows)
+.PHONY: outliers
+outliers: export MPLBACKEND = Agg
+outliers:
+	$(PYTHON_INTERPRETER) -m $(PACKAGE).outliers
+
 ## Tune every model on validation and choose each family's champion (no plot windows)
 .PHONY: tune
 tune: export MPLBACKEND = Agg
@@ -108,7 +114,7 @@ var-analysis:
 
 ## Run the whole pipeline: features, plots, univariate steps, VAR steps, tuning, evaluation
 .PHONY: all
-all: features plots diagnostics residuals volatility garch asymmetric-garch var var-checks var-analysis tune evaluate
+all: features plots diagnostics residuals volatility garch asymmetric-garch var var-checks var-analysis outliers tune evaluate
 
 ## Run the test suite
 .PHONY: test

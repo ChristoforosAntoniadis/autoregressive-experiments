@@ -254,6 +254,18 @@ SPACES: dict[str, frozenset[str]] = {
         }
     ),
 }
+# Every model but the SARIMA + naive average (which inherits its SARIMA's) chooses its outlier
+# handling; the models trained by gradient steps also choose their loss.
+LOSS_MODELS = frozenset(
+    {"xgboost", "numpy_a1", "numpy_a2", "tensorflow_mlp", "pytorch_mlp"}
+    | {"lstm", "gru", "tcn", "nbeats", "dlinear"}
+)
+SPACES = {
+    name: keys
+    | ({"outliers"} if name != "combination" else set())
+    | ({"loss"} if name in LOSS_MODELS else set())
+    for name, keys in SPACES.items()
+}
 
 
 def setting(check: Callable[[Any], bool], rule: str) -> Any:
@@ -613,6 +625,27 @@ class VarAnalysisSettings:
 
 
 @dataclass(frozen=True)
+class OutlierSettings:
+    """
+    Settings of outliers.py: detecting unusual monthly changes and the robust loss.
+
+    Attributes
+    ----------
+    half_width : int
+        Months on each side of a change in its rolling window.
+    threshold : float
+        Robust standard deviations from the rolling median beyond which a change is flagged.
+    huber_delta : float
+        Where the Huber loss turns from squared to absolute, in standard deviations of the
+        standardized target.
+    """
+
+    half_width: int = setting(lambda v: v >= 1, "at least 1")
+    threshold: float = setting(lambda v: v > 0, "positive")
+    huber_delta: float = setting(lambda v: v > 0, "positive")
+
+
+@dataclass(frozen=True)
 class ForecastEvaluationSettings:
     """
     The out-of-sample evaluation (forecast_evaluation.py).
@@ -740,7 +773,7 @@ class Hyperparameters:
     Attributes
     ----------
     split, tests, diagnostics, residual_checks, volatility_checks, volatility_models,
-    var_diagnostics, var_models, var_analysis, forecast_evaluation, tuning, ml, nn,
+    var_diagnostics, var_models, var_analysis, outliers, forecast_evaluation, tuning, ml, nn,
     ready_made
         The sections, in pipeline order; see each class.
     """
@@ -754,6 +787,7 @@ class Hyperparameters:
     var_diagnostics: VarDiagnosticsSettings
     var_models: VarModelSettings
     var_analysis: VarAnalysisSettings
+    outliers: OutlierSettings
     forecast_evaluation: ForecastEvaluationSettings
     tuning: TuningSettings
     ml: MlSettings

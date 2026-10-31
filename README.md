@@ -16,6 +16,7 @@ Experiments on autoregressive approaches, from traditional econometrics (SARIMA,
 - **Neural networks:** a multilayer perceptron (scikit-learn's MLPRegressor) and two networks written by hand in NumPy (A1: one sigmoid hidden layer; A2: three ReLU hidden layers; SGD, momentum, AdaBelief or Muon), a TensorFlow (Keras) and a PyTorch multilayer perceptron (A1 or A2), and PyTorch sequence networks (LSTM, GRU, TCN, N-BEATS, DLinear) reading the same lags as a window.
 - **Prophet** on each series' levels, counted with the econometric models.
 - **Forecast comparison (train / validation / test, 60 / 20 / 20 in time order):** every model is fitted on an expanding window from the start of the data and forecasts 1, 3, 6, 9 and 12 months ahead. Its settings are tuned by Optuna on 14 validation origins, one every 4 months, scored by MASE averaged over the five horizons; the best model of each family (econometric, machine learning, neural network) is its champion. The champions and the naive forecast are then refitted at each of the 56 test months and scored once: MAE, MAPE, MASE, MSE and RMSE per horizon, Diebold-Mariano tests against naive, and 80% / 95% bands from the quantiles of each model's own past errors at that horizon (coverage, width, pinball loss); see [`reports/`](reports/).
+- **Outliers:** a Hampel filter flags unusual monthly changes (more than 3 robust standard deviations from the median of their 13-month window), using only the history up to each forecast date. Each model's tuned settings choose whether flagged changes are kept, clipped to the window's bounds, or (SARIMA, SARIMAX) given a pulse regressor, and the gradient-trained models choose between squared-error and Huber loss; validation decides. Forecasts are always scored on every month; the test report adds a labelled sensitivity table without the flagged months.
 
 ## Quickstart
 
@@ -33,6 +34,7 @@ make residuals                    # Ljung-Box / Breusch-Godfrey on the selected 
 make volatility                   # ARCH-LM and a variance-break check on those models -> reports/
 make garch                        # GARCH(1,1) vs constant variance on those models, bootstrap checks (~3 min) -> reports/
 make asymmetric-garch             # EGARCH and GJR-GARCH vs that GARCH, bootstrap checks (~12 min) -> reports/
+make outliers                     # flag unusual monthly changes in the train and validation history -> reports/
 make tune                         # tune every model on validation, choose each family's champion -> models/, reports/
 make evaluate                     # test the champions and naive once: metrics, bands, figures -> reports/
 make var                          # VAR lag order and Johansen cointegration test -> reports/
@@ -62,6 +64,7 @@ python -m autoregressive_experiments.residual_checks
 python -m autoregressive_experiments.volatility_checks
 python -m autoregressive_experiments.volatility_models
 python -m autoregressive_experiments.asymmetric_garch
+python -m autoregressive_experiments.outliers
 python -m autoregressive_experiments.tuning
 python -m autoregressive_experiments.forecast_evaluation
 python -m autoregressive_experiments.var_diagnostics
@@ -107,6 +110,7 @@ autoregressive-experiments/
 │   ├── asymmetric_garch.py      # EGARCH and GJR-GARCH (Student-t), plain or break-adjusted, by BIC
 │   ├── model_forecasts.py       # every model's fit and forecast from the months up to an origin
 │   ├── metrics.py               # MAE / MAPE / MASE / MSE / RMSE, Diebold-Mariano, error-quantile bands
+│   ├── outliers.py              # Hampel detection of unusual changes; clipping and pulse regressors
 │   ├── tuning.py                # Optuna search of every model on validation; each family's champion
 │   ├── forecast_evaluation.py   # the champions and naive on test, once: metrics, bands, figures
 │   ├── ml_forecasting.py        # lag-feature ML: Ridge, Lasso, random forest, XGBoost, KNN
@@ -126,7 +130,7 @@ Every setting (split, test lags, bootstrap size, forecast horizons, every model'
 
 Every make step writes a timestamped log of everything it prints to `logs/run_<date>_<time>_<step>.log` (not committed), with progress lines for long loops and a table of phase timings at the end.
 
-The empty folders hold a `.gitkeep` file so they exist for future use, as in the template. `configs/`, `runlog.py`, `diagnostics.py`, `residual_checks.py`, `volatility_checks.py`, `volatility_models.py`, `asymmetric_garch.py`, `model_forecasts.py`, `metrics.py`, `tuning.py`, `forecast_evaluation.py`, `ml_forecasting.py`, `nn_forecasting.py`, `prophet_forecasting.py`, `var_diagnostics.py`, `var_models.py`, `var_analysis.py` and `tools/` are this project's additions to the template.
+The empty folders hold a `.gitkeep` file so they exist for future use, as in the template. `configs/`, `runlog.py`, `diagnostics.py`, `residual_checks.py`, `volatility_checks.py`, `volatility_models.py`, `asymmetric_garch.py`, `model_forecasts.py`, `metrics.py`, `outliers.py`, `tuning.py`, `forecast_evaluation.py`, `ml_forecasting.py`, `nn_forecasting.py`, `prophet_forecasting.py`, `var_diagnostics.py`, `var_models.py`, `var_analysis.py` and `tools/` are this project's additions to the template.
 
 ## Datasets & attribution
 

@@ -27,6 +27,7 @@ import numpy as np
 from sklearn.base import BaseEstimator, RegressorMixin
 
 from autoregressive_experiments.configs.configurables import RANDOM_SEED
+from autoregressive_experiments.modeling.utilities.network import HUBER_DELTA
 
 # The hidden layers of each architecture: name -> (hidden layers, their activation). The output
 # layer is always one linear unit.
@@ -164,6 +165,9 @@ class TorchNetwork(RegressorMixin, BaseEstimator):
         Epochs before early stopping may act.
     validation_share : float, default=0.25
         Share of the rows, the last ones in time order, held out to decide when to stop.
+    loss : str, default="mse"
+        "mse" or "huber" (torch's HuberLoss with delta HUBER_DELTA), for training and early
+        stopping.
     """
 
     def __init__(
@@ -184,6 +188,7 @@ class TorchNetwork(RegressorMixin, BaseEstimator):
         min_delta: float = 0.0001,
         min_epochs: int = 20,
         validation_share: float = 0.25,
+        loss: str = "mse",
     ) -> None:
         self.architecture = architecture
         self.hidden_units = hidden_units
@@ -201,6 +206,7 @@ class TorchNetwork(RegressorMixin, BaseEstimator):
         self.min_delta = min_delta
         self.min_epochs = min_epochs
         self.validation_share = validation_share
+        self.loss = loss
 
     def build(self, inputs: int) -> Any:
         """
@@ -262,10 +268,10 @@ class TorchNetwork(RegressorMixin, BaseEstimator):
         3. Build the network: for A1 / A2, Linear -> activation (-> dropout) per hidden layer,
            then a one-unit Linear, all with or without biases; otherwise the sequence network
            (sequence_networks.build_sequence_module).
-        4. Each epoch: shuffle the training rows, step the optimizer on each mini-batch's mean
-           squared error, then score the holdout. Stop when it hasn't improved by min_delta
-           for `patience` epochs after min_epochs, or when a loss stops being finite; keep the
-           best holdout epoch's weights.
+        4. Each epoch: shuffle the training rows, step the optimizer on each mini-batch's loss
+           (mean squared error or Huber), then score the holdout. Stop when it hasn't improved
+           by min_delta for `patience` epochs after min_epochs, or when a loss stops being
+           finite; keep the best holdout epoch's weights.
         """
         import torch
         from torch import nn
@@ -289,7 +295,7 @@ class TorchNetwork(RegressorMixin, BaseEstimator):
         optimizer = torch_optimizer(
             self.optimizer, list(model.parameters()), self.learning_rate, self.weight_decay
         )
-        loss_fn = nn.MSELoss()
+        loss_fn = nn.MSELoss() if self.loss == "mse" else nn.HuberLoss(delta=HUBER_DELTA)
         generator = torch.Generator().manual_seed(RANDOM_SEED)
         best_loss, best_state, waited = math.inf, None, 0
         for epoch in range(1, self.epochs + 1):

@@ -16,6 +16,10 @@ champions are chosen from:
 VAR, VECM and the lag-feature models forecast both series together (each series' forecasts feed
 the other's), so they are tuned as one system with one setting; the others model one series.
 
+Every model except naive and the SARIMA + naive average has a tuned "outliers" setting (see
+outliers): its history is fitted as it is, with flagged changes clipped, or (SARIMA, SARIMAX)
+with a pulse regressor per flagged change. The average inherits its SARIMA's setting.
+
 Input: levels and dates handed over by tuning and forecast_evaluation.
 
 Output: forecasts; nothing is written to disk.
@@ -38,6 +42,7 @@ from autoregressive_experiments.diagnostics import (
 from autoregressive_experiments.features import lagged_exog
 from autoregressive_experiments.ml_forecasting import LAG_MODELS, ML_MODELS, ml_forecast
 from autoregressive_experiments.nn_forecasting import NN_MODELS
+from autoregressive_experiments.outliers import CLIP, DUMMIES, NONE, clip_levels, pulse_dummies
 from autoregressive_experiments.prophet_forecasting import PROPHET, prophet_forecast
 from autoregressive_experiments.var_models import VECM_RANK
 
@@ -54,6 +59,24 @@ FAMILIES: dict[str, tuple[str, ...]] = {
 }
 # Models that forecast both series together, tuned as one system with one setting.
 JOINT_MODELS = (VAR_MODEL, VECM_MODEL, *LAG_MODELS)
+
+
+def split_outliers(settings: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    """
+    A model's outlier handling and its other settings.
+
+    Parameters
+    ----------
+    settings : Mapping of str to Any
+        Tuned settings, possibly with an "outliers" entry.
+
+    Returns
+    -------
+    tuple of (str, dict of str to Any)
+        NONE, CLIP or DUMMIES (NONE when the entry is missing), and the settings without it.
+    """
+    options = dict(settings)
+    return options.pop("outliers", NONE), options
 
 
 def sarima_name(settings: Mapping[str, Any]) -> str:
@@ -83,7 +106,7 @@ def sarima_path(settings: Mapping[str, Any], levels: np.ndarray, steps: int) -> 
     Parameters
     ----------
     settings : Mapping of str to Any
-        Orders "p", "q", "P", "Q" and "trend".
+        Orders "p", "q", "P", "Q", "trend" and, optionally, "outliers".
     levels : np.ndarray
         The series' levels up to the origin, shape (months,), trillions.
     steps : int
@@ -93,16 +116,28 @@ def sarima_path(settings: Mapping[str, Any], levels: np.ndarray, steps: int) -> 
     -------
     np.ndarray
         Level forecasts, shape (steps,), trillions.
+
+    Notes
+    -----
+    With "dummies", each flagged change gets a pulse regressor whose future values are zero, so
+    the shock is absorbed by its own coefficient instead of the model's dynamics.
     """
+    mode, _ = split_outliers(settings)
+    if mode == CLIP:
+        levels = clip_levels(levels)
+    changes = np.diff(levels)
+    pulses = pulse_dummies(changes) if mode == DUMMIES else None
     fitted = fit_sarima(
-        pd.Series(np.diff(levels)),
+        pd.Series(changes),
         settings["p"],
         settings["q"],
         settings["P"],
         settings["Q"],
+        exog=pulses,
         trend=settings["trend"],
     )
-    return np.asarray(levels[-1] + np.cumsum(np.asarray(fitted.forecast(steps))))
+    future = None if pulses is None else np.zeros((steps, pulses.shape[1]))
+    return np.asarray(levels[-1] + np.cumsum(np.asarray(fitted.forecast(steps, exog=future))))
 
 
 def sarimax_path(
@@ -118,7 +153,7 @@ def sarimax_path(
     Parameters
     ----------
     settings : Mapping of str to Any
-        {"lags": k}.
+        {"lags": k} and, optionally, "outliers".
     sarima : Sequence of Mapping of str to Any
         Both series' tuned SARIMA settings, in column order.
     history : np.ndarray
@@ -142,14 +177,25 @@ def sarimax_path(
     3. The forecast months' regressors are the other series' actual changes followed by its
        forecast ones; from h = 2 on they include forecasts, never actual future values. No
        same-month regressor, which would be leakage.
+
+    With "clip", both series' histories are clipped before the fit; with "dummies", the own
+    series' flagged changes get pulse regressors next to the lags, zero in the future.
     """
     lags, other = settings["lags"], 1 - column
-    own_changes, other_changes = np.diff(history[:, column]), np.diff(history[:, other])
+    mode, _ = split_outliers(settings)
     planned = np.diff(
         np.concatenate(
             [[history[-1, other]], sarima_path(sarima[other], history[:, other], steps)]
         )
     )
+    fit_history = clip_levels(history) if mode == CLIP else history
+    own_changes, other_changes = np.diff(fit_history[:, column]), np.diff(fit_history[:, other])
+    exog = lagged_exog(other_changes, lags)
+    future = lagged_exog(np.concatenate([other_changes, planned]), lags)[-steps:]
+    pulses = pulse_dummies(own_changes, lags) if mode == DUMMIES else None
+    if pulses is not None:
+        exog = np.column_stack([exog, pulses])
+        future = np.column_stack([future, np.zeros((steps, pulses.shape[1]))])
     own = sarima[column]
     fitted = fit_sarima(
         pd.Series(own_changes[lags:]),
@@ -157,10 +203,9 @@ def sarimax_path(
         own["q"],
         own["P"],
         own["Q"],
-        exog=lagged_exog(other_changes, lags),
+        exog=exog,
         trend=own["trend"],
     )
-    future = lagged_exog(np.concatenate([other_changes, planned]), lags)[-steps:]
     return np.asarray(
         history[-1, column] + np.cumsum(np.asarray(fitted.forecast(steps, exog=future)))
     )
@@ -263,10 +308,18 @@ def joint_paths(
     -------
     np.ndarray
         Level forecasts, shape (steps, 2), trillions.
+
+    Notes
+    -----
+    With "clip" the model is fitted on the clipped history, whose last levels are the actual
+    ones, so the forecasts start from the real latest values.
     """
+    mode, options = split_outliers(settings)
+    if mode == CLIP:
+        history = clip_levels(history)
     if model in (VAR_MODEL, VECM_MODEL):
-        return system_path(model, settings, history, steps)
-    return np.asarray(ml_forecast(model, [settings, settings], history, steps))
+        return system_path(model, options, history, steps)
+    return np.asarray(ml_forecast(model, [options, options], history, steps))
 
 
 def series_path(
@@ -325,10 +378,13 @@ def series_path(
         return np.asarray(
             weight * sarima_path(sarima[column], levels, steps) + (1 - weight) * levels[-1]
         )
-    if model in (SMA, EXPONENTIAL):
-        return smoothing_path(model, settings, levels, steps)
-    if model == PROPHET:
-        return prophet_forecast(dates[: len(levels)], levels, settings, steps)
+    if model in (SMA, EXPONENTIAL, PROPHET):
+        mode, options = split_outliers(settings)
+        if mode == CLIP:
+            levels = clip_levels(levels)
+        if model == PROPHET:
+            return prophet_forecast(dates[: len(levels)], levels, options, steps)
+        return smoothing_path(model, options, levels, steps)
     if model in JOINT_MODELS:
         return joint_paths(model, settings, history, steps)[:, column]
     raise ValueError(f"unknown model {model!r}")

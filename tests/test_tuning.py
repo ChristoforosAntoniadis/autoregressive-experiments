@@ -65,10 +65,11 @@ def test_linked_settings_become_one_choice_of_valid_combinations() -> None:
 
 
 def test_grid_sizes_by_hand() -> None:
-    """SMA tries 23 windows; exponential smoothing 5 forms x 3 seasons x 2 Box-Cox x 2
-    initializations = 60; a space with a continuous range has no grid."""
-    assert grid_size(search_space(SMA)) == 23
-    assert grid_size(search_space(EXPONENTIAL)) == 60
+    """SMA tries 23 windows x 2 outlier handlings = 46; exponential smoothing 5 forms x 3
+    seasons x 2 Box-Cox x 2 initializations x 2 outlier handlings = 120; a space with a
+    continuous range has no grid."""
+    assert grid_size(search_space(SMA)) == 46
+    assert grid_size(search_space(EXPONENTIAL)) == 120
     assert grid_size({"rate": {"low": 0.1, "high": 1.0, "log": True}}) is None
 
 

@@ -36,6 +36,7 @@ from xgboost import XGBRegressor
 from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.configs.configurables import RANDOM_SEED
 from autoregressive_experiments.features import lagged_exog
+from autoregressive_experiments.modeling.utilities.network import HUBER_DELTA
 from autoregressive_experiments.nn_forecasting import NN_MODELS, NN_SPACES, build_network
 
 # Settings; each value's reasoning is in configs/hyperparameters.json.
@@ -153,7 +154,9 @@ def build_model(model: str, settings: Mapping[str, Any]) -> TransformedTargetReg
     The scalers learn their means and SDs from the rows the model is fitted on, never from
     later months. Standardizing the target makes the penalties (Ridge, Lasso), the pruning
     thresholds (forest, XGBoost) and the regularization terms scale-free, so one search space
-    serves both series. Lasso with a zero penalty is fitted as a plain linear regression:
+    serves both series, and it puts the Huber loss's HUBER_DELTA in standard deviations. A
+    "loss" of "huber" gives XGBoost its pseudo-Huber objective; the networks take "loss"
+    themselves. Lasso with a zero penalty is fitted as a plain linear regression:
     coordinate descent without a penalty converges poorly, and the solution is the same.
     """
     options = {key: value for key, value in settings.items() if key != "lags"}
@@ -167,6 +170,9 @@ def build_model(model: str, settings: Mapping[str, Any]) -> TransformedTargetReg
         # finish, which changes the last bit of a forecast from run to run.
         base = RandomForestRegressor(**options, random_state=RANDOM_SEED, n_jobs=1)
     elif model == XGBOOST:
+        loss = options.pop("loss", "mse")
+        if loss == "huber":
+            options |= {"objective": "reg:pseudohubererror", "huber_slope": HUBER_DELTA}
         base = XGBRegressor(**options, random_state=RANDOM_SEED, verbosity=0)
     elif model == KNN:
         base = KNeighborsRegressor(**options)

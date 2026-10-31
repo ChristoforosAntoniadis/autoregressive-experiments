@@ -1,11 +1,12 @@
 """
 The hand-written networks A1 and A2 as a scikit-learn regressor: forward pass, backpropagation
-of the mean squared error, mini-batch training and early stopping, ported from the
-neural-network-numpy project's regression networks.
+of the mean squared error (or the Huber loss), mini-batch training and early stopping, ported
+from the neural-network-numpy project's regression networks.
 
 - A1: one hidden layer of sigmoid units, then one linear output unit
 - A2: three hidden layers of ReLU units, then one linear output unit
-- weights drawn from N(0, 0.1^2); biases, when used, start at 0; mean squared error
+- weights drawn from N(0, 0.1^2); biases, when used, start at 0; mean squared error, or the
+  Huber loss (Huber 1964), squared within HUBER_DELTA of the target and absolute beyond
 - dropout (inverted, Srivastava et al. 2014) after every hidden layer when the rate is above 0
 
 Input: feature rows and targets, standardized by ml_forecasting's pipeline.
@@ -19,6 +20,7 @@ from typing import NamedTuple
 import numpy as np
 from sklearn.base import BaseEstimator, RegressorMixin
 
+from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.configs.configurables import RANDOM_SEED
 from autoregressive_experiments.modeling.utilities.activations import activate, activation_gradient
 from autoregressive_experiments.modeling.utilities.optimizers import Optimizer
@@ -28,6 +30,57 @@ from autoregressive_experiments.modeling.utilities.optimizers import Optimizer
 ARCHITECTURES = {"A1": (1, "sigmoid"), "A2": (3, "relu")}
 # The initial weights' standard deviation, the original networks' fixed scale.
 INIT_SD = 0.1
+# Where the Huber loss turns from squared to absolute; its reasoning is in the config.
+HUBER_DELTA = HYPERPARAMETERS.outliers.huber_delta
+
+
+def loss_value(loss: str, error: np.ndarray) -> float:
+    """
+    The mean loss of a batch's errors.
+
+    Parameters
+    ----------
+    loss : str
+        "mse" or "huber".
+    error : np.ndarray
+        Prediction minus target, any shape.
+
+    Returns
+    -------
+    float
+        Mean squared error, or the mean Huber loss: e^2 / 2 within HUBER_DELTA, else
+        HUBER_DELTA x (|e| - HUBER_DELTA / 2).
+    """
+    if loss == "mse":
+        return float(np.mean(error**2))
+    size = np.abs(error)
+    return float(
+        np.mean(
+            np.where(size <= HUBER_DELTA, error**2 / 2, HUBER_DELTA * (size - HUBER_DELTA / 2))
+        )
+    )
+
+
+def loss_gradient(loss: str, error: np.ndarray) -> np.ndarray:
+    """
+    The derivative of loss_value() with respect to each prediction.
+
+    Parameters
+    ----------
+    loss : str
+        "mse" or "huber".
+    error : np.ndarray
+        Prediction minus target, shape (rows, 1).
+
+    Returns
+    -------
+    np.ndarray
+        Same shape: 2 x e / rows for the mean squared error, the error clipped to
+        +/- HUBER_DELTA / rows for the Huber loss.
+    """
+    if loss == "mse":
+        return 2 / len(error) * error
+    return np.clip(error, -HUBER_DELTA, HUBER_DELTA) / len(error)
 
 
 class Cache(NamedTuple):
@@ -83,6 +136,8 @@ class NumpyNetwork(RegressorMixin, BaseEstimator):
         Epochs before early stopping may act.
     validation_share : float, default=0.25
         Share of the rows, the last ones in time order, held out to decide when to stop.
+    loss : str, default="mse"
+        "mse" (the original networks' loss) or "huber", for training and early stopping.
 
     Notes
     -----
@@ -105,6 +160,7 @@ class NumpyNetwork(RegressorMixin, BaseEstimator):
         min_delta: float = 0.0001,
         min_epochs: int = 20,
         validation_share: float = 0.25,
+        loss: str = "mse",
     ) -> None:
         self.architecture = architecture
         self.hidden_units = hidden_units
@@ -118,6 +174,7 @@ class NumpyNetwork(RegressorMixin, BaseEstimator):
         self.min_delta = min_delta
         self.min_epochs = min_epochs
         self.validation_share = validation_share
+        self.loss = loss
 
     def forward(
         self, features: np.ndarray, dropout_rng: np.random.RandomState | None = None
@@ -167,7 +224,7 @@ class NumpyNetwork(RegressorMixin, BaseEstimator):
         self, target: np.ndarray, prediction: np.ndarray, cache: Cache
     ) -> tuple[list[np.ndarray], list[np.ndarray]]:
         """
-        Backpropagate the mean squared error to every weight matrix and bias.
+        Backpropagate the loss to every weight matrix and bias.
 
         Parameters
         ----------
@@ -187,14 +244,14 @@ class NumpyNetwork(RegressorMixin, BaseEstimator):
         Notes
         -----
         Processing:
-        1. d MSE / d prediction = 2 / rows x (prediction - target).
+        1. d loss / d prediction from loss_gradient().
         2. From the last layer back: d loss / d W = input' @ grad and d loss / d b = the sum of
            grad over the rows; the gradient for the layer below is grad @ W', multiplied by
            that layer's dropout mask (the values it dropped get none) and its activation
            derivative.
         """
         _, activation = ARCHITECTURES[self.architecture]
-        gradient = 2 / len(target) * (prediction - target)
+        gradient = loss_gradient(self.loss, prediction - target)
         weight_gradients, bias_gradients = [], []
         for index in range(len(self.weights_) - 1, -1, -1):
             weight_gradients.append(cache.inputs[index].T @ gradient)
@@ -268,13 +325,13 @@ class NumpyNetwork(RegressorMixin, BaseEstimator):
             for start in range(0, len(order), self.batch_size):
                 rows = order[start : start + self.batch_size]
                 prediction, cache = self.forward(train_x[rows], dropout_rng)
-                batch_losses.append(float(np.mean((train_y[rows] - prediction) ** 2)))
+                batch_losses.append(loss_value(self.loss, prediction - train_y[rows]))
                 weight_gradients, bias_gradients = self.backward(train_y[rows], prediction, cache)
                 for index, gradient in enumerate(weight_gradients):
                     optimizer.step((index, "weights"), self.weights_[index], gradient)
                 for index, gradient in enumerate(bias_gradients):
                     optimizer.step((index, "bias"), self.biases_[index], gradient)
-            hold_loss = float(np.mean((hold_y - self.forward(hold_x)[0]) ** 2))
+            hold_loss = loss_value(self.loss, self.forward(hold_x)[0] - hold_y)
             self.epochs_run_ = epoch
             if not (np.isfinite(np.mean(batch_losses)) and np.isfinite(hold_loss)):
                 break

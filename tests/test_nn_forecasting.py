@@ -8,7 +8,12 @@ import numpy as np
 import pytest
 
 from autoregressive_experiments.ml_forecasting import build_model, lag_features
-from autoregressive_experiments.modeling.utilities.network import Cache, NumpyNetwork
+from autoregressive_experiments.modeling.utilities.network import (
+    HUBER_DELTA,
+    Cache,
+    NumpyNetwork,
+    loss_value,
+)
 from autoregressive_experiments.modeling.utilities.optimizers import Optimizer, newton_schulz
 from autoregressive_experiments.nn_forecasting import (
     DLINEAR,
@@ -49,23 +54,33 @@ def simulated_changes(months: int) -> np.ndarray:
 
 
 @pytest.mark.parametrize(
-    ("architecture", "use_bias", "dropout"),
-    [(NUMPY_A1, False, 0.0), (NUMPY_A2, False, 0.0), (NUMPY_A1, True, 0.3), (NUMPY_A2, True, 0.3)],
+    ("architecture", "use_bias", "dropout", "loss"),
+    [
+        (NUMPY_A1, False, 0.0, "mse"),
+        (NUMPY_A2, False, 0.0, "mse"),
+        (NUMPY_A1, True, 0.3, "mse"),
+        (NUMPY_A2, True, 0.3, "mse"),
+        (NUMPY_A1, False, 0.0, "huber"),
+        (NUMPY_A2, True, 0.3, "huber"),
+    ],
 )
 def test_backpropagation_matches_numerical_gradients(
-    architecture: str, use_bias: bool, dropout: float
+    architecture: str, use_bias: bool, dropout: float, loss: str
 ) -> None:
-    """For both architectures, with and without biases and dropout, every parameter's
-    backpropagated gradient of the mean squared error equals the central finite difference
-    (step 1e-6) to within 1e-6 relative error. The dropout mask is held fixed by re-seeding its
-    generator for every forward pass."""
+    """For both architectures, with and without biases and dropout, and for the mean squared
+    error and the Huber loss, every parameter's backpropagated gradient equals the central
+    finite difference (step 1e-6) to within 1e-6 relative error. The dropout mask is held fixed
+    by re-seeding its generator for every forward pass. For the Huber loss the targets have
+    spread 3, so some errors exceed HUBER_DELTA and both parts of the loss are checked."""
     rng = np.random.default_rng(1)
-    features, target = rng.normal(size=(7, 3)), rng.normal(size=(7, 1))
+    scale = 3.0 if loss == "huber" else 1.0
+    features, target = rng.normal(size=(7, 3)), rng.normal(scale=scale, size=(7, 1))
     network = NumpyNetwork(
         architecture=NUMPY_ARCHITECTURES[architecture],
         hidden_units=4,
         use_bias=use_bias,
         dropout=dropout,
+        loss=loss,
     )
     # A1 has one hidden layer: input -> 4 -> 1; A2 has three: input -> 4 -> 4 -> 4 -> 1.
     hidden = 1 if architecture == NUMPY_A1 else 3
@@ -86,6 +101,8 @@ def test_backpropagation_matches_numerical_gradients(
 
     prediction, cache = run()
     weight_gradients, bias_gradients = network.backward(target, prediction, cache)
+    if loss == "huber":
+        assert (np.abs(prediction - target) > HUBER_DELTA).any()
 
     for layer, gradient in zip(
         [*network.weights_, *network.biases_], [*weight_gradients, *bias_gradients]
@@ -94,9 +111,9 @@ def test_backpropagation_matches_numerical_gradients(
         for index in np.ndindex(layer.shape):
             original = layer[index]
             layer[index] = original + 1e-6
-            above = float(np.mean((target - run()[0]) ** 2))
+            above = loss_value(loss, run()[0] - target)
             layer[index] = original - 1e-6
-            below = float(np.mean((target - run()[0]) ** 2))
+            below = loss_value(loss, run()[0] - target)
             layer[index] = original
             numerical[index] = (above - below) / 2e-6
         assert gradient == pytest.approx(numerical, rel=1e-6, abs=1e-9)
@@ -155,11 +172,13 @@ def test_the_numpy_networks_learn_the_rule_and_are_reproducible(architecture: st
     assert 1 - np.var(target - first) / np.var(target) > 0.8
 
 
+@pytest.mark.parametrize("loss", ["mse", "huber"])
 @pytest.mark.parametrize("model", [TENSORFLOW_MLP, PYTORCH_MLP])
-def test_the_framework_networks_learn_the_rule_and_are_reproducible(model: str) -> None:
+def test_the_framework_networks_learn_the_rule_and_are_reproducible(model: str, loss: str) -> None:
     """Through the shared lag-feature pipeline, the Keras and PyTorch networks (A2, Adam, some
-    dropout and weight decay) explain most of y's variance from last month's x (R^2 above 0.8)
-    and give identical predictions on refitting (fixed seed, deterministic operations)."""
+    dropout and weight decay), with either loss, explain most of y's variance from last month's
+    x (R^2 above 0.8) and give identical predictions on refitting (fixed seed, deterministic
+    operations)."""
     changes = simulated_changes(300)
     features, target = lag_features(changes, 1), changes[1:, 1]
     settings = {
@@ -171,6 +190,7 @@ def test_the_framework_networks_learn_the_rule_and_are_reproducible(model: str) 
         "weight_decay": 0.0001,
         "dropout": 0.1,
         "batch_size": 16,
+        "loss": loss,
     }
 
     first = build_model(model, settings).fit(features, target).predict(features)

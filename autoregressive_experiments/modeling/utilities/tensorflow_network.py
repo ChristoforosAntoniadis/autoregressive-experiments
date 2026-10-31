@@ -26,6 +26,7 @@ import numpy as np
 from sklearn.base import BaseEstimator, RegressorMixin
 
 from autoregressive_experiments.configs.configurables import RANDOM_SEED
+from autoregressive_experiments.modeling.utilities.network import HUBER_DELTA
 
 # The hidden layers of each architecture: name -> (hidden layers, their activation). The output
 # layer is always one linear unit.
@@ -104,6 +105,9 @@ class KerasNetwork(RegressorMixin, BaseEstimator):
         Epochs before early stopping may act (Keras's start_from_epoch).
     validation_share : float, default=0.25
         Share of the rows, the last ones in time order, held out to decide when to stop.
+    loss : str, default="mse"
+        "mse" or "huber" (Keras's Huber with delta HUBER_DELTA), for training and early
+        stopping.
     """
 
     def __init__(
@@ -121,6 +125,7 @@ class KerasNetwork(RegressorMixin, BaseEstimator):
         min_delta: float = 0.0001,
         min_epochs: int = 20,
         validation_share: float = 0.25,
+        loss: str = "mse",
     ) -> None:
         self.architecture = architecture
         self.hidden_units = hidden_units
@@ -135,6 +140,7 @@ class KerasNetwork(RegressorMixin, BaseEstimator):
         self.min_delta = min_delta
         self.min_epochs = min_epochs
         self.validation_share = validation_share
+        self.loss = loss
 
     def fit(self, features: np.ndarray, target: np.ndarray) -> "KerasNetwork":
         """
@@ -160,7 +166,7 @@ class KerasNetwork(RegressorMixin, BaseEstimator):
         2. Hold out the last validation_share of the rows (at least one), in time order.
         3. Build Dense -> activation (-> dropout) per hidden layer, then a one-unit linear
            Dense, all with or without biases.
-        4. Compile one training step (forward, mean squared error, gradients, the Keras
+        4. Compile one training step (forward, the loss, gradients, the Keras
            optimizer's update) and the holdout loss with tf.function, each traced once for
            any batch size.
         5. Each epoch: shuffle the training rows (a NumPy generator, same seed), run the step on
@@ -195,6 +201,11 @@ class KerasNetwork(RegressorMixin, BaseEstimator):
         model = keras.Model(inputs, keras.layers.Dense(1, use_bias=self.use_bias)(layer))
         optimizer = keras_optimizer(self.optimizer, self.learning_rate, self.weight_decay)
         optimizer.build(model.trainable_variables)
+        loss_fn = (
+            keras.losses.MeanSquaredError()
+            if self.loss == "mse"
+            else keras.losses.Huber(delta=HUBER_DELTA)
+        )
         signature = [
             tf.TensorSpec([None, rows.shape[1]], tf.float32),
             tf.TensorSpec([None, 1], tf.float32),
@@ -215,10 +226,10 @@ class KerasNetwork(RegressorMixin, BaseEstimator):
             Returns
             -------
             tf.Tensor
-                The batch's mean squared error before the step.
+                The batch's loss before the step.
             """
             with tf.GradientTape() as tape:
-                loss = tf.reduce_mean(tf.square(model(batch_x, training=True) - batch_y))
+                loss = loss_fn(batch_y, model(batch_x, training=True))
             gradients = tape.gradient(loss, model.trainable_variables)
             optimizer.apply_gradients(zip(gradients, model.trainable_variables))
             return loss
@@ -226,7 +237,7 @@ class KerasNetwork(RegressorMixin, BaseEstimator):
         @tf.function(input_signature=signature)
         def holdout_loss(batch_x: Any, batch_y: Any) -> Any:
             """
-            The mean squared error without dropout.
+            The loss without dropout.
 
             Parameters
             ----------
@@ -238,9 +249,9 @@ class KerasNetwork(RegressorMixin, BaseEstimator):
             Returns
             -------
             tf.Tensor
-                The mean squared error.
+                The loss.
             """
-            return tf.reduce_mean(tf.square(model(batch_x, training=False) - batch_y))
+            return loss_fn(batch_y, model(batch_x, training=False))
 
         shuffle_rng = np.random.RandomState(RANDOM_SEED)
         best_loss, best_weights, waited = np.inf, None, 0

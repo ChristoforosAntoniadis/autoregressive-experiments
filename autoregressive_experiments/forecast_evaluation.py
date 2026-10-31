@@ -18,6 +18,10 @@ al. 2005). They need no assumption about the model, so every model gets the same
 and they widen with the horizon by themselves. They are scored by coverage, width and pinball
 loss, as in the M5 uncertainty competition.
 
+Sensitivity, labelled as such and not the result: each model's MAE relative to naive again,
+without the forecasts that start or end in a test month whose change the outliers module's
+Hampel filter flags. It shows how much a few extreme months decide the comparison.
+
 Input: ``data/interim/fed_balance_sheet_cleaned.csv`` and ``models/champions.json`` and
 ``models/tuned_hyperparameters.json`` (written by ``make tune``).
 
@@ -28,7 +32,10 @@ Output, in ``reports/``:
 - ``test_intervals.csv``: the bands' coverage, width, pinball loss and below-quantile shares
 - ``test_forecasts.csv``: every test forecast with its band
 - ``champions.csv``: each champion's family, validation scores and hyperparameters
-- ``forecast_evaluation.txt``: the method, the champions and the test tables
+- ``test_sensitivity.csv``: per series, model and horizon, MAE and MAE relative to naive
+  without the forecasts that start or end in a flagged test month
+- ``forecast_evaluation.txt``: the method, the champions, the test tables and the sensitivity
+  table
 - ``figures/test_forecasts_<series>.png``: per series, one panel per champion and horizon: the
   actual levels against the forecasts, with their 80% and 95% bands and naive
 """
@@ -65,6 +72,7 @@ from autoregressive_experiments.metrics import (
     mase_scale,
 )
 from autoregressive_experiments.model_forecasts import FAMILIES, NAIVE, SARIMA
+from autoregressive_experiments.outliers import hampel
 from autoregressive_experiments.residual_checks import (
     MUTED_INK,
     PRIMARY_INK,
@@ -95,6 +103,7 @@ INTERVALS_PATH = REPORTS_DIR / "test_intervals.csv"
 FORECASTS_PATH = REPORTS_DIR / "test_forecasts.csv"
 CHAMPIONS_TABLE_PATH = REPORTS_DIR / "champions.csv"
 REPORT_PATH = REPORTS_DIR / "forecast_evaluation.txt"
+SENSITIVITY_PATH = REPORTS_DIR / "test_sensitivity.csv"
 
 
 def figure_path(column: str) -> Path:
@@ -263,6 +272,104 @@ def score_model(test: pd.DataFrame, naive: pd.DataFrame, scale: float) -> list[d
         record |= interval_scores(rows["actual"].to_numpy(), rows[QUANTILE_COLUMNS].to_numpy())
         records.append(record)
     return records
+
+
+def flagged_months(levels: np.ndarray) -> np.ndarray:
+    """
+    Which months' changes the Hampel filter flags, over a series' whole history.
+
+    Parameters
+    ----------
+    levels : np.ndarray
+        One series' levels, shape (months,), trillions.
+
+    Returns
+    -------
+    np.ndarray
+        Shape (months,), bool: True for a month whose change from the month before is flagged;
+        the first month has no change and is never flagged.
+    """
+    return np.concatenate([[False], hampel(np.diff(levels))[2]])
+
+
+def sensitivity_rows(tests: Mapping[str, pd.DataFrame], flags: np.ndarray) -> list[dict[str, Any]]:
+    """
+    Each model's MAE per horizon without forecasts that start or end in a flagged month.
+
+    Parameters
+    ----------
+    tests : Mapping of str to pd.DataFrame
+        Model -> its test forecasts (add_bands(), with origin_index, target_index, horizon and
+        error), naive included.
+    flags : np.ndarray
+        From flagged_months(), indexed like origin_index and target_index.
+
+    Returns
+    -------
+    list of dict of str to Any
+        Per model and horizon: "model", "horizon", "n" (forecasts kept), "MAE" (trillions) and
+        "MAE_vs_naive" (below 1: more accurate than naive on the same forecasts).
+    """
+    kept = {
+        model: rows[~flags[rows["origin_index"]] & ~flags[rows["target_index"]]]
+        for model, rows in tests.items()
+    }
+    naive = kept[NAIVE].groupby("horizon")["error"].apply(lambda e: e.abs().mean())
+    records: list[dict[str, Any]] = []
+    for model, rows in kept.items():
+        mae = rows.groupby("horizon")["error"].apply(lambda e: e.abs().mean())
+        counts = rows.groupby("horizon").size()
+        records.extend(
+            {
+                "model": model,
+                "horizon": horizon,
+                "n": int(counts.get(horizon, 0)),
+                "MAE": float(mae.get(horizon, np.nan)),
+                "MAE_vs_naive": float(mae.get(horizon, np.nan) / naive.get(horizon, np.nan)),
+            }
+            for horizon in HORIZONS
+        )
+    return records
+
+
+def sensitivity_text(table: pd.DataFrame, flagged: Mapping[str, Sequence[str]]) -> str:
+    """
+    The sensitivity section of the report.
+
+    Parameters
+    ----------
+    table : pd.DataFrame
+        From sensitivity_rows(), with a "series" and a "family" column added.
+    flagged : Mapping of str to Sequence of str
+        Series -> its flagged test months ("YYYY-MM").
+
+    Returns
+    -------
+    str
+        Per series, the flagged months, then MAE relative to naive per model and horizon.
+    """
+    lines = [
+        (
+            "Sensitivity (not the result): MAE relative to naive without the forecasts that start "
+            "or end in a test month whose change the Hampel filter flags (outliers module). Below "
+            "1: more accurate than naive on the same forecasts."
+        ),
+        "",
+    ]
+    for column, part in table.groupby("series", sort=False):
+        months = ", ".join(flagged[str(column)]) or "none"
+        lines.append(f"{column}  (flagged test months: {months})")
+        lines.append(
+            f"    {'model':24s} {'family':18s}" + "".join(f"{f'h={h}':>8s}" for h in HORIZONS)
+        )
+        for (model, family), rows in part.groupby(["model", "family"], sort=False):
+            ratios = rows.set_index("horizon")["MAE_vs_naive"]
+            lines.append(
+                f"    {model:24s} {family:18s}"
+                + "".join(f"{ratios.get(h, np.nan):8.2f}" for h in HORIZONS)
+            )
+        lines.append("")
+    return "\n".join(lines)
 
 
 def dm_text(statistic: float, p_value: float) -> str:
@@ -531,6 +638,8 @@ def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv")
 
     begin_phase("Run each champion and naive over the test months")
     all_forecasts, all_metrics = [], []
+    all_sensitivity: list[dict[str, Any]] = []
+    flagged: dict[str, list[str]] = {}
     for index, column in enumerate(VALUE_COLUMNS):
         entries = [(f, r["model"], r["settings"]) for f, r in champions[column].items()]
         entries.append((BENCHMARK, NAIVE, {}))
@@ -546,6 +655,16 @@ def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv")
             for record in score_model(tests[model], tests[NAIVE], scales[column]):
                 all_metrics.append({"series": column, "family": family, "model": model, **record})
             all_forecasts.append(tests[model])
+        flags = flagged_months(levels[:, index])
+        flagged[column] = [
+            f"{pd.Timestamp(dates[i]):%Y-%m}"
+            for i in np.flatnonzero(flags[validation_end + 1 :]) + validation_end + 1
+        ]
+        families = {model: family for family, model, _ in entries}
+        all_sensitivity.extend(
+            {"series": column, "family": families[record["model"]], **record}
+            for record in sensitivity_rows(tests, flags)
+        )
     # The parallel fits are done: stop joblib's workers now, releasing their memory.
     get_reusable_executor().shutdown(wait=True)
 
@@ -585,7 +704,13 @@ def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv")
             for family, record in by_family.items()
         ]
     ).to_csv(CHAMPIONS_TABLE_PATH, index=False)
-    report = evaluation_report(champions, metrics, periods, scales)
+    sensitivity = pd.DataFrame(all_sensitivity)
+    sensitivity.to_csv(SENSITIVITY_PATH, index=False)
+    report = (
+        evaluation_report(champions, metrics, periods, scales)
+        + "\n\n"
+        + sensitivity_text(sensitivity, flagged)
+    )
     REPORT_PATH.write_text(report + "\n", encoding="utf-8")
     print(report)
     for column in VALUE_COLUMNS:
