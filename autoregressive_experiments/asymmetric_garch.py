@@ -36,8 +36,6 @@ import typer
 
 from autoregressive_experiments.config import (
     FIGURES_DIR,
-    INTERIM_DATA_DIR,
-    PROCESSED_DATA_DIR,
     REPORTS_DIR,
 )
 from autoregressive_experiments.diagnostics import (
@@ -45,6 +43,10 @@ from autoregressive_experiments.diagnostics import (
     SIGNIFICANCE_LEVEL,
     VALUE_COLUMNS,
     repo_path,
+)
+from autoregressive_experiments.features import (
+    DIFFERENCES_PATH,
+    LEVELS_PATH,
 )
 from autoregressive_experiments.residual_checks import (
     PRIMARY_INK,
@@ -54,6 +56,7 @@ from autoregressive_experiments.residual_checks import (
     checked_models,
     model_label,
     model_name,
+    note_no_passing_models,
 )
 from autoregressive_experiments.runlog import begin_phase, finish_run, start_run_log
 from autoregressive_experiments.volatility_checks import ARCH_TEST_LAGS
@@ -353,8 +356,8 @@ def asymmetric_figure(results: list[dict[str, Any]]) -> Figure:
 
 @app.command()
 def main(
-    levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv",
-    differences_path: Path = PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv",
+    levels_path: Path = LEVELS_PATH,
+    differences_path: Path = DIFFERENCES_PATH,
     candidates_path: Path = CANDIDATES_PATH,
 ) -> None:
     """
@@ -362,9 +365,9 @@ def main(
 
     Parameters
     ----------
-    levels_path : Path, default=INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv"
+    levels_path : Path, default=LEVELS_PATH
         The cleaned levels CSV.
-    differences_path : Path, default=PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv"
+    differences_path : Path, default=DIFFERENCES_PATH
         The first-differences CSV.
     candidates_path : Path, default=CANDIDATES_PATH
         The information-criteria grid CSV.
@@ -392,6 +395,10 @@ def main(
         if result["passed"]
     ]
 
+    if not results:
+        note_no_passing_models(REPORT_PATH, FIGURE_PATH)
+        finish_run()
+        return
     report = asymmetric_report(results)
     REPORT_PATH.write_text(report, encoding="utf-8")
     print(report)

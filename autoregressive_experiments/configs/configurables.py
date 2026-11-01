@@ -2,9 +2,10 @@
 Definitions of every configurable setting: one frozen dataclass per analysis step, listing the
 settings it accepts, their types and the rule each value must satisfy.
 
-The values themselves live in ``hyperparameters.json`` beside this file, each with its
-reasoning; ``config_loader`` reads that file, checks it against these definitions and
-builds the objects the modules import. Names, paths, colours, labels, model identities (such as
+The values themselves live in ``<dataset>.json`` beside this file (one file per dataset
+profile, chosen by config.DATASET), each with its reasoning; ``config_loader`` reads that
+file, checks it against these definitions and builds the objects the modules import. Names,
+paths, colours, labels, model identities (such as
 GARCH(1,1) or a VAR on the differences, which the code's formulas assume) and the evaluation's
 fixed rules (such as selecting on validation MASE averaged over the horizons) are code, not
 settings, and stay in their modules.
@@ -20,9 +21,11 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
-# This module's folder; hyperparameters.json sits beside it.
+from autoregressive_experiments.config import DATASET
+
+# This module's folder; the dataset profiles' config files sit beside it.
 CONFIG_DIR = Path(__file__).resolve().parent
-HYPERPARAMETERS_PATH = CONFIG_DIR / "hyperparameters.json"
+HYPERPARAMETERS_PATH = CONFIG_DIR / f"{DATASET}.json"
 # The one seed of every random draw in the project: EGARCH's simulated variances, the
 # bootstrap, the tuning's draws, the random forest and XGBoost. Fixed so every rerun gives
 # identical numbers; the value itself carries no meaning.
@@ -81,6 +84,7 @@ SPACES: dict[str, frozenset[str]] = {
             "seasonality_mode",
             "seasonality_prior_scale",
             "yearly_seasonality",
+            "weekly_seasonality",
         }
     ),
     "lstm": frozenset(
@@ -415,6 +419,37 @@ def space(name: str) -> Any:
 
 
 @dataclass(frozen=True)
+class DatasetSettings:
+    """
+    The dataset profile (dataset.py, features.py): where the data comes from and what it is.
+
+    Attributes
+    ----------
+    kaggle_handle : str
+        The Kaggle dataset's "owner/slug" that make data downloads.
+    raw_file : str
+        The CSV in the profile's raw folder that features.py reads.
+    value_columns : tuple of str
+        The two series the project models, as named in the cleaned levels file.
+    unit_suffix : str
+        The unit tag ending each value column's name, dropped from chart titles.
+    unit : str
+        The unit of the levels, as written in reports and axis labels.
+    title : str
+        The dataset's name for the series plot.
+    """
+
+    kaggle_handle: str = setting(lambda v: v.count("/") == 1, "owner/slug")
+    raw_file: str = setting(lambda v: v.endswith(".csv"), "a .csv file name")
+    value_columns: tuple[str, ...] = setting(
+        lambda v: len(v) == 2 and len(set(v)) == 2, "exactly two distinct column names"
+    )
+    unit_suffix: str = setting(lambda v: isinstance(v, str), "text (may be empty)")
+    unit: str = setting(lambda v: v.strip() != "", "non-empty")
+    title: str = setting(lambda v: v.strip() != "", "non-empty")
+
+
+@dataclass(frozen=True)
 class SplitSettings:
     """
     The chronological train / validation / test split (features.split_boundaries).
@@ -422,7 +457,7 @@ class SplitSettings:
     Attributes
     ----------
     train_percent : int
-        Share of the months in train, in whole percent.
+        Share of the periods in train, in whole percent.
     validation_percent : int
         Share in validation; test takes the rest.
     """
@@ -442,10 +477,13 @@ class FrequencySettings:
         pandas' offset alias of the spacing, e.g. "ME" (month ends), "D" or "B".
     period : str
         The word for one step in reports and figure titles, e.g. "month" or "day".
+    date_format : str
+        strftime format of the dates in reports, e.g. "%Y-%m" for monthly data.
     """
 
     alias: str = setting(lambda v: isinstance(v, str) and v.strip() != "", "a pandas offset alias")
     period: str = setting(lambda v: isinstance(v, str) and v.isalpha(), "one word")
+    date_format: str = setting(lambda v: "%Y" in v, "a strftime format with the year")
 
 
 @dataclass(frozen=True)
@@ -650,7 +688,10 @@ class OutlierSettings:
     Attributes
     ----------
     half_width : int
-        Months on each side of a change in its rolling window.
+        Periods on each side of a change in its rolling window.
+    seasonal_profile : bool
+        Whether each change is judged against the median of the same season position within its
+        window (a weekday profile for daily data) instead of the window's plain median.
     threshold : float
         Robust standard deviations from the rolling median beyond which a change is flagged.
     huber_delta : float
@@ -659,6 +700,7 @@ class OutlierSettings:
     """
 
     half_width: int = setting(lambda v: v >= 1, "at least 1")
+    seasonal_profile: bool = setting(lambda v: isinstance(v, bool), "true or false")
     threshold: float = setting(lambda v: v > 0, "positive")
     huber_delta: float = setting(lambda v: v > 0, "positive")
 
@@ -671,12 +713,25 @@ class ForecastEvaluationSettings:
     Attributes
     ----------
     horizons : tuple of int
-        Months ahead that are scored.
+        Periods ahead that are scored.
     quantiles : tuple of float
         Forecast quantile levels: the 95% and 80% interval ends and the median.
+    benchmarks : tuple of str
+        The benchmark forecasts run beside the champions: "naive", "drift", "seasonal naive".
+    test_step : int
+        Periods between consecutive test origins (1: a refit at every period).
     """
 
-    horizons: tuple[int, ...] = setting(increasing, "distinct months >= 1, increasing")
+    horizons: tuple[int, ...] = setting(increasing, "distinct periods >= 1, increasing")
+    benchmarks: tuple[str, ...] = setting(
+        lambda v: (
+            len(v) >= 1
+            and len(set(v)) == len(v)
+            and set(v) <= {"naive", "drift", "seasonal naive"}
+        ),
+        "distinct names among naive, drift and seasonal naive",
+    )
+    test_step: int = setting(lambda v: v >= 1, "at least 1")
     quantiles: tuple[float, ...] = setting(
         lambda v: (
             len(v) == 5
@@ -696,7 +751,10 @@ class TuningSettings:
     Attributes
     ----------
     validation_step : int
-        Months between consecutive validation origins.
+        Periods between consecutive validation origins.
+    score_reference : str
+        The benchmark whose MAE the validation score and MASE are relative to; one of
+        forecast_evaluation.benchmarks.
     candidates : int
         Optuna trials per model; spaces of at most this many settings are tried in full.
     bootstrap_samples : int
@@ -706,6 +764,9 @@ class TuningSettings:
     """
 
     validation_step: int = setting(lambda v: v >= 1, "at least 1")
+    score_reference: str = setting(
+        lambda v: v in ("naive", "seasonal naive"), "naive or seasonal naive"
+    )
     candidates: int = setting(lambda v: v >= 1, "at least 1")
     bootstrap_samples: int = setting(lambda v: v >= 1, "at least 1")
     sarima: Mapping[str, Any] = space("sarima")
@@ -793,12 +854,13 @@ class Hyperparameters:
 
     Attributes
     ----------
-    split, frequency, tests, diagnostics, residual_checks, volatility_checks,
+    dataset, split, frequency, tests, diagnostics, residual_checks, volatility_checks,
     volatility_models, var_diagnostics, var_models, var_analysis, outliers, forecast_evaluation,
     tuning, ml, nn, ready_made
         The sections, in pipeline order; see each class.
     """
 
+    dataset: DatasetSettings
     split: SplitSettings
     frequency: FrequencySettings
     tests: StatisticalTestSettings

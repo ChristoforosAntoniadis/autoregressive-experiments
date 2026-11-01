@@ -11,7 +11,7 @@ levels, because both series are I(1) and because trees and neighbours can't pred
 outside the range they were trained on, which the test levels leave.
 
 Every setting, the lag count k included, is chosen by ``tuning`` on the validation split
-(Optuna), from the search spaces in the ``ml`` section of ``configs/hyperparameters.json``, and
+(Optuna), from the search spaces in the ``ml`` section of ``configs/<dataset>.json``, and
 then kept fixed; one setting serves both series, which these models forecast together.
 Features and target are standardized inside every fit, from the rows that fit sees only, so the
 penalties and tree thresholds in the search spaces are in standard-deviation units.
@@ -39,7 +39,7 @@ from autoregressive_experiments.features import lagged_exog
 from autoregressive_experiments.modeling.utilities.network import HUBER_DELTA
 from autoregressive_experiments.nn_forecasting import NN_MODELS, NN_SPACES, build_network
 
-# Settings; each value's reasoning is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in the dataset's config file (configs/<dataset>.json).
 SETTINGS = HYPERPARAMETERS.ml
 RIDGE, LASSO, FOREST, XGBOOST, KNN = "Ridge", "Lasso", "random forest", "XGBoost", "KNN"
 ML_MODELS = (RIDGE, LASSO, FOREST, XGBOOST, KNN)

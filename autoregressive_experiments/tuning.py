@@ -8,8 +8,9 @@ Validation is rolling-origin with an expanding window (Tashman 2000): an origin 
 VALIDATION_STEP periods through the validation split, at least 10 of them. At each origin a model
 is fitted on every period from the start of the data up to the origin and forecasts up to
 MAX_HORIZON ahead; only targets inside the validation split are scored, so test periods are
-never seen. A setting's score is its MAE relative to naive's at the same horizon, averaged over
-the forecast horizons: 0.8 means 20% more accurate than naive on average, and every horizon
+never seen. A setting's score is its MAE relative to the reference benchmark's (naive, or the
+seasonal naive for seasonal data) at the same horizon, averaged over the forecast horizons: 0.8
+means 20% more accurate than the reference on average, and every horizon
 counts the same (a plain average of MASE would be set by the longest horizon, whose errors are
 ten times the shortest's).
 
@@ -30,11 +31,11 @@ the lowest score; the family's other models within one standard error of it are 
 tied (the one-standard-error rule of Breiman et al. 1984; Hastie, Tibshirani and Friedman 2009,
 section 7.10), so a win inside the noise is not read as a win.
 
-Input: ``data/interim/fed_balance_sheet_cleaned.csv`` (train and validation periods only).
+Input: the cleaned levels (features.LEVELS_PATH; train and validation periods only).
 
 Output:
 
-- ``models/tuned_hyperparameters.json``: every model's tuned settings per series
+- ``models/<dataset>/tuned_hyperparameters.json``: every model's tuned settings per series
 - ``models/champions.json``: each series' champion per family, with its settings, validation
   score, standard error, tied models and MASE by horizon, read by forecast_evaluation
 - ``reports/tuning.txt``: the origins, and per series every model's score, standard error and
@@ -42,7 +43,7 @@ Output:
 - ``reports/validation_metrics.csv``: every tuned model's and both benchmarks' metrics per
   series and horizon on validation, with the score and its standard error
 - ``reports/tuning_scores.csv``: every setting tried and its score
-- ``reports/figures/tuning.png``: per series, every setting's validation score, the tuned
+- ``reports/<dataset>/figures/tuning.png``: per series, every setting's validation score, the tuned
   settings and the champions marked
 """
 
@@ -63,8 +64,8 @@ import pandas as pd
 import typer
 
 from autoregressive_experiments.config import (
+    DATASET,
     FIGURES_DIR,
-    INTERIM_DATA_DIR,
     MODELS_DIR,
     REPORTS_DIR,
 )
@@ -76,7 +77,14 @@ from autoregressive_experiments.diagnostics import (
     VALUE_COLUMNS,
     repo_path,
 )
-from autoregressive_experiments.features import DATE_COLUMN, PERIOD, load_levels, series_title
+from autoregressive_experiments.features import (
+    DATE_COLUMN,
+    DATE_FORMAT,
+    LEVELS_PATH,
+    PERIOD,
+    load_levels,
+    series_title,
+)
 from autoregressive_experiments.metrics import (
     HORIZONS,
     MAX_HORIZON,
@@ -92,7 +100,8 @@ from autoregressive_experiments.model_forecasts import (
     FAMILIES,
     JOINT_MODELS,
     LOG,
-    NAIVE,
+    MASE_LAG,
+    REFERENCE,
     SARIMA,
     SARIMAX,
     SMA,
@@ -116,7 +125,7 @@ from autoregressive_experiments.runlog import Progress, begin_phase, finish_run,
 
 app = typer.Typer()
 
-# Settings; each value's reasoning is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in the dataset's config file (configs/<dataset>.json).
 SETTINGS = HYPERPARAMETERS.tuning
 VALIDATION_STEP = SETTINGS.validation_step
 CANDIDATES = SETTINGS.candidates
@@ -766,11 +775,13 @@ def tuning_report(
         "Tuning and champion selection on the validation split",
         (
             f"{len(origins)} expanding-window origins, every {VALIDATION_STEP} {PERIOD}s from "
-            f"{dates.iloc[origins[0]]:%Y-%m} to {dates.iloc[origins[-1]]:%Y-%m}: each model is "
-            f"fitted on every {PERIOD} from {dates.iloc[0]:%Y-%m} to the origin and forecasts "
-            f"the validation {PERIOD}s up to {dates.iloc[validation_end]:%Y-%m}, at most "
-            f"{MAX_HORIZON} ahead. Score: MAE relative to naive's at the same horizon, averaged "
-            f"over horizons {', '.join(map(str, HORIZONS))} (0.8: 20% more accurate than naive; "
+            f"{dates.iloc[origins[0]]:{DATE_FORMAT}} to {dates.iloc[origins[-1]]:{DATE_FORMAT}}: "
+            f"each model is fitted on every {PERIOD} from {dates.iloc[0]:{DATE_FORMAT}} to the "
+            f"origin and forecasts the validation {PERIOD}s up to "
+            f"{dates.iloc[validation_end]:{DATE_FORMAT}}, at most "
+            f"{MAX_HORIZON} ahead. Score: MAE relative to {REFERENCE}'s at the same horizon, "
+            f"averaged over horizons {', '.join(map(str, HORIZONS))} (0.8: 20% more accurate than "
+            f"{REFERENCE}; "
             "every horizon counts the same). se: the score's standard error from "
             f"{BOOTSTRAP_SAMPLES} bootstrap resamples of the origins. Settings searched by "
             f"Optuna (grid when the space has at most {CANDIDATES} settings, seeded TPE with "
@@ -778,7 +789,7 @@ def tuning_report(
             "on both series. Champion per family and series: the lowest score; models within "
             f"{TIE_STANDARD_ERRORS:g} standard error of it are tied with it, not beaten. "
             "Search spaces and their reasoning: "
-            "autoregressive_experiments/configs/hyperparameters.json."
+            f"autoregressive_experiments/configs/{DATASET}.json."
         ),
         "",
     ]
@@ -852,7 +863,7 @@ def tuning_figure(
         rows = table[table["series"] == name].drop_duplicates("model").set_index("model")
         axis.set_facecolor(SURFACE)
         for position, model in enumerate(models):
-            # The score is already the ratio to naive, so naive sits at 1 by construction.
+            # The score is already the ratio to the reference, which sits at 1 by construction.
             scores = np.array(
                 [trial["per_series"].get(column, np.nan) for trial in trials[model]], dtype=float
             )
@@ -887,10 +898,12 @@ def tuning_figure(
         axis.xaxis.set_minor_locator(NullLocator())
         axis.xaxis.set_major_formatter(plain)
         axis.set_yticks(range(len(models)), [f"{m} ({families[m]})" for m in models])
-        axis.set_xlabel("Validation score: MAE / naive's, mean over horizons", color=SECONDARY_INK)
+        axis.set_xlabel(
+            f"Validation score: MAE / {REFERENCE}'s, mean over horizons", color=SECONDARY_INK
+        )
         axis.set_title(
             f"{series_title(name)}: every setting tried on the validation origins\n"
-            "left of the line at 1: more accurate than naive",
+            f"left of the line at 1: more accurate than {REFERENCE}",
             loc="left",
             fontsize=10,
         )
@@ -922,9 +935,9 @@ def tuning_figure(
             marker=">",
             linestyle="",
             color=MUTED_INK,
-            label=f"settings more than {MAX_SHOWN_RATIO:g}x worse than naive (off scale)",
+            label=f"settings more than {MAX_SHOWN_RATIO:g}x worse than {REFERENCE} (off scale)",
         ),
-        plt.Line2D([], [], color=PRIMARY_INK, label="naive"),
+        plt.Line2D([], [], color=PRIMARY_INK, label=REFERENCE),
     ]
     figure.legend(handles=handles, loc="lower center", ncols=5, fontsize=9, frameon=False)
     axes[0][0].invert_yaxis()
@@ -933,14 +946,14 @@ def tuning_figure(
 
 
 @app.command()
-def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv") -> None:
+def main(levels_path: Path = LEVELS_PATH) -> None:
     """
     Tune every model on the validation origins, choose each family's champion, and write the
     settings, champions, report, tables and figure.
 
     Parameters
     ----------
-    levels_path : Path, default=INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv"
+    levels_path : Path, default=LEVELS_PATH
         Cleaned monthly levels of both series, trillions.
 
     Returns
@@ -954,7 +967,7 @@ def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv")
     Processing:
     1. Keep the train and validation periods; test periods are dropped before anything else.
     2. Build the validation origins and each series' MASE scale (on the training split), and
-       score the benchmarks (naive, the score's reference, and drift) on the origins.
+       score the benchmarks (among them the score's reference) on the origins.
     3. Tune SARIMA per series, then the other univariate models (SARIMAX and the average use the
        tuned SARIMA), then the joint models on both series.
     4. Stop joblib's workers, choose the champions and their ties, and write every output.
@@ -971,10 +984,11 @@ def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv")
     if levels.min() <= 0 and any(LOG in space.get("transform", ()) for space in SPACES.values()):
         raise ValueError(
             "a level is zero or negative, so no model can work on the logarithm: remove "
-            '"log" from every transform list in configs/hyperparameters.json'
+            '"log" from every transform list in configs/<dataset>.json'
         )
     scales = [
-        mase_scale(splits["train"][column].to_numpy(dtype=float)) for column in VALUE_COLUMNS
+        mase_scale(splits["train"][column].to_numpy(dtype=float), MASE_LAG)
+        for column in VALUE_COLUMNS
     ]
     columns = list(range(len(VALUE_COLUMNS)))
     tuned: dict[str, dict[str, Any]] = {name: {} for name in VALUE_COLUMNS}
@@ -986,13 +1000,15 @@ def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv")
         model: origin_paths(model, {}, levels, dates, origins, validation_end, columns)
         for model in BENCHMARKS
     }
-    reference = benchmarks[NAIVE]
+    reference = benchmarks[REFERENCE]
     for column in columns:
         for model, paths in benchmarks.items():
             metrics[column][model] = horizon_metrics(
                 paths[column], origins, levels[:, column], scales[column]
             )
-            scores[column][model] = score(metrics[column][model], metrics[column][NAIVE])
+        # Scored after every benchmark's metrics exist: the reference may be listed last.
+        for model in benchmarks:
+            scores[column][model] = score(metrics[column][model], metrics[column][REFERENCE])
 
     def store(model: str, result: Mapping[str, Any], tuned_columns: Sequence[int]) -> None:
         """
@@ -1014,7 +1030,7 @@ def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv")
         for column in tuned_columns:
             tuned[VALUE_COLUMNS[column]][model] = result["settings"]
             metrics[column][model] = result["metrics"][column]
-            scores[column][model] = score(result["metrics"][column], metrics[column][NAIVE])
+            scores[column][model] = score(result["metrics"][column], metrics[column][REFERENCE])
             errors[column][model] = result["error"]
         trials.setdefault(model, []).extend(result["trials"])
 

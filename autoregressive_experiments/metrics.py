@@ -13,8 +13,8 @@ from scipy import stats
 
 from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
 
-# Settings; each value's reasoning is in configs/hyperparameters.json.
-# Forecast horizons that are scored, in months ahead; every model forecasts up to the longest.
+# Settings; each value's reasoning is in the dataset's config file (configs/<dataset>.json).
+# Forecast horizons that are scored, in periods ahead; every model forecasts up to the longest.
 HORIZONS = HYPERPARAMETERS.forecast_evaluation.horizons
 MAX_HORIZON = max(HORIZONS)
 # Ordered low to high: interval_scores unpacks them as 95% low, 80% low, median, 80% high,
@@ -23,27 +23,35 @@ QUANTILES = HYPERPARAMETERS.forecast_evaluation.quantiles
 METRICS = ("MAE", "MSE", "RMSE", "MAPE", "MASE", "ME", "share_over")
 
 
-def mase_scale(train_levels: np.ndarray) -> float:
+def mase_scale(train_levels: np.ndarray, lag: int = 1) -> float:
     """
-    In-sample MAE of the one-step naive forecast: the mean absolute monthly change.
+    In-sample MAE of the reference benchmark's one-step forecast.
 
     Parameters
     ----------
     train_levels : np.ndarray
-        The training split's levels of one series, shape (months,), trillions.
+        The training split's levels of one series, shape (periods,), in the series' unit.
+    lag : int, default=1
+        1 for the naive forecast, whose one-step error is the change itself; the seasonal period
+        for the seasonal naive of model_forecasts, which repeats the change of the same position
+        a season earlier, so its one-step error is the change minus that earlier change.
 
     Returns
     -------
     float
-        The MASE denominator, trillions.
+        The MASE denominator, in the series' unit: the mean absolute one-step error.
 
     Notes
     -----
     Taken from the training split only and kept fixed for validation and test, so MASE is
     comparable across splits and the scaling never uses out-of-sample data (Hyndman and
-    Koehler 2006).
+    Koehler 2006; scaling by the seasonal benchmark is Hyndman's recommendation for seasonal
+    data). MASE 1 then means "as accurate as the reference was one step ahead in training".
     """
-    return float(np.mean(np.abs(np.diff(train_levels))))
+    changes = np.diff(train_levels)
+    if lag > 1:
+        changes = changes[lag:] - changes[:-lag]
+    return float(np.mean(np.abs(changes)))
 
 
 def accuracy(actual: np.ndarray, forecast: np.ndarray, scale: float) -> dict[str, float]:
@@ -96,7 +104,8 @@ def diebold_mariano(loss_a: np.ndarray, loss_b: np.ndarray, horizon: int) -> tup
     loss_b : np.ndarray
         Loss of model b for the same targets, same shape and order.
     horizon : int
-        Forecast horizon h in months; sets the number of autocovariance lags (h - 1).
+        Forecast horizon h, in origins: sets the number of autocovariance lags (h - 1), the
+        number of neighbouring forecasts whose targets overlap this one's.
 
     Returns
     -------

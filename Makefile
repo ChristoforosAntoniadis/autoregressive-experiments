@@ -5,6 +5,12 @@
 PROJECT_NAME = autoregressive-experiments
 PACKAGE = autoregressive_experiments
 
+# The dataset profile every step runs on: its config is $(PACKAGE)/configs/$(DATASET).json and
+# its data, models, reports and logs live in a $(DATASET)/ folder of each. Override per call:
+# make DATASET=daily_treasury all
+DATASET ?= fed_balance_sheet
+export DATASET
+
 # Use the project's virtual environment when it exists, otherwise the Python on PATH.
 ifeq ($(OS),Windows_NT)
 VENV_PYTHON = .venv/Scripts/python.exe
@@ -30,12 +36,12 @@ requirements:
 	$(PYTHON_INTERPRETER) -m pip install -r requirements.txt
 	$(PYTHON_INTERPRETER) -m pip install -e ".[dev]"
 
-## Download the Kaggle dataset into data/raw/ (replaces what is there)
+## Download the profile's Kaggle dataset into data/raw/$(DATASET)/ (replaces what is there)
 .PHONY: data
 data:
 	$(PYTHON_INTERPRETER) -m $(PACKAGE).dataset
 
-## Clean the raw data into data/interim/ and first-difference it into data/processed/
+## Build the levels into data/interim/$(DATASET)/ and first-difference them into data/processed/$(DATASET)/
 .PHONY: features
 features:
 	$(PYTHON_INTERPRETER) -m $(PACKAGE).features
@@ -76,7 +82,7 @@ asymmetric-garch: export MPLBACKEND = Agg
 asymmetric-garch:
 	$(PYTHON_INTERPRETER) -m $(PACKAGE).asymmetric_garch
 
-## Flag unusual monthly changes in the train and validation history (no plot windows)
+## Flag unusual changes in the train and validation history (no plot windows)
 .PHONY: outliers
 outliers: export MPLBACKEND = Agg
 outliers:

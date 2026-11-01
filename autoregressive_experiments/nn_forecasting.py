@@ -28,7 +28,7 @@ blocks (activations, optimizers, the network and its training) are in
 
 Every setting, the lag count included, is chosen by ``tuning`` on the validation split
 (Optuna), one setting for both series, from the search spaces in the ``nn`` section of
-``configs/hyperparameters.json``, and then kept fixed.
+``configs/<dataset>.json``, and then kept fixed.
 
 Input: none; the networks are built by ``ml_forecasting`` and evaluated by
 ``forecast_evaluation``.
@@ -47,7 +47,7 @@ from autoregressive_experiments.modeling.utilities.network import NumpyNetwork
 from autoregressive_experiments.modeling.utilities.tensorflow_network import KerasNetwork
 from autoregressive_experiments.modeling.utilities.torch_network import TorchNetwork
 
-# Settings; each value's reasoning is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in the dataset's config file (configs/<dataset>.json).
 SETTINGS = HYPERPARAMETERS.nn
 MLP, NUMPY_A1, NUMPY_A2 = "MLP", "NumPy A1", "NumPy A2"
 TENSORFLOW_MLP, PYTORCH_MLP = "TensorFlow MLP", "PyTorch MLP"

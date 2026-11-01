@@ -11,8 +11,8 @@ their long-run relationship. BIC's lag order drives the decision (Johansen is ab
 which BIC targets); the other criteria's orders are checked too, so a rank that depends on the lag
 choice is visible.
 
-Input: ``data/interim/fed_balance_sheet_cleaned.csv`` and
-``data/processed/fed_balance_sheet_first_difference.csv``, training split only.
+Input: the cleaned levels and their first differences (features.LEVELS_PATH and
+DIFFERENCES_PATH), training split only.
 
 Output, in ``reports/``:
 
@@ -37,15 +37,19 @@ import typer
 
 from autoregressive_experiments.config import (
     FIGURES_DIR,
-    INTERIM_DATA_DIR,
-    PROCESSED_DATA_DIR,
     REPORTS_DIR,
 )
 from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
-from autoregressive_experiments.diagnostics import SIGNIFICANCE_LEVEL, VALUE_COLUMNS, repo_path
+from autoregressive_experiments.diagnostics import SIGNIFICANCE_LEVEL, repo_path
 from autoregressive_experiments.features import (
     DATE_COLUMN,
+    DATE_FORMAT,
+    DIFFERENCES_PATH,
+    LEVELS_PATH,
+    PERIOD,
+    VALUE_COLUMNS,
     load_training_split,
+    series_title,
 )
 from autoregressive_experiments.residual_checks import (
     BASELINE,
@@ -60,7 +64,7 @@ from autoregressive_experiments.runlog import begin_phase, finish_run, start_run
 
 app = typer.Typer()
 
-# Settings; each value's reasoning is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in the dataset's config file (configs/<dataset>.json).
 # Lag orders tried: 0..MAX_VAR_LAGS months.
 MAX_VAR_LAGS = HYPERPARAMETERS.var_diagnostics.max_lags
 CRITERIA = HYPERPARAMETERS.var_diagnostics.criteria
@@ -488,7 +492,8 @@ def var_figure(
         else "not cointegrated, so this needn't settle"
     )
     combination_axis.set_title(
-        f"Most stationary combination: total assets {vector[1]:+.3f} x monetary base\n"
+        f"Most stationary combination: {series_title(VALUE_COLUMNS[0])} {vector[1]:+.3f} x "
+        f"{series_title(VALUE_COLUMNS[1])}\n"
         f"rank {test['trace_rank']}: {meaning}",
         loc="left",
         fontsize=10,
@@ -499,8 +504,8 @@ def var_figure(
 
 @app.command()
 def main(
-    levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv",
-    differences_path: Path = PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv",
+    levels_path: Path = LEVELS_PATH,
+    differences_path: Path = DIFFERENCES_PATH,
 ) -> None:
     """
     Run the lag-order selection and the Johansen test on the training split and write the report
@@ -508,9 +513,9 @@ def main(
 
     Parameters
     ----------
-    levels_path : Path, default=INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv"
+    levels_path : Path, default=LEVELS_PATH
         The cleaned levels, from ``make features``.
-    differences_path : Path, default=PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv"
+    differences_path : Path, default=DIFFERENCES_PATH
         The first differences, from ``make features``.
 
     Returns
@@ -536,8 +541,8 @@ def main(
     begin_phase("VAR lag order and Johansen")
     train_levels, train_differences = load_training_split(levels_path, differences_path)
     periods = {
-        name: f"{frame[DATE_COLUMN].min():%Y-%m} to {frame[DATE_COLUMN].max():%Y-%m} "
-        f"({len(frame)} months)"
+        name: f"{frame[DATE_COLUMN].min():{DATE_FORMAT}} to "
+        f"{frame[DATE_COLUMN].max():{DATE_FORMAT}} ({len(frame)} {PERIOD}s)"
         for name, frame in (("levels", train_levels), ("differences", train_differences))
     }
 

@@ -66,4 +66,4 @@ monetary_base_T  SARIMA(1,1,1)x(1,0,1,12)
   Bootstrap: 0 of 999 re-estimations didn't converge (kept).
   Verdict: CARRY GARCH FORWARD. BIC prefers GARCH, its variance is stationary, and the standardized residuals show no ARCH effects left.
 
-Figure: reports/figures/garch_diagnostics.png
+Figure: reports/fed_balance_sheet/figures/garch_diagnostics.png

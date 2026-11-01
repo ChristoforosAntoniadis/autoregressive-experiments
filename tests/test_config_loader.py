@@ -1,6 +1,7 @@
 """
-Tests for the hyperparameter config: autoregressive_experiments.config_loader reading
-configs/hyperparameters.json against the definitions in autoregressive_experiments.configurables.
+Tests for the hyperparameter config: autoregressive_experiments.config_loader reading the
+dataset profile's configs/<dataset>.json against the definitions in
+autoregressive_experiments.configurables.
 """
 
 from dataclasses import fields
@@ -109,9 +110,14 @@ def test_the_project_config_loads_with_reasoning_for_every_setting() -> None:
             "nn.pytorch_mlp: ",
         ),
         (
-            "no months left for test",
+            "no periods left for test",
             lambda c: c["split"]["train_percent"].update(value=80),
-            "train_percent + validation_percent must leave months for test",
+            "train_percent + validation_percent must leave periods for test",
+        ),
+        (
+            "a seasonal profile whose window is shorter than two seasons",
+            lambda c: c["outliers"]["seasonal_profile"].update(value=True),
+            "window 2 x half_width + 1 must hold two seasons",
         ),
         (
             "a band that doesn't match the significance level",

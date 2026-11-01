@@ -1,0 +1,1 @@
+No recommended SARIMA model passes the residual checks, so there is nothing to test here (see residual_diagnostics.txt). The forecast comparison does not depend on this chapter: every model's settings are chosen by out-of-sample error, and every test band is empirical.

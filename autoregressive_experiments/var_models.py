@@ -18,8 +18,8 @@ forward to the evaluation: VAR(5) and VECM(5).
 - Multivariate Portmanteau test (adjusted) on the system residuals at lags 6, 12 and 24;
   no autocorrelation left means the lag order captured the dynamics.
 
-Input: ``data/interim/fed_balance_sheet_cleaned.csv`` and
-``data/processed/fed_balance_sheet_first_difference.csv``, training split only.
+Input: the cleaned levels and their first differences (features.LEVELS_PATH and
+DIFFERENCES_PATH), training split only.
 
 Output, in ``reports/``:
 
@@ -43,15 +43,17 @@ import typer
 
 from autoregressive_experiments.config import (
     FIGURES_DIR,
-    INTERIM_DATA_DIR,
-    PROCESSED_DATA_DIR,
     REPORTS_DIR,
 )
 from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.diagnostics import SIGNIFICANCE_LEVEL, VALUE_COLUMNS, repo_path
 from autoregressive_experiments.features import (
     DATE_COLUMN,
+    DATE_FORMAT,
+    DIFFERENCES_PATH,
     FREQUENCY,
+    LEVELS_PATH,
+    PERIOD,
     load_training_split,
 )
 from autoregressive_experiments.residual_checks import (
@@ -66,7 +68,7 @@ from autoregressive_experiments.runlog import begin_phase, finish_run, start_run
 
 app = typer.Typer()
 
-# Settings; each value's reasoning is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in the dataset's config file (configs/<dataset>.json).
 # Lag orders of the VAR / VECM candidates.
 VAR_LAGS = HYPERPARAMETERS.var_models.var_lags
 # Portmanteau lags that decide the verdict.
@@ -487,7 +489,7 @@ def models_figure(results: dict[str, dict[str, Any]]) -> Figure:
         p_axis.set_ylim(min(1e-4, p_values.min() / 3), 1.5)
         p_axis.set_xlim(0.5, PLOT_LAGS + 0.5)
         p_axis.set_xticks([1, 6, 12, 18, 24])
-        p_axis.set_xlabel("Lag (months)")
+        p_axis.set_xlabel(f"Lag ({PERIOD}s)")
         p_axis.set_title(
             "Portmanteau p-value by lag (below the line: autocorrelation remains; red)",
             loc="left",
@@ -499,17 +501,17 @@ def models_figure(results: dict[str, dict[str, Any]]) -> Figure:
 
 @app.command()
 def main(
-    levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv",
-    differences_path: Path = PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv",
+    levels_path: Path = LEVELS_PATH,
+    differences_path: Path = DIFFERENCES_PATH,
 ) -> None:
     """
     Run the VAR / VECM estimation and checks on the training split and write the report and figure.
 
     Parameters
     ----------
-    levels_path : Path, default=INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv"
+    levels_path : Path, default=LEVELS_PATH
         The cleaned levels, from ``make features``.
-    differences_path : Path, default=PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv"
+    differences_path : Path, default=DIFFERENCES_PATH
         The first differences, from ``make features``.
 
     Returns
@@ -535,9 +537,9 @@ def main(
     begin_phase("VAR / VECM candidates and their checks")
     train_levels, train_differences = load_training_split(levels_path, differences_path)
     period = (
-        f"levels {train_levels[DATE_COLUMN].min():%Y-%m} to "
-        f"{train_levels[DATE_COLUMN].max():%Y-%m}"
-        f" ({len(train_levels)} months)"
+        f"levels {train_levels[DATE_COLUMN].min():{DATE_FORMAT}} to "
+        f"{train_levels[DATE_COLUMN].max():{DATE_FORMAT}}"
+        f" ({len(train_levels)} {PERIOD}s)"
     )
 
     # Month-end frequency on the index: statsmodels then knows the spacing, and a missing month

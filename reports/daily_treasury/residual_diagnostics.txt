@@ -1,0 +1,27 @@
+Residual checks of the recommended SARIMA models
+Training split only: 2005-10-04 to 2016-03-31, 2738 first differences. Models are fitted exactly as in the information-criteria grid.
+Recommended = best by AIC, AICc and BIC, plus the AIC runner-up when it is within 2 AIC of the best.
+Both tests' null hypothesis: no autocorrelation up to the lag. Significance level: 5%.
+Ljung-Box degrees of freedom = lag - (p + q + P + Q); n/a when that is not positive.
+Breusch-Godfrey is the auxiliary regression of the residuals on their own lags; for models with MA terms this is an approximation of the exact LM test.
+A model passes when every available p-value is at or above the significance level.
+
+deposits_cumulative_B  SARIMA(0,1,4)x(1,0,1,5)  (AIC, AICc, BIC)
+  Residuals: 2738, ARMA terms: 6
+  lag  5: Ljung-Box p=n/a, Breusch-Godfrey p=0.0375
+  lag 10: Ljung-Box p=0.0000, Breusch-Godfrey p=0.0000
+  lag 20: Ljung-Box p=0.0000, Breusch-Godfrey p=0.0000
+  Verdict: FAIL: residual autocorrelation remains
+
+deposits_cumulative_B: no candidate within p + d + q <= 5 passes; revisit the grid.
+
+withdrawals_cumulative_B  SARIMA(0,1,4)x(1,0,1,5)  (AIC, AICc, BIC)
+  Residuals: 2738, ARMA terms: 6
+  lag  5: Ljung-Box p=n/a, Breusch-Godfrey p=0.0051
+  lag 10: Ljung-Box p=0.0000, Breusch-Godfrey p=0.0000
+  lag 20: Ljung-Box p=0.0000, Breusch-Godfrey p=0.0000
+  Verdict: FAIL: residual autocorrelation remains
+
+withdrawals_cumulative_B: no candidate within p + d + q <= 5 passes; revisit the grid.
+
+Figure: reports/daily_treasury/figures/residual_diagnostics.png

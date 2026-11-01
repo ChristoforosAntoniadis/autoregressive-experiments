@@ -36,4 +36,4 @@ Johansen cointegration test on the levels
     Most stationary combination: fed_total_assets_T -1.1923 x monetary_base_T
 
 Decision (BIC's lag order, trace test): rank 0, no cointegration: model the first differences with a VAR.
-Figure: reports/figures/var_diagnostics.png
+Figure: reports/fed_balance_sheet/figures/var_diagnostics.png

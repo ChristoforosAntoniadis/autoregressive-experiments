@@ -77,4 +77,4 @@ VECM(5)  [CARRY FORWARD]
   Portmanteau: lag 6 n/a (the model has 6 lags), lag 12 p=0.5677, lag 24 p=0.9050 -> no autocorrelation left
 
 Carry forward to the evaluation: VAR(5), VECM(5)
-Figure: reports/figures/var_models.png
+Figure: reports/fed_balance_sheet/figures/var_models.png

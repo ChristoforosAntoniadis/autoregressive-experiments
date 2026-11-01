@@ -44,4 +44,4 @@ monetary_base_T  SARIMA(1,1,1)x(1,0,1,12)
   lag 12: ARCH-LM p=8.02e-09 as is, 2.653e-05 break-adjusted
   Verdict: GARCH NEEDED. ARCH effects remain after removing the variance break: volatility clusters, so fit GARCH on the residuals.
 
-Figure: reports/figures/volatility_diagnostics.png
+Figure: reports/fed_balance_sheet/figures/volatility_diagnostics.png

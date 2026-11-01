@@ -19,4 +19,4 @@ monetary_base_T: 57 of 60 candidates converged.
   Best by AICc: SARIMA(0,1,1)x(1,0,1,12), AICc=-467.6084
   Best by BIC: SARIMA(0,1,1)x(0,0,0,12), BIC=-455.9025
 
-Full candidate table: reports/information_criteria_candidates.csv
+Full candidate table: reports/fed_balance_sheet/information_criteria_candidates.csv

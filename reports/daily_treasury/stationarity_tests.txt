@@ -1,0 +1,45 @@
+Training split only (first 60% of days), levels: 2005-10-03 to 2016-03-31, 2739 observations.
+Validation and test days are held out for model evaluation.
+
+ADF and KPSS stationarity checks on levels
+Significance level: 5%
+ADF null hypothesis: the series has a unit root (non-stationary).
+KPSS null hypothesis: the series is stationary.
+Both tests use a constant and a linear trend; ADF lag selection uses AIC.
+
+deposits_cumulative_B (observations: 2739)
+  ADF: statistic=-4.309538, p-value=0.00304068, selected lags=28
+  ADF critical values: {'1%': np.float64(-3.9621145049092044), '5%': np.float64(-3.412111306455954), '10%': np.float64(-3.1280046315080545)}
+  KPSS: statistic=1.216575, p-value=0.01, lags=31
+  KPSS critical values: {'10%': 0.119, '5%': 0.146, '2.5%': 0.176, '1%': 0.216}
+  Assessment: Tests conflict; treat the stationarity result as inconclusive.
+
+withdrawals_cumulative_B (observations: 2739)
+  ADF: statistic=-4.230101, p-value=0.00403021, selected lags=28
+  ADF critical values: {'1%': np.float64(-3.9621145049092044), '5%': np.float64(-3.412111306455954), '10%': np.float64(-3.1280046315080545)}
+  KPSS: statistic=1.273561, p-value=0.01, lags=31
+  KPSS critical values: {'10%': 0.119, '5%': 0.146, '2.5%': 0.176, '1%': 0.216}
+  Assessment: Tests conflict; treat the stationarity result as inconclusive.
+
+Training split only (first 60% of days), first differences: 2005-10-04 to 2016-03-31, 2738 observations.
+Validation and test days are held out for model evaluation.
+
+ADF and KPSS stationarity checks on first-order differences
+Significance level: 5%
+ADF null hypothesis: the series has a unit root (non-stationary).
+KPSS null hypothesis: the series is stationary.
+Both tests use a constant; ADF lag selection uses AIC.
+
+deposits_cumulative_B (observations: 2738)
+  ADF: statistic=-6.192794, p-value=6.06545e-08, selected lags=25
+  ADF critical values: {'1%': np.float64(-3.43276353256931), '5%': np.float64(-2.8626063225123146), '10%': np.float64(-2.5673376385571394)}
+  KPSS: statistic=2.481628, p-value=0.01, lags=29
+  KPSS critical values: {'10%': 0.347, '5%': 0.463, '2.5%': 0.574, '1%': 0.739}
+  Assessment: Tests conflict; treat the stationarity result as inconclusive.
+
+withdrawals_cumulative_B (observations: 2738)
+  ADF: statistic=-5.194152, p-value=9.03704e-06, selected lags=27
+  ADF critical values: {'1%': np.float64(-3.432765315465621), '5%': np.float64(-2.8626071098943244), '10%': np.float64(-2.5673380577606513)}
+  KPSS: statistic=2.767273, p-value=0.01, lags=34
+  KPSS critical values: {'10%': 0.347, '5%': 0.463, '2.5%': 0.574, '1%': 0.739}
+  Assessment: Tests conflict; treat the stationarity result as inconclusive.

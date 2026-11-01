@@ -1,8 +1,8 @@
 """
 Residual checks: do the recommended SARIMA models leave autocorrelation behind?
 
-Input: ``data/interim/fed_balance_sheet_cleaned.csv`` and
-``data/processed/fed_balance_sheet_first_difference.csv`` (training split only), and
+Input: the cleaned levels and their first differences (features.LEVELS_PATH and
+DIFFERENCES_PATH; training split only), and
 ``reports/information_criteria_candidates.csv`` from ``make diagnostics``.
 
 Output, in ``reports/``:
@@ -28,8 +28,6 @@ import typer
 
 from autoregressive_experiments.config import (
     FIGURES_DIR,
-    INTERIM_DATA_DIR,
-    PROCESSED_DATA_DIR,
     REPORTS_DIR,
 )
 from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
@@ -44,13 +42,18 @@ from autoregressive_experiments.diagnostics import (
 )
 from autoregressive_experiments.features import (
     DATE_COLUMN,
+    DATE_FORMAT,
+    DIFFERENCES_PATH,
+    LEVELS_PATH,
+    PERIOD,
+    UNIT,
     load_training_split,
 )
 from autoregressive_experiments.runlog import begin_phase, finish_run, start_run_log
 
 app = typer.Typer()
 
-# Settings; each value's reasoning is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in the dataset's config file (configs/<dataset>.json).
 # Lags (months) at which both tests are reported.
 TEST_LAGS = HYPERPARAMETERS.residual_checks.test_lags
 # A runner-up within this many AIC points of the best is checked too.
@@ -376,7 +379,7 @@ def residual_report(results: list[dict[str, Any]], train: pd.DataFrame) -> str:
     lines = [
         "Residual checks of the recommended SARIMA models",
         (
-            f"Training split only: {dates.min():%Y-%m} to {dates.max():%Y-%m}, "
+            f"Training split only: {dates.min():{DATE_FORMAT}} to {dates.max():{DATE_FORMAT}}, "
             f"{len(train)} first differences. Models are fitted exactly as in the information-"
             "criteria grid."
         ),
@@ -437,6 +440,40 @@ def format_p(p_value: float) -> str:
         E.g. "0.0612", or "n/a".
     """
     return "n/a" if not np.isfinite(p_value) else f"{p_value:.4f}"
+
+
+# What the volatility steps report when no recommended model passes these checks.
+NO_PASSING_MODELS = (
+    "No recommended SARIMA model passes the residual checks, so there is nothing to test here "
+    "(see residual_diagnostics.txt). The forecast comparison does not depend on this chapter: "
+    "every model's settings are chosen by out-of-sample error, and every test band is empirical.\n"
+)
+
+
+def note_no_passing_models(report_path: Path, figure_path: Path) -> None:
+    """
+    Write the no-passing-models note in place of a volatility report, and drop a stale figure.
+
+    Parameters
+    ----------
+    report_path : Path
+        Where the step's report goes; the note is written there.
+    figure_path : Path
+        The step's figure; removed if an earlier run left one, since nothing was drawn.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    A large sample rejects even small residual autocorrelation, so a profile can have no passing
+    model; the step then says so instead of drawing an empty figure.
+    """
+    report_path.write_text(NO_PASSING_MODELS, encoding="utf-8")
+    print(NO_PASSING_MODELS)
+    figure_path.unlink(missing_ok=True)
+    logger.warning(f"No passing model: only the note was written to {report_path}")
 
 
 def apply_chart_style() -> None:
@@ -535,7 +572,7 @@ def residual_figure(results: list[dict[str, Any]], dates: pd.Series) -> Figure:
             loc="left",
             fontsize=10,
         )
-        time_axis.set_ylabel("Residual (trillions)")
+        time_axis.set_ylabel(f"Residual ({UNIT})")
 
         # [1:] drops lag 0, whose autocorrelation is always 1.
         autocorrelations = acf(residuals, nlags=PLOT_LAGS, fft=False)[1:]
@@ -552,7 +589,7 @@ def residual_figure(results: list[dict[str, Any]], dates: pd.Series) -> Figure:
         acf_axis.set_title(
             "Residual ACF (shaded: 95% band; red: outside)", loc="left", fontsize=10
         )
-        acf_axis.set_xlabel("Lag (months)")
+        acf_axis.set_xlabel(f"Lag ({PERIOD}s)")
 
         # lags=PLOT_LAGS (an int) gives a p-value at every lag 1..PLOT_LAGS.
         p_values = acorr_ljungbox(residuals, lags=PLOT_LAGS, model_df=result["arma_terms"])[
@@ -571,7 +608,7 @@ def residual_figure(results: list[dict[str, Any]], dates: pd.Series) -> Figure:
         p_axis.set_title(
             "Ljung-Box p-value by lag (below the line: fails)", loc="left", fontsize=10
         )
-        p_axis.set_xlabel("Lag (months)")
+        p_axis.set_xlabel(f"Lag ({PERIOD}s)")
         # Same lag axis everywhere; lags up to the ARMA term count have no Ljung-Box p-value.
         for axis in (acf_axis, p_axis):
             axis.set_xlim(0.5, PLOT_LAGS + 0.5)
@@ -643,8 +680,8 @@ def checked_models(
 
 @app.command()
 def main(
-    levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv",
-    differences_path: Path = PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv",
+    levels_path: Path = LEVELS_PATH,
+    differences_path: Path = DIFFERENCES_PATH,
     candidates_path: Path = CANDIDATES_PATH,
 ) -> None:
     """
@@ -652,9 +689,9 @@ def main(
 
     Parameters
     ----------
-    levels_path : Path, default=INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv"
+    levels_path : Path, default=LEVELS_PATH
         The cleaned levels CSV.
-    differences_path : Path, default=PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv"
+    differences_path : Path, default=DIFFERENCES_PATH
         The first-differences CSV.
     candidates_path : Path, default=CANDIDATES_PATH
         The information-criteria grid CSV.

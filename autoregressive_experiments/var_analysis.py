@@ -14,8 +14,8 @@ VECM(5) on the levels, fitted on the training split.
   assets first (the Fed sets its balance sheet and the monetary base largely follows), and the
   reverse ordering as a check of how much the conclusions depend on it.
 
-Input: ``data/interim/fed_balance_sheet_cleaned.csv`` and
-``data/processed/fed_balance_sheet_first_difference.csv``, training split only.
+Input: the cleaned levels and their first differences (features.LEVELS_PATH and
+DIFFERENCES_PATH), training split only.
 
 Output, in ``reports/``:
 
@@ -39,16 +39,21 @@ import typer
 
 from autoregressive_experiments.config import (
     FIGURES_DIR,
-    INTERIM_DATA_DIR,
-    PROCESSED_DATA_DIR,
     REPORTS_DIR,
 )
 from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
-from autoregressive_experiments.diagnostics import SIGNIFICANCE_LEVEL, VALUE_COLUMNS, repo_path
+from autoregressive_experiments.diagnostics import SIGNIFICANCE_LEVEL, repo_path
 from autoregressive_experiments.features import (
     DATE_COLUMN,
+    DATE_FORMAT,
+    DIFFERENCES_PATH,
     FREQUENCY,
+    LEVELS_PATH,
+    PERIOD,
+    UNIT,
+    VALUE_COLUMNS,
     load_training_split,
+    series_title,
 )
 from autoregressive_experiments.residual_checks import (
     BASELINE,
@@ -64,7 +69,7 @@ from autoregressive_experiments.var_models import VECM_RANK
 
 app = typer.Typer()
 
-# Settings; each value's reasoning is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in the dataset's config file (configs/<dataset>.json).
 # The lag order carried forward by the residual checks.
 CARRIED_LAGS = HYPERPARAMETERS.var_analysis.carried_lags
 # Months the impulse responses and variance shares run after the shock, and those reported.
@@ -77,8 +82,14 @@ REPORT_PATH = REPORTS_DIR / "var_analysis.txt"
 FIGURE_PATH = FIGURES_DIR / "var_analysis.png"
 
 # Reference palette slots 1-3 (validated together).
+# The horizon marker in the report's cells ("6m" for months, "6d" for days).
+STEP_MARK = PERIOD[0]
 VAR_COLOR, VECM_COLOR, REVERSED_COLOR = SERIES_PALETTE[:3]
-SHORT_NAMES = {"fed_total_assets_T": "total assets", "monetary_base_T": "monetary base"}
+SHORT_NAMES = {column: series_title(column) for column in VALUE_COLUMNS}
+# The two orderings of the series when the shocks are orthogonalized: the main one and the
+# reverse, as a check of how much the conclusions depend on it.
+MAIN_ORDERING, REVERSED_ORDERING = (f"{SHORT_NAMES[c]} first" for c in VALUE_COLUMNS)
+NAME_WIDTH = max(len(name) for name in SHORT_NAMES.values())
 
 
 def possessive(name: str) -> str:
@@ -331,12 +342,12 @@ def analysis_report(
         ),
         (
             "Impulse responses: orthogonalized, one-standard-deviation shocks, responses of the "
-            "levels in trillions (the VAR's cumulative responses). 95% asymptotic bands for the "
+            f"levels in {UNIT} (the VAR's cumulative responses). 95% asymptotic bands for the "
             "VAR only."
         ),
         (
             "Variance shares: of each series' level forecast-error variance, from its own and "
-            "the other series' shocks. Ordering: total assets first (main), and reversed."
+            f"the other series' shocks. Ordering: {MAIN_ORDERING} (main), and reversed."
         ),
         "",
         "Granger causality",
@@ -344,29 +355,32 @@ def analysis_report(
     for row in granger.itertuples():
         verdict = "helps predict" if row.p_value < SIGNIFICANCE_LEVEL else "no significant help"
         lines.append(
-            f"  {row.model:<9} {SHORT_NAMES[row.causing]:>14} -> {SHORT_NAMES[row.caused]:<14} "
+            f"  {row.model:<9} {SHORT_NAMES[row.causing]:>{NAME_WIDTH}} -> "
+            f"{SHORT_NAMES[row.caused]:<{NAME_WIDTH}} "
             f"statistic {row.statistic:8.3f}, p={row.p_value:.4f}: {verdict}"
         )
     lines.append("")
-    lines.append("Impulse responses of the levels (trillions), total assets ordered first")
+    lines.append(f"Impulse responses of the levels ({UNIT}), {MAIN_ORDERING}")
     for name, (values, errors) in responses.items():
         lines.append(f"  {name}")
         for shock_index, shock in enumerate(columns):
             for response_index, response in enumerate(columns):
                 cells = []
-                for month in REPORT_HORIZONS:
-                    # Index = months after the shock (0 is the impact month).
-                    value = values[month, response_index, shock_index]
+                for step in REPORT_HORIZONS:
+                    # Index = periods after the shock (0 is the impact period).
+                    value = values[step, response_index, shock_index]
                     if errors is None:
-                        cells.append(f"{month}m {value:+.4f}")
+                        cells.append(f"{step}{STEP_MARK} {value:+.4f}")
                     else:
-                        error = errors[month, response_index, shock_index]
+                        error = errors[step, response_index, shock_index]
                         # The band value +- 1.96 x error excludes zero exactly when this holds.
                         excludes_zero = abs(value) > BAND_Z * error
-                        cells.append(f"{month}m {value:+.4f}{'*' if excludes_zero else ' '}")
+                        cells.append(
+                            f"{step}{STEP_MARK} {value:+.4f}{'*' if excludes_zero else ' '}"
+                        )
                 lines.append(
-                    f"    {SHORT_NAMES[shock]:>14} shock -> {SHORT_NAMES[response]:<14} "
-                    + "  ".join(cells)
+                    f"    {SHORT_NAMES[shock]:>{NAME_WIDTH}} shock -> "
+                    f"{SHORT_NAMES[response]:<{NAME_WIDTH}} " + "  ".join(cells)
                 )
     lines.append("  * = the 95% band excludes zero (VAR only)")
     lines.append("")
@@ -376,13 +390,14 @@ def analysis_report(
         for response_index, response in enumerate(columns):
             # With two series, the other series' index is 1 - this one's.
             other = 1 - response_index
-            months = ", ".join(
-                # Shares are indexed by h - 1: row 0 is the 1-month horizon.
-                f"{month}m {100 * values[month - 1, response_index, other]:.0f}%"
-                for month in REPORT_HORIZONS
+            steps = ", ".join(
+                # Shares are indexed by h - 1: row 0 is the 1-period horizon.
+                f"{step}{STEP_MARK} {100 * values[step - 1, response_index, other]:.0f}%"
+                for step in REPORT_HORIZONS
             )
             cells.append(
-                f"    {SHORT_NAMES[response]:<14} from {SHORT_NAMES[columns[other]]}: {months}"
+                f"    {SHORT_NAMES[response]:<{NAME_WIDTH}} from {SHORT_NAMES[columns[other]]}: "
+                f"{steps}"
             )
         lines.append(f"  {name}, {ordering}")
         lines.extend(cells)
@@ -507,8 +522,8 @@ def analysis_figure(
             )
             axis.axhline(0, color=PRIMARY_INK, linewidth=1)
             axis.set_xticks([0, 6, 12, 18, 24])
-            axis.set_xlabel("Months after the shock")
-            axis.set_ylabel("Response of the level (trillions)")
+            axis.set_xlabel(f"{PERIOD.capitalize()}s after the shock")
+            axis.set_ylabel(f"Response of the level ({UNIT})")
             axis.set_title(
                 f"{SHORT_NAMES[shock]} shock -> {SHORT_NAMES[response]}\n"
                 "band clear of zero: a real response",
@@ -519,9 +534,9 @@ def analysis_figure(
                 axis.legend(loc="upper left", fontsize=8, frameon=False)
 
     styles = {
-        (var_name, "total assets first"): VAR_COLOR,
-        (vecm_name, "total assets first"): VECM_COLOR,
-        (var_name, "monetary base first"): REVERSED_COLOR,
+        (var_name, MAIN_ORDERING): VAR_COLOR,
+        (vecm_name, MAIN_ORDERING): VECM_COLOR,
+        (var_name, REVERSED_ORDERING): REVERSED_COLOR,
     }
     for response_index, response in enumerate(columns):
         axis = figure.add_subplot(grid[3, response_index], facecolor=SURFACE)
@@ -539,7 +554,7 @@ def analysis_figure(
         axis.set_ylim(0, 100)
         axis.set_xticks([1, 6, 12, 18, 24])
         axis.set_xlim(1, HORIZON)
-        axis.set_xlabel("Forecast horizon (months)")
+        axis.set_xlabel(f"Forecast horizon ({PERIOD}s)")
         axis.set_ylabel("% of forecast-error variance")
         axis.set_title(
             f"Share of {possessive(SHORT_NAMES[response])} forecast uncertainty\n"
@@ -555,8 +570,8 @@ def analysis_figure(
 
 @app.command()
 def main(
-    levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv",
-    differences_path: Path = PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv",
+    levels_path: Path = LEVELS_PATH,
+    differences_path: Path = DIFFERENCES_PATH,
 ) -> None:
     """
     Run the Granger tests, impulse responses and FEVD on the training split and write the report
@@ -564,9 +579,9 @@ def main(
 
     Parameters
     ----------
-    levels_path : Path, default=INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv"
+    levels_path : Path, default=LEVELS_PATH
         The cleaned levels, from ``make features``.
-    differences_path : Path, default=PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv"
+    differences_path : Path, default=DIFFERENCES_PATH
         The first differences, from ``make features``.
 
     Returns
@@ -605,7 +620,9 @@ def main(
         train_levels.asfreq(FREQUENCY),
         train_differences.asfreq(FREQUENCY),
     )
-    period = f"{train_levels.index.min():%Y-%m} to {train_levels.index.max():%Y-%m}"
+    period = (
+        f"{train_levels.index.min():{DATE_FORMAT}} to {train_levels.index.max():{DATE_FORMAT}}"
+    )
 
     systems = fit_systems(train_levels, train_differences)
     granger = granger_tests(systems, columns)
@@ -615,13 +632,13 @@ def main(
     # resulting shares back puts them on the main ordering's axes.
     reversed_systems = fit_systems(train_levels[columns[::-1]], train_differences[columns[::-1]])
     shares = {
-        (name, "total assets first"): variance_decomposition(values)
+        (name, MAIN_ORDERING): variance_decomposition(values)
         for name, (values, _) in responses.items()
     }
     for name, fitted in reversed_systems.items():
         values, _ = level_responses(name, fitted)
         # Reverse the variable and shock axes: index 0 is total assets again, as in the main run.
-        shares[(name, "monetary base first")] = variance_decomposition(values)[:, ::-1, ::-1]
+        shares[(name, REVERSED_ORDERING)] = variance_decomposition(values)[:, ::-1, ::-1]
 
     report = analysis_report(granger, responses, shares, period, columns)
     REPORT_PATH.write_text(report, encoding="utf-8")

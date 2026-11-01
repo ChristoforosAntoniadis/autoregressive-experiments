@@ -38,8 +38,6 @@ import typer
 
 from autoregressive_experiments.config import (
     FIGURES_DIR,
-    INTERIM_DATA_DIR,
-    PROCESSED_DATA_DIR,
     REPORTS_DIR,
 )
 from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
@@ -50,7 +48,14 @@ from autoregressive_experiments.diagnostics import (
     VALUE_COLUMNS,
     repo_path,
 )
-from autoregressive_experiments.features import DATE_COLUMN
+from autoregressive_experiments.features import (
+    DATE_COLUMN,
+    DATE_FORMAT,
+    DIFFERENCES_PATH,
+    LEVELS_PATH,
+    PERIOD,
+    PERIODLY,
+)
 from autoregressive_experiments.residual_checks import (
     CRITICAL_COLOR,
     SECONDARY_INK,
@@ -60,6 +65,7 @@ from autoregressive_experiments.residual_checks import (
     checked_models,
     model_label,
     model_name,
+    note_no_passing_models,
 )
 from autoregressive_experiments.runlog import Progress, begin_phase, finish_run, start_run_log
 from autoregressive_experiments.volatility_checks import (
@@ -97,7 +103,7 @@ ASYMMETRIC_MODELS: dict[str, dict[str, Any]] = {
     EGARCH_T: {"vol": "EGARCH", "p": 1, "o": 1, "q": 1, "dist": "t"},
     GJR_T: {"vol": "GARCH", "p": 1, "o": 1, "q": 1, "dist": "t"},
 }
-# Settings; each value's reasoning is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in the dataset's config file (configs/<dataset>.json).
 # EGARCH has no closed-form multi-step variance forecast, so it is simulated, seeded with
 # RANDOM_SEED so every rerun gives identical numbers.
 SIMULATIONS = HYPERPARAMETERS.volatility_models.simulations
@@ -130,7 +136,7 @@ VERDICTS = {
 
 # Legend labels shared by both panels of a figure row (same colour in both).
 RESIDUALS_LABEL = "residuals as they are (left: absolute value)"
-GARCH_LABEL = "with GARCH (left: its monthly SD; right: residuals divided by it)"
+GARCH_LABEL = f"with GARCH (left: its {PERIODLY} SD; right: residuals divided by it)"
 
 REPORT_PATH = REPORTS_DIR / "garch_diagnostics.txt"
 FIGURE_PATH = FIGURES_DIR / "garch_diagnostics.png"
@@ -459,7 +465,9 @@ def describe_half_life(months: float) -> str:
         E.g. "half-life 8.3 months", or "no decay (alpha + beta = 1)" when it is infinite.
     """
     return (
-        f"half-life {months:.1f} months" if np.isfinite(months) else "no decay (alpha + beta = 1)"
+        f"half-life {months:.1f} {PERIOD}s"
+        if np.isfinite(months)
+        else "no decay (alpha + beta = 1)"
     )
 
 
@@ -730,7 +738,7 @@ def garch_report(results: list[dict[str, Any]], train: pd.DataFrame) -> str:
     lines = [
         "GARCH(1,1) on the residuals of the models that passed the residual checks",
         (
-            f"Training split only: {dates.min():%Y-%m} to {dates.max():%Y-%m}, "
+            f"Training split only: {dates.min():{DATE_FORMAT}} to {dates.max():{DATE_FORMAT}}, "
             f"{len(train)} first differences."
         ),
         (
@@ -744,12 +752,12 @@ def garch_report(results: list[dict[str, Any]], train: pd.DataFrame) -> str:
             "ratio and the break date), so all four AIC / BIC values are comparable."
         ),
         (
-            "Standardized residuals = residuals / GARCH's monthly standard deviation. If GARCH "
-            "captured the clustering, ARCH-LM and Ljung-Box on their squares pass at "
+            f"Standardized residuals = residuals / GARCH's {PERIODLY} standard deviation. If "
+            "GARCH captured the clustering, ARCH-LM and Ljung-Box on their squares pass at "
             f"{SIGNIFICANCE_LEVEL:.0%} (lags {', '.join(map(str, ARCH_TEST_LAGS))})."
         ),
         BOOTSTRAP_NOTE,
-        "Half-life: months for a volatility shock to halve, log(0.5) / log(alpha + beta).",
+        f"Half-life: {PERIOD}s for a volatility shock to halve, log(0.5) / log(alpha + beta).",
         "",
     ]
     for column in VALUE_COLUMNS:
@@ -874,7 +882,7 @@ def garch_figure(results: list[dict[str, Any]], dates: pd.Series) -> Figure:
         p_axis.set_ylim(max(1e-300, min(before.min(), after.min()) / 3), 2)
         p_axis.set_xlim(0.5, PLOT_LAGS + 0.5)
         p_axis.set_xticks([1, 3, 6, 9, 12])
-        p_axis.set_xlabel("Lag (months)")
+        p_axis.set_xlabel(f"Lag ({PERIOD}s)")
         p_axis.set_title(
             "ARCH-LM p-value by lag (above the line: no ARCH effects left)",
             loc="left",
@@ -891,8 +899,8 @@ def garch_figure(results: list[dict[str, Any]], dates: pd.Series) -> Figure:
 
 @app.command()
 def main(
-    levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv",
-    differences_path: Path = PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv",
+    levels_path: Path = LEVELS_PATH,
+    differences_path: Path = DIFFERENCES_PATH,
     candidates_path: Path = CANDIDATES_PATH,
 ) -> None:
     """
@@ -900,9 +908,9 @@ def main(
 
     Parameters
     ----------
-    levels_path : Path, default=INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv"
+    levels_path : Path, default=LEVELS_PATH
         The cleaned levels CSV.
-    differences_path : Path, default=PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv"
+    differences_path : Path, default=DIFFERENCES_PATH
         The first-differences CSV.
     candidates_path : Path, default=CANDIDATES_PATH
         The information-criteria grid CSV.
@@ -929,6 +937,10 @@ def main(
         if result["passed"]
     ]
 
+    if not results:
+        note_no_passing_models(REPORT_PATH, FIGURE_PATH)
+        finish_run()
+        return
     report = garch_report(results, train)
     REPORT_PATH.write_text(report, encoding="utf-8")
     print(report)

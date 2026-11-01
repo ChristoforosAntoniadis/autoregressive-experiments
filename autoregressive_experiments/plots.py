@@ -1,9 +1,9 @@
 """
 Plot the cleaned Fed balance-sheet series.
 
-Input: ``data/interim/fed_balance_sheet_cleaned.csv``.
+Input: the cleaned levels, ``data/interim/<dataset>/levels.csv``.
 
-Output: ``reports/figures/fed_balance_sheet.png``, both series over time with
+Output: ``reports/<dataset>/figures/series.png``, both series over time with
 their Pearson correlation in the legend.
 """
 
@@ -15,30 +15,36 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import typer
 
-from autoregressive_experiments.config import FIGURES_DIR, INTERIM_DATA_DIR
-from autoregressive_experiments.features import DATE_COLUMN, VALUE_COLUMNS
+from autoregressive_experiments.config import FIGURES_DIR
+from autoregressive_experiments.features import (
+    DATE_COLUMN,
+    LEVELS_PATH,
+    TITLE,
+    UNIT,
+    VALUE_COLUMNS,
+)
 from autoregressive_experiments.residual_checks import SERIES_PALETTE, apply_chart_style
 from autoregressive_experiments.runlog import begin_phase, finish_run, start_run_log
 
 app = typer.Typer()
 
-# Palette slots 1 and 2, paired with VALUE_COLUMNS in order (total assets, monetary base).
+# Palette slots 1 and 2, paired with VALUE_COLUMNS in order.
 LINE_COLORS = SERIES_PALETTE[:2]
 
 
 @app.command()
 def main(
-    input_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv",
-    output_path: Path = FIGURES_DIR / "fed_balance_sheet.png",
+    input_path: Path = LEVELS_PATH,
+    output_path: Path = FIGURES_DIR / "series.png",
 ) -> None:
     """
     Draw both cleaned series over time and save the figure (make plots).
 
     Parameters
     ----------
-    input_path : Path, default=INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv"
+    input_path : Path, default=LEVELS_PATH
         The cleaned levels written by ``make features``.
-    output_path : Path, default=FIGURES_DIR / "fed_balance_sheet.png"
+    output_path : Path, default=FIGURES_DIR / "series.png"
         Where to save the PNG (150 dpi); its folder is created if needed.
 
     Returns
@@ -90,7 +96,7 @@ def main(
         # Low alpha, so the two filled areas stay readable where they overlap.
         axis.fill_between(dataframe[DATE_COLUMN], values, color=color, alpha=0.18)
 
-    axis.set(title="Federal Reserve Balance Sheet", xlabel="Time", ylabel="Value (trillions)")
+    axis.set(title=TITLE, xlabel="Time", ylabel=f"Value ({UNIT})")
     # ConciseDateFormatter keeps tick labels short: only the date parts that change are shown.
     axis.xaxis.set_major_formatter(mdates.ConciseDateFormatter(axis.xaxis.get_major_locator()))
     axis.legend(title=f"Pearson correlation: r = {correlation:.3f}")

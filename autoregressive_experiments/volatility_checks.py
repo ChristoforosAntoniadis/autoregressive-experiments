@@ -35,8 +35,6 @@ import typer
 
 from autoregressive_experiments.config import (
     FIGURES_DIR,
-    INTERIM_DATA_DIR,
-    PROCESSED_DATA_DIR,
     REPORTS_DIR,
 )
 from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
@@ -46,7 +44,14 @@ from autoregressive_experiments.diagnostics import (
     VALUE_COLUMNS,
     repo_path,
 )
-from autoregressive_experiments.features import DATE_COLUMN
+from autoregressive_experiments.features import (
+    DATE_COLUMN,
+    DATE_FORMAT,
+    DIFFERENCES_PATH,
+    LEVELS_PATH,
+    PERIOD,
+    UNIT,
+)
 from autoregressive_experiments.residual_checks import (
     CRITICAL_COLOR,
     GRIDLINE,
@@ -58,12 +63,13 @@ from autoregressive_experiments.residual_checks import (
     checked_models,
     model_label,
     model_name,
+    note_no_passing_models,
 )
 from autoregressive_experiments.runlog import begin_phase, finish_run, start_run_log
 
 app = typer.Typer()
 
-# Settings; each value's reasoning is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in the dataset's config file (configs/<dataset>.json).
 # Lags (months) for the reported ARCH-LM tests.
 ARCH_TEST_LAGS = HYPERPARAMETERS.volatility_checks.arch_test_lags
 # Lags shown in the figure's ARCH-LM panel (every lag from 1).
@@ -304,7 +310,7 @@ def volatility_report(results: list[dict[str, Any]], train: pd.DataFrame) -> str
     lines = [
         "Volatility checks of the models that passed the residual checks",
         (
-            f"Training split only: {dates.min():%Y-%m} to {dates.max():%Y-%m}, "
+            f"Training split only: {dates.min():{DATE_FORMAT}} to {dates.max():{DATE_FORMAT}}, "
             f"{len(train)} first differences."
         ),
         (
@@ -314,8 +320,8 @@ def volatility_report(results: list[dict[str, Any]], train: pd.DataFrame) -> str
         ),
         (
             "Variance break: the split that best fits one variance before and another after, "
-            f"with at least {BREAK_TRIM:.0%} of the months on each side. A searched break has a "
-            "non-standard test distribution, so the decisive evidence is ARCH-LM after "
+            f"with at least {BREAK_TRIM:.0%} of the {PERIOD}s on each side. A searched break has "
+            "a non-standard test distribution, so the decisive evidence is ARCH-LM after "
             "removing it."
         ),
         "Break-adjusted: each regime's residuals divided by that regime's standard deviation.",
@@ -328,8 +334,8 @@ def volatility_report(results: list[dict[str, Any]], train: pd.DataFrame) -> str
             break_index = result["break_index"]
             lines.append(f"{column}  {model_label(result)}")
             lines.append(
-                f"  Variance break: {residual_dates.iloc[break_index]:%Y-%m} "
-                f"({break_index} months before, {len(residual_dates) - break_index} after)"
+                f"  Variance break: {residual_dates.iloc[break_index]:{DATE_FORMAT}} "
+                f"({break_index} {PERIOD}s before, {len(residual_dates) - break_index} after)"
             )
             lines.append(
                 f"  Standard deviation: {result['sd_before']:.4f} before, "
@@ -399,7 +405,7 @@ def volatility_figure(results: list[dict[str, Any]], dates: pd.Series) -> Figure
         time_axis.axvline(break_date, color=SECONDARY_INK, linewidth=1)
         # x in dates, y in axes fraction (1 = top), so the label sits at the top of the line.
         time_axis.annotate(
-            f" break {break_date:%Y-%m}",
+            f" break {break_date:{DATE_FORMAT}}",
             (break_date, 1),
             xycoords=("data", "axes fraction"),
             va="top",
@@ -412,7 +418,7 @@ def volatility_figure(results: list[dict[str, Any]], dates: pd.Series) -> Figure
             loc="left",
             fontsize=10,
         )
-        time_axis.set_ylabel("Residual (trillions)")
+        time_axis.set_ylabel(f"Residual ({UNIT})")
 
         raw = arch_lm_p_values(residuals, lags)
         adjusted = arch_lm_p_values(result["adjusted"], lags)
@@ -440,7 +446,7 @@ def volatility_figure(results: list[dict[str, Any]], dates: pd.Series) -> Figure
         p_axis.set_ylim(max(1e-300, min(raw.min(), adjusted.min()) / 3), 2)
         p_axis.set_xlim(0.5, PLOT_LAGS + 0.5)
         p_axis.set_xticks([1, 3, 6, 9, 12])
-        p_axis.set_xlabel("Lag (months)")
+        p_axis.set_xlabel(f"Lag ({PERIOD}s)")
         p_axis.set_title(
             "ARCH-LM p-value by lag (below the line: ARCH effects)", loc="left", fontsize=10
         )
@@ -455,8 +461,8 @@ def volatility_figure(results: list[dict[str, Any]], dates: pd.Series) -> Figure
 
 @app.command()
 def main(
-    levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv",
-    differences_path: Path = PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv",
+    levels_path: Path = LEVELS_PATH,
+    differences_path: Path = DIFFERENCES_PATH,
     candidates_path: Path = CANDIDATES_PATH,
 ) -> None:
     """
@@ -464,9 +470,9 @@ def main(
 
     Parameters
     ----------
-    levels_path : Path, default=INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv"
+    levels_path : Path, default=LEVELS_PATH
         The cleaned levels CSV.
-    differences_path : Path, default=PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv"
+    differences_path : Path, default=DIFFERENCES_PATH
         The first-differences CSV.
     candidates_path : Path, default=CANDIDATES_PATH
         The information-criteria grid CSV.
@@ -488,6 +494,10 @@ def main(
         if result["passed"]
     ]
 
+    if not results:
+        note_no_passing_models(REPORT_PATH, FIGURE_PATH)
+        finish_run()
+        return
     report = volatility_report(results, train)
     REPORT_PATH.write_text(report, encoding="utf-8")
     print(report)

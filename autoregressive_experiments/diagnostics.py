@@ -1,14 +1,14 @@
 """
 Pre-estimation diagnostics for SARIMA: stationarity, model identification and order selection.
 
-Input: ``data/interim/fed_balance_sheet_cleaned.csv`` (levels) and
-``data/processed/fed_balance_sheet_first_difference.csv``. Only the training split
+Input: the cleaned levels and their first differences (features.LEVELS_PATH and
+DIFFERENCES_PATH). Only the training split
 (the first 60% of months) is used, so validation and test stay unseen until evaluation.
 
 Output, in ``reports/``:
 
 - ``stationarity_tests.txt``: ADF and KPSS on each series, in levels and in first differences
-- ``acf_pacf_analysis.txt`` and ``figures/fed_balance_sheet_acf_pacf.png``:
+- ``acf_pacf_analysis.txt`` and ``figures/acf_pacf.png``:
   sample ACF / PACF and their significant lags
 - ``information_criteria_candidates.csv`` and ``information_criteria_summary.txt``:
   AIC / AICc / BIC of a SARIMA candidate grid, and the best model per criterion
@@ -30,8 +30,6 @@ import typer
 
 from autoregressive_experiments.config import (
     FIGURES_DIR,
-    INTERIM_DATA_DIR,
-    PROCESSED_DATA_DIR,
     PROJ_ROOT,
     REPORTS_DIR,
 )
@@ -41,6 +39,10 @@ from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
 # import it from here.
 from autoregressive_experiments.features import (
     DATE_COLUMN,
+    DATE_FORMAT,
+    DIFFERENCES_PATH,
+    LEVELS_PATH,
+    PERIOD,
     VALUE_COLUMNS,
     load_training_split,
 )
@@ -53,7 +55,7 @@ from autoregressive_experiments.runlog import (
 
 app = typer.Typer()
 
-# Settings; each value's reasoning is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in the dataset's config file (configs/<dataset>.json).
 # The level for every test and confidence band in the project.
 SIGNIFICANCE_LEVEL = HYPERPARAMETERS.tests.significance_level
 # Lags shown in the ACF / PACF analysis.
@@ -73,7 +75,7 @@ ADF_AUTOLAG = HYPERPARAMETERS.diagnostics.adf_autolag
 KPSS_NLAGS = HYPERPARAMETERS.diagnostics.kpss_nlags
 PACF_METHOD = HYPERPARAMETERS.diagnostics.pacf_method
 
-ACF_PACF_FIGURE_PATH = FIGURES_DIR / "fed_balance_sheet_acf_pacf.png"
+ACF_PACF_FIGURE_PATH = FIGURES_DIR / "acf_pacf.png"
 CANDIDATES_PATH = REPORTS_DIR / "information_criteria_candidates.csv"
 
 
@@ -245,9 +247,9 @@ def split_header(train: pd.DataFrame, what: str) -> str:
     """
     dates = train[DATE_COLUMN]
     return (
-        f"Training split only (first 60% of months), {what}: "
-        f"{dates.min():%Y-%m} to {dates.max():%Y-%m}, {len(train)} observations.\n"
-        "Validation and test months are held out for model evaluation.\n\n"
+        f"Training split only (first 60% of {PERIOD}s), {what}: "
+        f"{dates.min():{DATE_FORMAT}} to {dates.max():{DATE_FORMAT}}, {len(train)} observations.\n"
+        f"Validation and test {PERIOD}s are held out for model evaluation.\n\n"
     )
 
 
@@ -470,8 +472,8 @@ def fit_sarima(
     trend: str = "c",
 ) -> SARIMAXResultsWrapper:
     """
-    ARMA(p, q)x(P, 0, Q, 12), with a constant by default, fitted on the first differences (so
-    d = 1).
+    ARMA(p, q)x(P, 0, Q, SEASONAL_PERIOD), with a constant by default, fitted on the first
+    differences (so d = 1).
 
     Parameters
     ----------
@@ -482,7 +484,7 @@ def fit_sarima(
     q : int
         Non-seasonal MA order.
     seasonal_p : int
-        Seasonal AR order P, at multiples of SEASONAL_PERIOD (12 months).
+        Seasonal AR order P, at multiples of SEASONAL_PERIOD.
     seasonal_q : int
         Seasonal MA order Q, at multiples of SEASONAL_PERIOD.
     exog : np.ndarray or None, default=None
@@ -506,16 +508,28 @@ def fit_sarima(
     enforce_stationarity / enforce_invertibility keep the AR part stationary and the MA part
     invertible, so every fit is a well-defined model with a unique representation;
     disp=False silences the optimizer's output.
+
+    The Kalman filter starts from the stationary distribution of the state, which it solves
+    for with a Lyapunov equation; on long samples with a seasonal AR term near the unit circle
+    that solve can fail (a LinAlgError), so the fit is then repeated with statsmodels'
+    approximate diffuse initialization (a large starting variance instead), which changes only
+    how the first few observations are weighted, not the model. The first fit is kept whenever
+    it succeeds.
     """
-    return SARIMAX(
-        values,
+    specification = dict(
         exog=exog,
         order=(p, 0, q),
         seasonal_order=(seasonal_p, 0, seasonal_q, SEASONAL_PERIOD),
         trend=trend,
         enforce_stationarity=True,
         enforce_invertibility=True,
-    ).fit(disp=False, maxiter=MAX_ITERATIONS)
+    )
+    try:
+        return SARIMAX(values, **specification).fit(disp=False, maxiter=MAX_ITERATIONS)
+    except np.linalg.LinAlgError:
+        return SARIMAX(values, initialization="approximate_diffuse", **specification).fit(
+            disp=False, maxiter=MAX_ITERATIONS
+        )
 
 
 def information_criteria(dataframe: pd.DataFrame) -> tuple[pd.DataFrame, str]:
@@ -650,8 +664,8 @@ def information_criteria(dataframe: pd.DataFrame) -> tuple[pd.DataFrame, str]:
 
 @app.command()
 def main(
-    levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv",
-    differences_path: Path = PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv",
+    levels_path: Path = LEVELS_PATH,
+    differences_path: Path = DIFFERENCES_PATH,
 ) -> None:
     """
     Run the stationarity tests, ACF / PACF and SARIMA grid on the training split and write their
@@ -659,9 +673,9 @@ def main(
 
     Parameters
     ----------
-    levels_path : Path, default=INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv"
+    levels_path : Path, default=LEVELS_PATH
         The cleaned levels, written by ``make features``.
-    differences_path : Path, default=PROCESSED_DATA_DIR / "fed_balance_sheet_first_difference.csv"
+    differences_path : Path, default=DIFFERENCES_PATH
         The first differences, written by ``make features``.
 
     Returns

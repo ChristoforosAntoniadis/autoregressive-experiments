@@ -1,0 +1,40 @@
+VAR / VECM interpretation: Granger causality, impulse responses and FEVD
+Training split only: 2005-10-03 to 2016-03-31. Systems carried forward by the residual checks: VAR(5) on the differences, VECM(5) on the levels.
+Granger: VAR, Wald chi-squared test; VECM, F-test including the error-correction term. Null: the causing series doesn't help predict the caused one. Significance level 5%.
+Impulse responses: orthogonalized, one-standard-deviation shocks, responses of the levels in billions (the VAR's cumulative responses). 95% asymptotic bands for the VAR only.
+Variance shares: of each series' level forecast-error variance, from its own and the other series' shocks. Ordering: deposits cumulative first (main), and reversed.
+
+Granger causality
+  VAR(5)       deposits cumulative -> withdrawals cumulative statistic   69.450, p=0.0000: helps predict
+  VAR(5)    withdrawals cumulative -> deposits cumulative    statistic  211.574, p=0.0000: helps predict
+  VECM(5)      deposits cumulative -> withdrawals cumulative statistic   15.063, p=0.0000: helps predict
+  VECM(5)   withdrawals cumulative -> deposits cumulative    statistic   39.007, p=0.0000: helps predict
+
+Impulse responses of the levels (billions), deposits cumulative first
+  VAR(5)
+       deposits cumulative shock -> deposits cumulative    1d +31.3360*  5d +35.1123*  10d +32.8206*  20d +30.4604*
+       deposits cumulative shock -> withdrawals cumulative 1d +26.2288*  5d +31.8803*  10d +30.5124*  20d +28.1383*
+    withdrawals cumulative shock -> deposits cumulative    1d -3.4818*  5d -0.3761   10d -1.8794   20d -3.8130*
+    withdrawals cumulative shock -> withdrawals cumulative 1d +10.4752*  5d +14.5874*  10d +12.8648*  20d +10.6843*
+  VECM(5)
+       deposits cumulative shock -> deposits cumulative    1d +30.1821  5d +33.0883  10d +30.7814  20d +29.0067
+       deposits cumulative shock -> withdrawals cumulative 1d +25.0030  5d +29.5948  10d +28.0575  20d +26.3174
+    withdrawals cumulative shock -> deposits cumulative    1d -3.9984  5d -1.8059  10d -4.9024  20d -9.7798
+    withdrawals cumulative shock -> withdrawals cumulative 1d +9.8967  5d +12.9764  10d +9.4060  20d +3.7033
+  * = the 95% band excludes zero (VAR only)
+
+Share of each series' forecast-error variance from the other series' shocks
+  VAR(5), deposits cumulative first
+    deposits cumulative    from withdrawals cumulative: 1d 0%, 5d 4%, 10d 4%, 20d 4%
+    withdrawals cumulative from deposits cumulative: 1d 79%, 5d 86%, 10d 87%, 20d 88%
+  VECM(5), deposits cumulative first
+    deposits cumulative    from withdrawals cumulative: 1d 0%, 5d 6%, 10d 7%, 20d 9%
+    withdrawals cumulative from deposits cumulative: 1d 79%, 5d 86%, 10d 88%, 20d 92%
+  VAR(5), withdrawals cumulative first
+    deposits cumulative    from withdrawals cumulative: 1d 79%, 5d 65%, 10d 65%, 20d 65%
+    withdrawals cumulative from deposits cumulative: 1d 0%, 5d 2%, 10d 2%, 20d 2%
+  VECM(5), withdrawals cumulative first
+    deposits cumulative    from withdrawals cumulative: 1d 79%, 5d 62%, 10d 60%, 20d 54%
+    withdrawals cumulative from deposits cumulative: 1d 0%, 5d 3%, 10d 3%, 20d 6%
+
+Figure: reports/daily_treasury/figures/var_analysis.png

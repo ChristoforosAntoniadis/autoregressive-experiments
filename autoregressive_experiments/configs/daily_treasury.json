@@ -1,0 +1,711 @@
+{
+  "dataset": {
+    "kaggle_handle": {
+      "value": "nakulshahdadpuri314/daily-treasury-statement",
+      "reasoning": "The Kaggle mirror 'Daily cash and debt operations of U.S. Treasury' of the Daily Treasury Statement (US government data, 2005-10-03 to 2023-04-03): the Treasury's deposits and withdrawals of operating cash per business day, a real daily cashflow record with the inflow / outflow / balance structure of a corporate cash account, chosen as the rehearsal for daily cashflow forecasting."
+    },
+    "raw_file": {
+      "value": "daily_treasury_flows.csv",
+      "reasoning": "The reduced table make data keeps: per business day, account and transaction type, the day's amount in millions USD, summed over the statement's categories (sub-total rows dropped). The full deposits-and-withdrawals table is 55 MB, too large to commit; the reduced one is under 300 KB and holds everything the builder needs."
+    },
+    "value_columns": {
+      "value": ["deposits_cumulative_B", "withdrawals_cumulative_B"],
+      "reasoning": "The running totals of deposits and of withdrawals since the first day, in billions USD. Cumulating makes the series I(1) by construction and positive, so the pipeline's first differences are the daily flows, every model and transform applies unchanged, and the error of a level forecast h days ahead is the error of the h-day total. Their difference is the change in the cash balance, which links the two series as the balance sheet's two series were linked."
+    },
+    "unit_suffix": {
+      "value": "_B",
+      "reasoning": "The columns are tagged with their unit, billions; chart titles drop the tag."
+    },
+    "unit": {
+      "value": "billions",
+      "reasoning": "Billions of USD: the statement reports millions, and daily flows of 20 to 500 billion read more easily in billions."
+    },
+    "title": {
+      "value": "U.S. Treasury operating cash: cumulative deposits and withdrawals",
+      "reasoning": "The series plot's title: what the two series describe."
+    }
+  },
+  "split": {
+    "train_percent": {
+      "value": 60,
+      "reasoning": "The project's rule for every model: 60 / 20 / 20 train / validation / test, in time order, never shuffled. Whole percentages, so the split boundaries use exact integer arithmetic."
+    },
+    "validation_percent": {
+      "value": 20,
+      "reasoning": "Same rule: validation selects models; test takes the remaining 20% and is run once per model family."
+    }
+  },
+  "frequency": {
+    "alias": {
+      "value": "B",
+      "reasoning": "pandas' business-day alias: the statement is published on business days, and the builder puts a zero flow on the weekdays without a statement (holidays). Every fifth row is then the same weekday, which the seasonal period of 5, the seasonal naive and the weekday profile rely on; skipping holidays would shift the weekday rhythm by one position at each."
+    },
+    "period": {
+      "value": "day",
+      "reasoning": "The word for one step of the series in reports and figure titles ('5 days ahead', 'an origin every 20 days'): the rows are business days."
+    },
+    "date_format": {
+      "value": "%Y-%m-%d",
+      "reasoning": "How reports print a date: daily observations need the day."
+    }
+  },
+  "tests": {
+    "significance_level": {
+      "value": 0.05,
+      "reasoning": "The conventional 5% level, used by every test and confidence band so verdicts are comparable across steps. Johansen's critical-value tables exist only at 10%, 5% and 1%."
+    }
+  },
+  "diagnostics": {
+    "max_acf_lags": {
+      "value": 60,
+      "reasoning": "Twelve weeks of daily lags, so the weekly rhythm (lags 5, 10, 15, ...) and the month-end rhythm (about lags 21 and 42) both show in the ACF / PACF."
+    },
+    "max_order_sum": {
+      "value": 5,
+      "reasoning": "The project's grid rule (2026-10-23): every (p, q) with p + d + q <= 5, a total-complexity budget that covers pure AR, pure MA and mixed models alike."
+    },
+    "differencing_order": {
+      "value": 1,
+      "reasoning": "ADF and KPSS agree on train: both series are I(1), and one difference makes them stationary. Applied by fitting on the first differences."
+    },
+    "seasonal_ar_orders": {
+      "value": [0, 1],
+      "reasoning": "No seasonal term or one, as for the monthly data: a second weekly coefficient at lag 10 is covered by the non-seasonal orders up to 4 together with one seasonal term. No seasonal differencing, since one regular difference already gives stationarity (the flows)."
+    },
+    "seasonal_ma_orders": {
+      "value": [0, 1],
+      "reasoning": "As for the seasonal AR orders: none or one seasonal MA term."
+    },
+    "seasonal_period": {
+      "value": 5,
+      "reasoning": "Business-day data: the seasonal cycle is one week of five business days (holidays are zero-flow days, so the cycle keeps its length)."
+    },
+    "max_iterations": {
+      "value": 200,
+      "reasoning": "Four times statsmodels' default of 50, so slow but sound likelihood fits finish. Fits that still don't converge are counted and reported, never hidden."
+    },
+    "adf_autolag": {
+      "value": "AIC",
+      "reasoning": "statsmodels' default: the ADF lag length chosen by AIC (Said and Dickey 1984), so leftover serial correlation doesn't distort the test."
+    },
+    "kpss_nlags": {
+      "value": "auto",
+      "reasoning": "The data-dependent bandwidth of Hobijn, Franses and Ooms (1998), statsmodels' recommended setting for the KPSS long-run variance."
+    },
+    "pacf_method": {
+      "value": "ywm",
+      "reasoning": "Yule-Walker with MLE scaling: its PACF never exceeds 1 in size, and it is what statsmodels' PACF plots use, so the report's table matches the figure."
+    }
+  },
+  "residual_checks": {
+    "test_lags": {
+      "value": [5, 10, 20],
+      "reasoning": "One, two and four weeks: short-run, weekly and month-long autocorrelation left in the SARIMA residuals."
+    },
+    "aic_tie_margin": {
+      "value": 2.0,
+      "reasoning": "Burnham and Anderson (2002): a model within 2 AIC of the best still has substantial support, so the runner-up is checked too."
+    },
+    "plot_lags": {
+      "value": 20,
+      "reasoning": "Display only: four weeks of lags in the ACF and Ljung-Box panels, up to the longest test lag."
+    }
+  },
+  "volatility_checks": {
+    "arch_test_lags": {
+      "value": [1, 5, 10],
+      "reasoning": "Yesterday, one week and two weeks: short-lived and persistent volatility clustering."
+    },
+    "plot_lags": {
+      "value": 10,
+      "reasoning": "Display only: every ARCH-LM lag up to the longest test lag, two weeks."
+    },
+    "break_trim": {
+      "value": 0.15,
+      "reasoning": "Andrews (1993): the standard 15% trimming when searching for a break at an unknown date, so neither regime's variance rests on a few days."
+    }
+  },
+  "volatility_models": {
+    "simulations": {
+      "value": 2000,
+      "reasoning": "EGARCH's multi-step variance has no closed form and is simulated. A variance estimated from 2,000 draws has a relative Monte Carlo error of about sqrt(2 / 2000) = 3% (normal shocks), small next to the forecast spread itself."
+    },
+    "bootstrap_replications": {
+      "value": 999,
+      "reasoning": "Davison and Hinkley (1997, ch. 4): with 999 replications 0.05 x (999 + 1) = 50 simulated statistics lie in the tail, so the 5% test is exact, and the Monte Carlo error at p = 0.05 is sqrt(0.05 x 0.95 / 999) = 0.007."
+    },
+    "burn_in": {
+      "value": 500,
+      "reasoning": "Days simulated and dropped before each bootstrap series, so it starts from the model's stationary distribution: a shock's effect shrinks by the persistence each day, and 0.95^500 < 1e-11 for any persistence up to 0.95; a persistence closer to 1 is reported as such by the stationarity check."
+    }
+  },
+  "var_diagnostics": {
+    "max_lags": {
+      "value": 10,
+      "reasoning": "VAR lag orders 0..10 tried, two weeks of daily lags: at 10 lags each equation has 20 lag coefficients plus a constant, from about 2,730 usable training days, about 125 observations per coefficient."
+    },
+    "criteria": {
+      "value": ["aic", "bic", "hqic"],
+      "reasoning": "The three standard criteria (Lütkepohl 2005): AIC targets forecast accuracy; BIC and HQIC pick the true order as the sample grows."
+    },
+    "primary_criterion": {
+      "value": "bic",
+      "reasoning": "BIC drives the Johansen decision: it is consistent (picks the true order as the sample grows), which suits a question about the model's structure."
+    },
+    "johansen_deterministic": {
+      "value": 0,
+      "reasoning": "det_order = 0: a constant in the error-correction model, so the levels may drift, as both series trend up."
+    }
+  },
+  "var_models": {
+    "var_lags": {
+      "value": [1, 5, 10],
+      "reasoning": "One day, one week and two weeks: the daily analogues of the orders the monthly run compared (the criteria's choice, a middle order and the first order whose residuals pass the Portmanteau test); the stability and residual checks decide which is carried forward."
+    },
+    "test_lags": {
+      "value": [5, 10, 20],
+      "reasoning": "One, two and four weeks, as in the univariate residual checks."
+    },
+    "plot_lags": {
+      "value": 20,
+      "reasoning": "Display only: four weeks of lags, up to the longest test lag."
+    },
+    "vecm_rank": {
+      "value": 1,
+      "reasoning": "Rank 1 even though Johansen found rank 0, so forecast accuracy, not the test alone, decides whether a long-run link helps; the 2008 variance break can lower Johansen's power. With two series, 1 is the only VECM rank."
+    },
+    "unit_root_tolerance": {
+      "value": 1e-06,
+      "reasoning": "An estimated unit root lands within numerical precision of 1, never exactly on it; 1e-6 is far below the distance of any genuine root here (the nearest, VECM(5)'s second root, is 0.952)."
+    }
+  },
+  "var_analysis": {
+    "carried_lags": {
+      "value": 5,
+      "reasoning": "One week of lags: the order that holds the whole weekly rhythm, the middle candidate of var_models.var_lags."
+    },
+    "horizon": {
+      "value": 20,
+      "reasoning": "Four weeks after the shock: long enough for daily responses to settle and to show one month-end."
+    },
+    "report_horizons": {
+      "value": [1, 5, 10, 20],
+      "reasoning": "The impact day, one week, two weeks and the end of the response window."
+    },
+    "band_z": {
+      "value": 1.96,
+      "reasoning": "The standard normal's 97.5% quantile, rounded as usual: value +- 1.96 standard errors is a 95% band, matching the 5% significance level."
+    }
+  },
+  "outliers": {
+    "half_width": {
+      "value": 10,
+      "reasoning": "A 21-day window, four weeks and a day: each weekday appears four times, so the weekday profile's median rests on four values, and the window is shorter than the month-to-month drift of the flows."
+    },
+    "seasonal_profile": {
+      "value": true,
+      "reasoning": "Daily flows have a strong weekday rhythm (Thursday settlements of Treasury securities are several times the other days' flows), so a plain rolling median would flag every Thursday and clipping would erase the rhythm the models must learn. Each change is judged against the median of the same weekday within its window instead, with the spread measured after that profile is removed, so only a departure from the usual weekday flow is flagged."
+    },
+    "threshold": {
+      "value": 3.0,
+      "reasoning": "The Hampel filter's usual cut-off (Pearson 2002): with the median absolute deviation scaled by 1.4826 to estimate the standard deviation of normal data, 3 flags about 0.3% of ordinary changes."
+    },
+    "huber_delta": {
+      "value": 1.345,
+      "reasoning": "Huber's constant for 95% efficiency under normal errors (Huber 1981): squared loss for errors within 1.345 standard deviations of the standardized target, absolute beyond, so extreme days pull the fit linearly instead of quadratically."
+    }
+  },
+  "forecast_evaluation": {
+    "horizons": {
+      "value": [1, 5, 10, 21],
+      "reasoning": "One day, one week, two weeks and 21 business days (30 calendar days), the shortest planning horizon the cashflow application needs. Tuning and champion selection average the score over all four, as the M4 competition averages over its horizons (Makridakis et al. 2020), so a model must forecast well at every horizon, not only tomorrow."
+    },
+    "quantiles": {
+      "value": [0.025, 0.1, 0.5, 0.9, 0.975],
+      "reasoning": "The median and the ends of the 80% and 95% central intervals, the two interval levels most used in forecast evaluation. Every model's bands are the empirical quantiles of its own past h-day errors (Williams and Goodman 1971; Lee and Scholtes 2014; split conformal prediction, Vovk et al. 2005), scored by coverage, width and pinball loss, as in the M5 uncertainty competition."
+    },
+    "benchmarks": {
+      "value": ["naive", "drift", "seasonal naive"],
+      "reasoning": "Naive (no further flow) and drift (the mean daily flow) are the random-walk benchmarks of the cumulated series; the seasonal naive repeats last week's flows and is the benchmark a weekly rhythm makes hard to beat (Hyndman and Athanasopoulos 2021, section 5.2)."
+    },
+    "test_step": {
+      "value": 20,
+      "reasoning": "A refit every 20 business days (about monthly) through the 913 test days: 46 origins, close to the monthly benchmark's 56 and three times the 10 the validation rule asks for; daily refits would cost 20 times as much while neighbouring origins' errors are strongly correlated (Tashman 2000). Forecasts still run day by day from each origin."
+    }
+  },
+  "tuning": {
+    "validation_step": {
+      "value": 40,
+      "reasoning": "An origin every 40 business days (about two months) through the 913 validation days gives 23 expanding-window folds, above the 10 the validation rule asks for and more than the monthly benchmark's 14; each fits on every day from the start of the data to its origin and forecasts the validation days up to 21 ahead, so every horizon is scored at every fold. Every 20 days (46 folds) was measured at about 30 hours of tuning, twice this, for little more information, since neighbouring origins' errors are strongly correlated (Tashman 2000); the test keeps its origin every 20 days, where only the champions run."
+    },
+    "score_reference": {
+      "value": "seasonal naive",
+      "reasoning": "The validation score is each model's MAE relative to this benchmark's at the same horizon, and MASE is scaled by its in-sample one-step MAE: for seasonal data Hyndman and Koehler (2006) scale by the seasonal naive, and repeating last week's flows is the strongest simple forecast of a series with a weekly rhythm."
+    },
+    "candidates": {
+      "value": 60,
+      "reasoning": "Optuna trials per model. Larger spaces are searched by Optuna's seeded TPE sampler (Bergstra et al. 2011), which places each trial using the scores of the earlier ones and so needs no more trials than random search, whose 60 draws already reach the best 5% of a space with probability 1 - 0.95^60 = 0.954 (Bergstra and Bengio 2012). Spaces with 60 or fewer settings are tried in full by Optuna's grid sampler."
+    },
+    "bootstrap_samples": {
+      "value": 1000,
+      "reasoning": "Resamples of the validation origins behind each tuned model's standard error of its score. Efron and Tibshirani (1993, section 6.4) find 50 to 200 resamples enough for a standard error; 1000 makes the Monte Carlo error of the standard error itself about 2%, at a cost of a few seconds per model."
+    },
+    "sarima": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "p": [0, 1, 2, 3, 4],
+        "q": [0, 1, 2, 3, 4],
+        "P": [0, 1],
+        "Q": [0, 1],
+        "trend": ["n", "c"]
+      },
+      "reasoning": "p and q under the same budget as the information-criteria grid, p + d + q <= 5 (d = 1, so the model is fitted on the daily flows): 15 pairs, chosen by out-of-sample error. P and Q: none or one weekly term at lag 5. Trend: none, or a constant (a drift in the cumulated level, the mean daily flow). 240 settings, searched by TPE with 60 trials. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. No pulse dummies here: the Hampel filter flags about 18% of the days (month-end, mid-month tax and holiday flows are not weekly), so one pulse regressor per flagged day would add hundreds of regressors to every fit. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    },
+    "var": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "lags": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        "trend": ["c", "ct"]
+      },
+      "reasoning": "Lags 1 to 10, one to two weeks of daily flows: the weekly rhythm needs the full last week and two weeks leave room above the lag-order criteria's likely choice; about 2,740 training changes give over 100 rows per coefficient even at 10 lags. Deterministic terms: a constant (the mean daily flow) or a constant and trend. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    },
+    "vecm": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "lags": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        "deterministic": ["co", "ci", "lo", "li"]
+      },
+      "reasoning": "Lagged differences 1 to 10, as for the VAR. Deterministic terms: a constant outside (co) or inside (ci) the long-run relation, or a linear trend outside (lo) or inside (li); none is left out because both cumulated series grow. The long-run relation is the cash balance (deposits minus withdrawals), which the Treasury keeps within a managed range, so a VECM is a natural candidate here. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    },
+    "sma": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "window": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+      },
+      "reasoning": "Every window from 2 to 30 business days (six weeks); a window of 1 is the naive forecast itself. On a cumulated series the moving average of levels lags the trend, so this is the weak baseline it was for the monthly data. 58 settings, all tried. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    },
+    "exponential_smoothing": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "trend": [null, "add", "mul"],
+        "damped_trend": [false, true],
+        "seasonal": [null, "add", "mul"],
+        "use_boxcox": [false, true],
+        "initialization_method": ["estimated", "heuristic"]
+      },
+      "reasoning": "Every form of statsmodels' ExponentialSmoothing for positive data: no, additive or multiplicative trend, damped or not (Gardner and McKenzie 1985; damping needs a trend), no, additive or multiplicative five-day season (the weekly rhythm of the flows), with or without a Box-Cox transform, and the two initialization methods: 30 valid forms (damping needs a trend) x 2 initializations x 2 outlier handlings = 120 settings, 60 drawn. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    },
+    "sarimax": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "lags": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+      },
+      "reasoning": "The other series' last 1 to 10 daily changes as regressors, the VAR's lag range; the orders stay those of the series' tuned SARIMA, so comparing with SARIMA measures only what the other series adds. 20 settings, all tried. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. No pulse dummies here: the Hampel filter flags about 18% of the days (month-end, mid-month tax and holiday flows are not weekly), so one pulse regressor per flagged day would add hundreds of regressors to every fit. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    },
+    "combination": {
+      "value": {
+        "weight": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+      },
+      "reasoning": "The SARIMA + naive average's weight on SARIMA, 0 (naive) to 1 (SARIMA) in steps of 0.1; it inherits its SARIMA's outlier handling and transform."
+    }
+  },
+  "ml": {
+    "ridge": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "lags": [1, 2, 3, 4, 5, 10, 15, 20, 30],
+        "alpha": [0.0, 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0]
+      },
+      "reasoning": "Ridge regression of tomorrow's flow on both series' lagged flows. Lag features 1 to 5 (one week of daily changes), then 10, 15, 20 and 30 (two to six weeks): the weekly rhythm needs the full last week, and the longer sets reach the mid-month and month-end flows; the smallest fit (about 2,740 training rows) has over 40 rows per input even at 30 lags of both series. Features and target are standardized inside every fit, so the penalty is scale-free: against a residual sum of squares of about n (2,700 to 3,650 rows), 0.01 barely shrinks, 10,000 shrinks every coefficient towards zero; 0 is least squares. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    },
+    "lasso": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "lags": [1, 2, 3, 4, 5, 10, 15, 20, 30],
+        "alpha": [0.0, 0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1.0],
+        "max_iter": [10000]
+      },
+      "reasoning": "Lasso on the same lag features. Lag features 1 to 5 (one week of daily changes), then 10, 15, 20 and 30 (two to six weeks): the weekly rhythm needs the full last week, and the longer sets reach the mid-month and month-end flows; the smallest fit (about 2,740 training rows) has over 40 rows per input even at 30 lags of both series. With standardized features and target the smallest penalty that zeroes every coefficient is the largest absolute correlation of a feature with the target, at most 1, so the grid runs from 1 (empty model) down to 0.0001 on a log scale, and 0 is least squares; max_iter 10,000 so every fit converges. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    },
+    "random_forest": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "lags": [1, 2, 3, 4, 5, 10, 15, 20, 30],
+        "n_estimators": [100, 200, 300, 500, 800, 1000],
+        "criterion": ["squared_error", "absolute_error", "friedman_mse"],
+        "max_depth": [null, 3, 5, 8, 12],
+        "min_samples_split": [2, 5, 10, 20],
+        "min_samples_leaf": [1, 2, 4, 8],
+        "min_weight_fraction_leaf": [0.0],
+        "max_features": [1.0, "sqrt", "log2", 0.5, 0.3],
+        "max_leaf_nodes": [null, 8, 16, 32],
+        "min_impurity_decrease": [0.0, 0.001, 0.01],
+        "bootstrap": [true],
+        "max_samples": [null, 0.5, 0.7, 0.9],
+        "ccp_alpha": [0.0, 0.001, 0.01]
+      },
+      "reasoning": "Every setting of scikit-learn's RandomForestRegressor that changes the fitted forest: trees 100 to 1000 (gains flatten after a few hundred; Probst and Boulesteix 2018), the three regression losses, depth and leaf limits from unlimited to small, feature subsampling from all to 30%, bootstrap sample sizes and cost-complexity pruning. Lag features 1 to 5 (one week of daily changes), then 10, 15, 20 and 30 (two to six weeks): the weekly rhythm needs the full last week, and the longer sets reach the mid-month and month-end flows; the smallest fit (about 2,740 training rows) has over 40 rows per input even at 30 lags of both series. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    },
+    "xgboost": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "loss": ["mse", "huber"],
+        "lags": [1, 2, 3, 4, 5, 10, 15, 20, 30],
+        "n_estimators": [100, 200, 300, 500, 800, 1000],
+        "learning_rate": [0.01, 0.03, 0.05, 0.1, 0.2, 0.3],
+        "max_depth": [2, 3, 4, 5, 6],
+        "min_child_weight": [1, 2, 4, 8],
+        "subsample": [0.5, 0.7, 0.85, 1.0],
+        "colsample_bytree": [0.5, 0.7, 1.0],
+        "gamma": [0.0, 0.01, 0.1, 0.5],
+        "reg_alpha": [0.0, 0.01, 0.1, 1.0],
+        "reg_lambda": [0.1, 1.0, 5.0, 10.0]
+      },
+      "reasoning": "XGBoost's tree-boosting settings: learning rate from the default 0.3 down to 0.01 (the small steps Friedman 2001 recommends) against 100 to 1000 trees; depth 2 to 6; the usual ranges of min_child_weight, row and column subsampling, gamma and the L1 / L2 penalties. Lag features 1 to 5 (one week of daily changes), then 10, 15, 20 and 30 (two to six weeks): the weekly rhythm needs the full last week, and the longer sets reach the mid-month and month-end flows; the smallest fit (about 2,740 training rows) has over 40 rows per input even at 30 lags of both series. loss: mean squared error, or the Huber loss (outliers.huber_delta), which limits what one extreme day can pull the fit towards; chosen on validation. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    },
+    "knn": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "lags": [1, 2, 3, 4, 5, 10, 15, 20, 30],
+        "n_neighbors": [1, 2, 3, 5, 7, 10, 15, 20, 30],
+        "weights": ["uniform", "distance"],
+        "p": [1, 2]
+      },
+      "reasoning": "Standardized features, so every lag counts equally in the distance. Neighbours from 1 (memorizes the training rows) to 30, where each prediction is already a broad average of past flows; uniform or distance weights; Manhattan or Euclidean distance. Lag features 1 to 5 (one week of daily changes), then 10, 15, 20 and 30 (two to six weeks): the weekly rhythm needs the full last week, and the longer sets reach the mid-month and month-end flows; the smallest fit (about 2,740 training rows) has over 40 rows per input even at 30 lags of both series. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    }
+  },
+  "nn": {
+    "mlp": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "lags": [1, 2, 3, 4, 5, 10, 15, 20, 30],
+        "hidden_layer_sizes": [
+          [4],
+          [8],
+          [16],
+          [32],
+          [8, 4],
+          [16, 8],
+          [32, 16]
+        ],
+        "activation": ["relu", "tanh"],
+        "solver": ["lbfgs", "adam"],
+        "alpha": [1e-05, 0.0001, 0.001, 0.01, 0.1, 1.0, 10.0],
+        "learning_rate_init": [0.0001, 0.001, 0.01],
+        "max_iter": [500],
+        "early_stopping": [false, true]
+      },
+      "reasoning": "scikit-learn's MLPRegressor, a feed-forward network on the same lag features; its batches are scikit-learn's default of 200 rows. Lag features 1 to 5 (one week of daily changes), then 10, 15, 20 and 30 (two to six weeks): the weekly rhythm needs the full last week, and the longer sets reach the mid-month and month-end flows; the smallest fit (about 2,740 training rows) has over 40 rows per input even at 30 lags of both series. Hidden layers of 4 to 32 units: with about 2,740 training rows and up to 60 inputs, the largest layer has fewer weights than rows, so the sizes stay in the range the data can fit; the optimizers, learning rates, early stopping (patience 10 on the time-ordered last 25% of each window, at least 20 epochs) and dropout are the monthly run's. max_iter 500: for Adam one iteration is an epoch of 14 to 18 batches, so 500 give 7,000 to 9,000 updates, the budget the monthly setting of 5,000 iterations gave on its 1 to 2 batches per epoch; L-BFGS converges far earlier. 5,000 epochs here were measured at 5 minutes per trial. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    },
+    "numpy_a1": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "loss": ["mse", "huber"],
+        "lags": [1, 2, 3, 4, 5, 10, 15, 20, 30],
+        "hidden_units": [4, 8, 16, 32],
+        "optimizer": ["sgd", "momentum", "adabelief", "muon"],
+        "learning_rate": [0.1, 0.001],
+        "use_bias": [false, true],
+        "dropout": [0.0, 0.1, 0.2, 0.3],
+        "batch_size": [64, 128, 256],
+        "epochs": [100],
+        "patience": [10],
+        "min_delta": [0.0001],
+        "min_epochs": [20],
+        "validation_share": [0.25]
+      },
+      "reasoning": "A1, written by hand in NumPy (nn_forecasting): one hidden layer of sigmoid units and a linear output unit, weights from N(0, 0.1^2); optimizers SGD, momentum, AdaBelief and Muon at learning rates 0.1 and 0.001, with or without biases, dropout 0 to 0.3. Lag features 1 to 5 (one week of daily changes), then 10, 15, 20 and 30 (two to six weeks): the weekly rhythm needs the full last week, and the longer sets reach the mid-month and month-end flows; the smallest fit (about 2,740 training rows) has over 40 rows per input even at 30 lags of both series. Hidden layers of 4 to 32 units: with about 2,740 training rows and up to 60 inputs, the largest layer has fewer weights than rows, so the sizes stay in the range the data can fit; the optimizers, learning rates, early stopping (patience 10 on the time-ordered last 25% of each window, at least 20 epochs) and dropout are the monthly run's. Batches of 64, 128 or 256 rows: with about 2,740 to 3,650 training rows that is 11 to 57 gradient steps per epoch, the range the monthly run had with batches of 8 to 32 on 140 to 275 rows, so the number of updates per epoch, the early-stopping behaviour and the run time stay comparable; batches of 8 to 32 would take 8 times longer per epoch (a measured 7.8 h for the Keras network alone at 60 trials). loss: mean squared error, or the Huber loss (outliers.huber_delta), which limits what one extreme day can pull the fit towards; chosen on validation. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    },
+    "numpy_a2": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "loss": ["mse", "huber"],
+        "lags": [1, 2, 3, 4, 5, 10, 15, 20, 30],
+        "hidden_units": [4, 8, 16, 32],
+        "optimizer": ["sgd", "momentum", "adabelief", "muon"],
+        "learning_rate": [0.1, 0.001],
+        "use_bias": [false, true],
+        "dropout": [0.0, 0.1, 0.2, 0.3],
+        "batch_size": [64, 128, 256],
+        "epochs": [100],
+        "patience": [10],
+        "min_delta": [0.0001],
+        "min_epochs": [20],
+        "validation_share": [0.25]
+      },
+      "reasoning": "A2, written by hand in NumPy (nn_forecasting): three hidden layers of ReLU units and a linear output unit; otherwise as A1. Lag features 1 to 5 (one week of daily changes), then 10, 15, 20 and 30 (two to six weeks): the weekly rhythm needs the full last week, and the longer sets reach the mid-month and month-end flows; the smallest fit (about 2,740 training rows) has over 40 rows per input even at 30 lags of both series. Hidden layers of 4 to 32 units: with about 2,740 training rows and up to 60 inputs, the largest layer has fewer weights than rows, so the sizes stay in the range the data can fit; the optimizers, learning rates, early stopping (patience 10 on the time-ordered last 25% of each window, at least 20 epochs) and dropout are the monthly run's. Batches of 64, 128 or 256 rows: with about 2,740 to 3,650 training rows that is 11 to 57 gradient steps per epoch, the range the monthly run had with batches of 8 to 32 on 140 to 275 rows, so the number of updates per epoch, the early-stopping behaviour and the run time stay comparable; batches of 8 to 32 would take 8 times longer per epoch (a measured 7.8 h for the Keras network alone at 60 trials). loss: mean squared error, or the Huber loss (outliers.huber_delta), which limits what one extreme day can pull the fit towards; chosen on validation. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    },
+    "tensorflow_mlp": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "loss": ["mse", "huber"],
+        "lags": [1, 2, 3, 4, 5, 10, 15, 20, 30],
+        "architecture": ["A1", "A2"],
+        "hidden_units": [4, 8, 16, 32],
+        "use_bias": [false, true],
+        "optimizer": ["sgd", "momentum", "adam", "muon"],
+        "learning_rate": {
+          "low": 0.0001,
+          "high": 0.3,
+          "log": true
+        },
+        "weight_decay": {
+          "low": 1e-06,
+          "high": 0.01,
+          "log": true
+        },
+        "dropout": {
+          "low": 0.0,
+          "high": 0.3,
+          "log": false
+        },
+        "batch_size": [64, 128, 256],
+        "epochs": [100],
+        "patience": [10],
+        "min_delta": [0.0001],
+        "min_epochs": [20],
+        "validation_share": [0.25]
+      },
+      "reasoning": "The TensorFlow (Keras) multilayer perceptron (nn_forecasting): layers as A1 or A2, with or without biases, optimizers SGD, momentum, Adam and Muon, learning rate 1e-4 to 0.3 and weight decay 1e-6 to 0.01 on log scales, dropout 0 to 0.3, searched by Optuna. Lag features 1 to 5 (one week of daily changes), then 10, 15, 20 and 30 (two to six weeks): the weekly rhythm needs the full last week, and the longer sets reach the mid-month and month-end flows; the smallest fit (about 2,740 training rows) has over 40 rows per input even at 30 lags of both series. Hidden layers of 4 to 32 units: with about 2,740 training rows and up to 60 inputs, the largest layer has fewer weights than rows, so the sizes stay in the range the data can fit; the optimizers, learning rates, early stopping (patience 10 on the time-ordered last 25% of each window, at least 20 epochs) and dropout are the monthly run's. Batches of 64, 128 or 256 rows: with about 2,740 to 3,650 training rows that is 11 to 57 gradient steps per epoch, the range the monthly run had with batches of 8 to 32 on 140 to 275 rows, so the number of updates per epoch, the early-stopping behaviour and the run time stay comparable; batches of 8 to 32 would take 8 times longer per epoch (a measured 7.8 h for the Keras network alone at 60 trials). loss: mean squared error, or the Huber loss (outliers.huber_delta), which limits what one extreme day can pull the fit towards; chosen on validation. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    },
+    "pytorch_mlp": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "loss": ["mse", "huber"],
+        "lags": [1, 2, 3, 4, 5, 10, 15, 20, 30],
+        "architecture": ["A1", "A2"],
+        "hidden_units": [4, 8, 16, 32],
+        "use_bias": [false, true],
+        "optimizer": ["sgd", "momentum", "adam", "muon"],
+        "learning_rate": {
+          "low": 0.0001,
+          "high": 0.3,
+          "log": true
+        },
+        "weight_decay": {
+          "low": 1e-06,
+          "high": 0.01,
+          "log": true
+        },
+        "dropout": {
+          "low": 0.0,
+          "high": 0.3,
+          "log": false
+        },
+        "batch_size": [64, 128, 256],
+        "epochs": [100],
+        "patience": [10],
+        "min_delta": [0.0001],
+        "min_epochs": [20],
+        "validation_share": [0.25]
+      },
+      "reasoning": "The PyTorch multilayer perceptron (nn_forecasting): the same layers, optimizers and ranges as the Keras network, searched by Optuna. Lag features 1 to 5 (one week of daily changes), then 10, 15, 20 and 30 (two to six weeks): the weekly rhythm needs the full last week, and the longer sets reach the mid-month and month-end flows; the smallest fit (about 2,740 training rows) has over 40 rows per input even at 30 lags of both series. Hidden layers of 4 to 32 units: with about 2,740 training rows and up to 60 inputs, the largest layer has fewer weights than rows, so the sizes stay in the range the data can fit; the optimizers, learning rates, early stopping (patience 10 on the time-ordered last 25% of each window, at least 20 epochs) and dropout are the monthly run's. Batches of 64, 128 or 256 rows: with about 2,740 to 3,650 training rows that is 11 to 57 gradient steps per epoch, the range the monthly run had with batches of 8 to 32 on 140 to 275 rows, so the number of updates per epoch, the early-stopping behaviour and the run time stay comparable; batches of 8 to 32 would take 8 times longer per epoch (a measured 7.8 h for the Keras network alone at 60 trials). loss: mean squared error, or the Huber loss (outliers.huber_delta), which limits what one extreme day can pull the fit towards; chosen on validation. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    },
+    "lstm": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "loss": ["mse", "huber"],
+        "lags": [5, 10, 20, 40, 60],
+        "hidden_units": [4, 8, 16, 32],
+        "layers": [1, 2],
+        "dropout": {
+          "low": 0.0,
+          "high": 0.3,
+          "log": false
+        },
+        "optimizer": ["sgd", "momentum", "adam", "muon"],
+        "learning_rate": {
+          "low": 0.0001,
+          "high": 0.3,
+          "log": true
+        },
+        "weight_decay": {
+          "low": 1e-06,
+          "high": 0.01,
+          "log": true
+        },
+        "batch_size": [64, 128, 256],
+        "use_bias": [false, true],
+        "epochs": [100],
+        "patience": [10],
+        "min_delta": [0.0001],
+        "min_epochs": [20],
+        "validation_share": [0.25]
+      },
+      "reasoning": "LSTM (Hochreiter and Schmidhuber 1997) in PyTorch (sequence_networks): stacked recurrent layers over the window, the last step's state to one linear output; 4 to 32 units, one or two layers. The window (lags) is 5, 10, 20, 40 or 60 business days: one week, so the whole weekly rhythm is in view, up to twelve weeks, which covers two month-ends and a quarterly tax date; longer windows leave fewer than 2,700 training rows for little gain. Optimizers, learning rate, weight decay, dropout, biases and early stopping as the MLPs, searched by Optuna with 60 trials. Batches of 64, 128 or 256 rows: with about 2,740 to 3,650 training rows that is 11 to 57 gradient steps per epoch, the range the monthly run had with batches of 8 to 32 on 140 to 275 rows, so the number of updates per epoch, the early-stopping behaviour and the run time stay comparable; batches of 8 to 32 would take 8 times longer per epoch (a measured 7.8 h for the Keras network alone at 60 trials). loss: mean squared error, or the Huber loss (outliers.huber_delta), which limits what one extreme day can pull the fit towards; chosen on validation. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    },
+    "gru": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "loss": ["mse", "huber"],
+        "lags": [5, 10, 20, 40, 60],
+        "hidden_units": [4, 8, 16, 32],
+        "layers": [1, 2],
+        "dropout": {
+          "low": 0.0,
+          "high": 0.3,
+          "log": false
+        },
+        "optimizer": ["sgd", "momentum", "adam", "muon"],
+        "learning_rate": {
+          "low": 0.0001,
+          "high": 0.3,
+          "log": true
+        },
+        "weight_decay": {
+          "low": 1e-06,
+          "high": 0.01,
+          "log": true
+        },
+        "batch_size": [64, 128, 256],
+        "use_bias": [false, true],
+        "epochs": [100],
+        "patience": [10],
+        "min_delta": [0.0001],
+        "min_epochs": [20],
+        "validation_share": [0.25]
+      },
+      "reasoning": "GRU (Cho et al. 2014) in PyTorch (sequence_networks): as the LSTM with gated recurrent units, which have fewer parameters per unit; 4 to 32 units, one or two layers. The window (lags) is 5, 10, 20, 40 or 60 business days: one week, so the whole weekly rhythm is in view, up to twelve weeks, which covers two month-ends and a quarterly tax date; longer windows leave fewer than 2,700 training rows for little gain. Optimizers, learning rate, weight decay, dropout, biases and early stopping as the MLPs, searched by Optuna with 60 trials. Batches of 64, 128 or 256 rows: with about 2,740 to 3,650 training rows that is 11 to 57 gradient steps per epoch, the range the monthly run had with batches of 8 to 32 on 140 to 275 rows, so the number of updates per epoch, the early-stopping behaviour and the run time stay comparable; batches of 8 to 32 would take 8 times longer per epoch (a measured 7.8 h for the Keras network alone at 60 trials). loss: mean squared error, or the Huber loss (outliers.huber_delta), which limits what one extreme day can pull the fit towards; chosen on validation. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    },
+    "tcn": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "loss": ["mse", "huber"],
+        "lags": [5, 10, 20, 40, 60],
+        "hidden_units": [4, 8, 16, 32],
+        "layers": [1, 2, 3],
+        "kernel_size": [2, 3],
+        "dropout": {
+          "low": 0.0,
+          "high": 0.3,
+          "log": false
+        },
+        "optimizer": ["sgd", "momentum", "adam", "muon"],
+        "learning_rate": {
+          "low": 0.0001,
+          "high": 0.3,
+          "log": true
+        },
+        "weight_decay": {
+          "low": 1e-06,
+          "high": 0.01,
+          "log": true
+        },
+        "batch_size": [64, 128, 256],
+        "use_bias": [false, true],
+        "epochs": [100],
+        "patience": [10],
+        "min_delta": [0.0001],
+        "min_epochs": [20],
+        "validation_share": [0.25]
+      },
+      "reasoning": "TCN (Bai, Kolter and Koltun 2018) in PyTorch (sequence_networks): residual blocks of two dilated causal convolutions, dilation doubling per block; 4 to 32 channels, 1 to 3 blocks with kernel 2 or 3, so the receptive field runs from 3 to 29 days, within every window. The window (lags) is 5, 10, 20, 40 or 60 business days: one week, so the whole weekly rhythm is in view, up to twelve weeks, which covers two month-ends and a quarterly tax date; longer windows leave fewer than 2,700 training rows for little gain. Optimizers, learning rate, weight decay, dropout, biases and early stopping as the MLPs, searched by Optuna with 60 trials. Batches of 64, 128 or 256 rows: with about 2,740 to 3,650 training rows that is 11 to 57 gradient steps per epoch, the range the monthly run had with batches of 8 to 32 on 140 to 275 rows, so the number of updates per epoch, the early-stopping behaviour and the run time stay comparable; batches of 8 to 32 would take 8 times longer per epoch (a measured 7.8 h for the Keras network alone at 60 trials). loss: mean squared error, or the Huber loss (outliers.huber_delta), which limits what one extreme day can pull the fit towards; chosen on validation. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    },
+    "nbeats": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "loss": ["mse", "huber"],
+        "lags": [5, 10, 20, 40, 60],
+        "hidden_units": [8, 16, 32, 64],
+        "layers": [2, 4],
+        "blocks": [1, 2, 3],
+        "dropout": {
+          "low": 0.0,
+          "high": 0.3,
+          "log": false
+        },
+        "optimizer": ["sgd", "momentum", "adam", "muon"],
+        "learning_rate": {
+          "low": 0.0001,
+          "high": 0.3,
+          "log": true
+        },
+        "weight_decay": {
+          "low": 1e-06,
+          "high": 0.01,
+          "log": true
+        },
+        "batch_size": [64, 128, 256],
+        "use_bias": [false, true],
+        "epochs": [100],
+        "patience": [10],
+        "min_delta": [0.0001],
+        "min_epochs": [20],
+        "validation_share": [0.25]
+      },
+      "reasoning": "N-BEATS, generic (Oreshkin et al. 2020), in PyTorch (sequence_networks): blocks of fully connected ReLU layers in a residual chain, each removing its backcast from the window and adding its forecast; 1 to 3 blocks of 2 or 4 layers with 8 to 64 units. The window (lags) is 5, 10, 20, 40 or 60 business days: one week, so the whole weekly rhythm is in view, up to twelve weeks, which covers two month-ends and a quarterly tax date; longer windows leave fewer than 2,700 training rows for little gain. Optimizers, learning rate, weight decay, dropout, biases and early stopping as the MLPs, searched by Optuna with 60 trials. Batches of 64, 128 or 256 rows: with about 2,740 to 3,650 training rows that is 11 to 57 gradient steps per epoch, the range the monthly run had with batches of 8 to 32 on 140 to 275 rows, so the number of updates per epoch, the early-stopping behaviour and the run time stay comparable; batches of 8 to 32 would take 8 times longer per epoch (a measured 7.8 h for the Keras network alone at 60 trials). loss: mean squared error, or the Huber loss (outliers.huber_delta), which limits what one extreme day can pull the fit towards; chosen on validation. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    },
+    "dlinear": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "loss": ["mse", "huber"],
+        "lags": [5, 10, 20, 40, 60],
+        "kernel_size": [3, 5, 7],
+        "optimizer": ["sgd", "momentum", "adam", "muon"],
+        "learning_rate": {
+          "low": 0.0001,
+          "high": 0.3,
+          "log": true
+        },
+        "weight_decay": {
+          "low": 1e-06,
+          "high": 0.01,
+          "log": true
+        },
+        "batch_size": [64, 128, 256],
+        "use_bias": [false, true],
+        "epochs": [100],
+        "patience": [10],
+        "min_delta": [0.0001],
+        "min_epochs": [20],
+        "validation_share": [0.25]
+      },
+      "reasoning": "DLinear (Zeng et al. 2023) in PyTorch (sequence_networks): a centred moving-average trend and the remainder, each mapped to the forecast by one linear layer; the check of whether depth adds anything. Moving average of 3, 5 or 7 days (5 spans one week). The window (lags) is 5, 10, 20, 40 or 60 business days: one week, so the whole weekly rhythm is in view, up to twelve weeks, which covers two month-ends and a quarterly tax date; longer windows leave fewer than 2,700 training rows for little gain. Optimizers, learning rate, weight decay, dropout, biases and early stopping as the MLPs, searched by Optuna with 60 trials. Batches of 64, 128 or 256 rows: with about 2,740 to 3,650 training rows that is 11 to 57 gradient steps per epoch, the range the monthly run had with batches of 8 to 32 on 140 to 275 rows, so the number of updates per epoch, the early-stopping behaviour and the run time stay comparable; batches of 8 to 32 would take 8 times longer per epoch (a measured 7.8 h for the Keras network alone at 60 trials). loss: mean squared error, or the Huber loss (outliers.huber_delta), which limits what one extreme day can pull the fit towards; chosen on validation. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    }
+  },
+  "ready_made": {
+    "prophet": {
+      "value": {
+        "outliers": ["none", "clip"],
+        "transform": ["none"],
+        "growth": ["linear", "flat"],
+        "changepoint_prior_scale": {
+          "low": 0.001,
+          "high": 0.5,
+          "log": true
+        },
+        "changepoint_range": [0.8, 0.9, 0.95],
+        "seasonality_mode": ["additive", "multiplicative"],
+        "seasonality_prior_scale": {
+          "low": 0.01,
+          "high": 10.0,
+          "log": true
+        },
+        "yearly_seasonality": [true, false],
+        "weekly_seasonality": [true]
+      },
+      "reasoning": "The settings Prophet's documentation names for tuning, over its recommended ranges: changepoint_prior_scale 0.001 to 0.5 and seasonality_prior_scale 0.01 to 10 on a log scale, seasonality_mode additive or multiplicative, changepoint_range 0.8 (the default), 0.9 or 0.95. growth linear or flat; logistic growth is left out, as it needs a saturation level. Yearly seasonality on or off (17 years of history hold it, but the flows' level has tripled); weekly seasonality on (fixed), the rhythm of the flows, fitted by Prophet from the dates, so holidays' zero flows count as ordinary weekday departures. Daily seasonality is off in the code (one observation per day). Searched by Optuna's TPE sampler, 60 trials. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme days helps this model. transform: none only. The logarithm of a running total is not a meaningful transform: its changes are the flows divided by the total so far, which shrink as 1 / t by construction (the first days dominate every fit), and SARIMA fits on them fail numerically (LU decomposition errors in the smoke run)."
+    }
+  }
+}

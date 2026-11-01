@@ -1,4 +1,30 @@
 {
+  "dataset": {
+    "kaggle_handle": {
+      "value": "belbino/fed-balance-sheet-and-m2-money-supply-1950-present",
+      "reasoning": "The Kaggle dataset 'Fed Balance Sheet & M2 Money Supply 1950 - Present' (CC0, aggregated from FRED), the project's original benchmark data."
+    },
+    "raw_file": {
+      "value": "fed_balance_sheet.csv",
+      "reasoning": "The file of the download that holds the two series; the dataset's other file, m2_inflation.csv, is not used (its M2 minus CPI column is a linear combination of two others, so it cannot enter a VAR with them)."
+    },
+    "value_columns": {
+      "value": ["fed_total_assets_T", "monetary_base_T"],
+      "reasoning": "The Federal Reserve's total assets and the monetary base, both published monthly from 2002-12, so the complete rows are long enough for the 60 / 20 / 20 split; the second column is Granger-caused by the first in training, which the joint models can use."
+    },
+    "unit_suffix": {
+      "value": "_T",
+      "reasoning": "The raw file tags each series with its unit, trillions; chart titles drop the tag."
+    },
+    "unit": {
+      "value": "trillions",
+      "reasoning": "The unit of the raw file's columns (trillions of USD); every error in the reports is in it."
+    },
+    "title": {
+      "value": "Federal Reserve Balance Sheet",
+      "reasoning": "The series plot's title: what the two series describe."
+    }
+  },
   "split": {
     "train_percent": {
       "value": 60,
@@ -17,6 +43,10 @@
     "period": {
       "value": "month",
       "reasoning": "The word for one step of the series in reports and figure titles ('3 months ahead', 'an origin every 4 months'), so the text follows the data's spacing; 'day' for daily data."
+    },
+    "date_format": {
+      "value": "%Y-%m",
+      "reasoning": "How reports print a date: year and month identify a month-end observation; daily data needs the day as well (%Y-%m-%d)."
     }
   },
   "tests": {
@@ -172,6 +202,10 @@
       "value": 6,
       "reasoning": "A 13-month window, one full year: the rolling median and spread then cover every calendar month once, so a seasonal swing counts as ordinary spread rather than an outlier."
     },
+    "seasonal_profile": {
+      "value": false,
+      "reasoning": "The monthly changes have no fixed within-year profile strong enough to mislead the filter (the ACF of the changes at lag 12 is not significant), so each change is judged against its window's plain median. Daily flows with a weekly rhythm set true, so a change is judged against the same weekday's median within its window and a regular payday is not flagged every week."
+    },
     "threshold": {
       "value": 3.0,
       "reasoning": "The Hampel filter's usual cut-off (Pearson 2002): with the median absolute deviation scaled by 1.4826 to estimate the standard deviation of normal data, 3 flags about 0.3% of ordinary changes."
@@ -189,12 +223,24 @@
     "quantiles": {
       "value": [0.025, 0.1, 0.5, 0.9, 0.975],
       "reasoning": "The median and the ends of the 80% and 95% central intervals, the two interval levels most used in forecast evaluation. Every model's bands are the empirical quantiles of its own past h-month errors (Williams and Goodman 1971; Lee and Scholtes 2014; split conformal prediction, Vovk et al. 2005), scored by coverage, width and pinball loss, as in the M5 uncertainty competition."
+    },
+    "benchmarks": {
+      "value": ["naive", "drift"],
+      "reasoning": "The random walk (the last level repeated) is the benchmark policy-driven series rarely beat (Meese and Rogoff 1983), and the random walk with drift adds the history's mean change, the usual second benchmark for a trending series. The seasonal naive is left out: the changes have no significant seasonal autocorrelation at lag 12, so repeating last year's changes is not a credible forecast here; daily data with a weekly rhythm adds it."
+    },
+    "test_step": {
+      "value": 1,
+      "reasoning": "A refit at every test month: 56 origins at the cost of one fit each per model, so every test month is forecast from every horizon. Daily data with hundreds of test days refits every few days instead, since neighbouring origins' errors are strongly correlated (Tashman 2000) and a refit per day would cost more than it tells."
     }
   },
   "tuning": {
     "validation_step": {
       "value": 4,
       "reasoning": "An origin every 4 months through the 56 validation months gives 14 expanding-window folds (at least 10 required); each fits on every month from the start of the data to its origin and forecasts the validation months up to 12 ahead, so 12 to 14 folds score each horizon. Every month (56 folds) would cost four times as much for little more information, since forecasts from neighbouring origins overlap and their errors are strongly correlated (Tashman 2000)."
+    },
+    "score_reference": {
+      "value": "naive",
+      "reasoning": "The validation score is each model's MAE relative to this benchmark's at the same horizon, and MASE is scaled by its in-sample one-step MAE (Hyndman and Koehler 2006): the random walk, the strongest simple forecast of these non-seasonal, policy-driven series. Seasonal data uses the seasonal naive, as Hyndman recommends for MASE."
     },
     "candidates": {
       "value": 60,
@@ -568,9 +614,10 @@
         "changepoint_range": [0.8, 0.9, 0.95],
         "seasonality_mode": ["additive", "multiplicative"],
         "seasonality_prior_scale": {"low": 0.01, "high": 10.0, "log": true},
-        "yearly_seasonality": [true, false]
+        "yearly_seasonality": [true, false],
+        "weekly_seasonality": [false]
       },
-      "reasoning": "The settings Prophet's documentation names for tuning, over its recommended ranges: changepoint_prior_scale 0.001 to 0.5 and seasonality_prior_scale 0.01 to 10 on a log scale (how freely the trend bends and how strong the season may be), seasonality_mode additive or multiplicative, and changepoint_range 0.8 (the default: changepoints in the first 80% of the history), 0.9 or 0.95, which lets the trend turn closer to the origin, as at the start of QT. growth linear or flat (no trend); logistic growth is left out, as it needs a saturation level the data doesn't give. Yearly seasonality on or off; weekly and daily seasonality are off in the code, since the data is monthly. Searched by Optuna's TPE sampler, 60 trials, on the validation origins, Prophet refitted at each like every model. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme months helps this model. transform: none, or the model works on the logarithm of the levels (growth rates once differenced), so a change counts relative to the level and the early, small years weigh as much as the recent large ones; forecasts are converted back. Chosen on validation like any setting. Only for positive series: for data that can be negative, such as net cashflows, the list is reduced to none."
+      "reasoning": "The settings Prophet's documentation names for tuning, over its recommended ranges: changepoint_prior_scale 0.001 to 0.5 and seasonality_prior_scale 0.01 to 10 on a log scale (how freely the trend bends and how strong the season may be), seasonality_mode additive or multiplicative, and changepoint_range 0.8 (the default: changepoints in the first 80% of the history), 0.9 or 0.95, which lets the trend turn closer to the origin, as at the start of QT. growth linear or flat (no trend); logistic growth is left out, as it needs a saturation level the data doesn't give. Yearly seasonality on or off; weekly seasonality off (fixed), since monthly data has no week; daily seasonality is off in the code, as the project has one observation per period. Searched by Optuna's TPE sampler, 60 trials, on the validation origins, Prophet refitted at each like every model. outliers: none, or the changes the Hampel filter flags (outliers section) clipped to their window's bounds before the fit; chosen on validation like any setting, so the data decide whether taming extreme months helps this model. transform: none, or the model works on the logarithm of the levels (growth rates once differenced), so a change counts relative to the level and the early, small years weigh as much as the recent large ones; forecasts are converted back. Chosen on validation like any setting. Only for positive series: for data that can be negative, such as net cashflows, the list is reduced to none."
     }
   }
 }

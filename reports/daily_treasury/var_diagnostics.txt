@@ -1,0 +1,32 @@
+VAR / VECM diagnostics: lag order and Johansen cointegration
+Training split only: levels 2005-10-03 to 2016-03-31 (2739 days), first differences 2005-10-04 to 2016-03-31 (2738 days). Series: deposits_cumulative_B, withdrawals_cumulative_B.
+VARs on the first differences with a constant, 0 to 10 lags, all on the same sample; lower is better.
+Johansen on the levels with a constant (det_order=0) and the selected number of lagged differences (a VAR on the differences with p lags is a VECM with p lagged differences). Null of each row: rank <= r. Critical values at 5%; the rank is the first r that isn't rejected.
+Caveat: Johansen assumes errors with a constant variance. The residuals have a variance break at 2008-09 and GARCH effects (volatility checks and GARCH), which can distort the test's size, so read borderline results with care.
+
+Information criteria by number of lags
+  lags       AIC       BIC      HQIC
+     0   13.3632   13.3676   13.3648 
+     1   13.3165   13.3295   13.3212 
+     2   13.2579   13.2796   13.2658 
+     3   13.1245   13.1548   13.1354 
+     4   13.0056   13.0446   13.0197 
+     5   12.6779   12.7256   12.6951 
+     6   12.6451   12.7014   12.6654 
+     7   12.6125   12.6775   12.6360 
+     8   12.5814   12.6551   12.6081 
+     9   12.5641   12.6465   12.5939 
+    10   12.3672*  12.4582*  12.4001*
+  * = selected: AIC 10, BIC 10, HQIC 10
+
+Johansen cointegration test on the levels
+  10 lagged differences, chosen by AIC, BIC, HQIC (drives the decision)
+    trace           rank <= 0: statistic  128.381, critical  15.494 -> reject
+    trace           rank <= 1: statistic    5.777, critical   3.841 -> reject
+    max eigenvalue  rank <= 0: statistic  122.604, critical  14.264 -> reject
+    max eigenvalue  rank <= 1: statistic    5.777, critical   3.841 -> reject
+    Rank: trace 2, max eigenvalue 2
+    Most stationary combination: deposits_cumulative_B -0.9977 x withdrawals_cumulative_B
+
+Decision (BIC's lag order, trace test): rank 2, full rank: both series look stationary in levels, which contradicts the stationarity tests; check the setup.
+Figure: reports/daily_treasury/figures/var_diagnostics.png

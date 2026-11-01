@@ -24,4 +24,4 @@ monetary_base_T: 6 of 222 changes flagged
   2020-04     0.9618   -0.1511    0.2767
   2020-07    -0.3015   -0.1984    0.3442
 
-Figure: reports/figures/outliers.png
+Figure: reports/fed_balance_sheet/figures/outliers.png

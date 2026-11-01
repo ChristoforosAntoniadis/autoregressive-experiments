@@ -45,4 +45,4 @@ monetary_base_T  SARIMA(1,1,1)x(1,0,1,12)  (GARCH: GARCH(1,1), Student-t, break-
     standardized residuals: lag 1 ARCH-LM p=0.193 / LB p=0.192, lag 6 ARCH-LM p=0.280 / LB p=0.195, lag 12 ARCH-LM p=0.145 / LB p=0.107; 0 of 999 bootstrap re-estimations didn't converge (kept)
     Verdict: NOT BETTER THAN GARCH
 
-Figure: reports/figures/asymmetric_garch.png
+Figure: reports/fed_balance_sheet/figures/asymmetric_garch.png

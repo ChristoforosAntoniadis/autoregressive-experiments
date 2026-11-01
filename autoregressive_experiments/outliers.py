@@ -1,12 +1,15 @@
 """
-Outliers: finding unusual monthly changes and taming them in a model's training history.
+Outliers: finding unusual changes and taming them in a model's training history.
 
-A monthly change is flagged by a Hampel filter (Hampel 1974; Pearson 2002) when it lies more than
-THRESHOLD robust standard deviations from the median of the changes within HALF_WIDTH months on
+A change is flagged by a Hampel filter (Hampel 1974; Pearson 2002) when it lies more than
+THRESHOLD robust standard deviations from the median of the changes within HALF_WIDTH periods on
 either side; the robust standard deviation is 1.4826 x the median absolute deviation, which
 estimates the standard deviation of normal data (Rousseeuw and Croux 1993) without being moved
 by the outliers themselves. Windows are cut at the ends of the history they are given, so a
-model's history up to a forecast origin is judged on that history alone.
+model's history up to a forecast origin is judged on that history alone. With SEASONAL_PROFILE
+(daily data with a weekly rhythm), each change is compared with the median of its own season
+position within the window (the same weekday) and the spread is measured after that profile is
+removed, so a regular payday is ordinary and only a departure from the usual payday is flagged.
 
 Each model's tuned `outliers` setting chooses what happens to the flagged changes before it is
 fitted:
@@ -16,34 +19,42 @@ fitted:
   rebuilt from the clipped changes backwards from the last actual level, so every forecast still
   starts from the real latest value
 - "dummies" (SARIMA and SARIMAX): one pulse regressor per flagged change, which absorbs that
-  month's jump in the level (an intervention, Box and Tiao 1975); its future values are zero
+  period's jump in the level (an intervention, Box and Tiao 1975); its future values are zero
 
 Forecasts are always scored against the actual data.
 
-Input: ``data/interim/fed_balance_sheet_cleaned.csv`` (train and validation months only).
+Input: the cleaned levels, ``data/interim/<dataset>/levels.csv`` (train and validation periods
+only).
 
 Output (make outliers):
 
-- ``reports/outliers.txt``: per series, the flagged months of the history the last validation
-  origin sees, with each change and its window's bounds
-- ``reports/figures/outliers.png``: per series, the monthly changes with the bounds shaded and
-  the flagged months marked
+- ``reports/<dataset>/outliers.txt``: per series, the flagged periods of the history the last
+  validation origin sees, with each change and its window's bounds
+- ``reports/<dataset>/figures/outliers.png``: per series, the changes with the bounds shaded and
+  the flagged periods marked
 """
 
 from pathlib import Path
+import warnings
 
 from loguru import logger
 from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 import numpy as np
+from numpy.lib.stride_tricks import sliding_window_view
 import pandas as pd
 import typer
 
-from autoregressive_experiments.config import FIGURES_DIR, INTERIM_DATA_DIR, REPORTS_DIR
+from autoregressive_experiments.config import FIGURES_DIR, REPORTS_DIR
 from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
-from autoregressive_experiments.diagnostics import repo_path
+from autoregressive_experiments.diagnostics import SEASONAL_PERIOD, repo_path
 from autoregressive_experiments.features import (
     DATE_COLUMN,
+    DATE_FORMAT,
+    LEVELS_PATH,
+    PERIOD,
+    PERIODLY,
+    UNIT,
     VALUE_COLUMNS,
     load_levels,
     series_title,
@@ -61,9 +72,10 @@ from autoregressive_experiments.runlog import begin_phase, finish_run, start_run
 
 app = typer.Typer()
 
-# Settings; each value's reasoning is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in the dataset's config file (configs/<dataset>.json).
 SETTINGS = HYPERPARAMETERS.outliers
 HALF_WIDTH = SETTINGS.half_width
+SEASONAL_PROFILE = SETTINGS.seasonal_profile
 THRESHOLD = SETTINGS.threshold
 HUBER_DELTA = SETTINGS.huber_delta
 # The median absolute deviation times this estimates the standard deviation of normal data; the
@@ -83,34 +95,59 @@ def hampel(changes: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     Parameters
     ----------
     changes : np.ndarray
-        One series' monthly changes, shape (n,), trillions, oldest first.
+        One series' changes, shape (n,), in the series' unit, oldest first.
 
     Returns
     -------
     tuple of (np.ndarray, np.ndarray, np.ndarray)
-        The lower bounds, the upper bounds (both shape (n,), trillions) and the flags (bool,
-        shape (n,)).
+        The lower bounds, the upper bounds (both shape (n,), in the series' unit) and the flags
+        (bool, shape (n,)).
 
     Notes
     -----
     Processing, for each change:
-    1. Take the changes within HALF_WIDTH months on either side (fewer at the ends).
-    2. Bounds = their median +/- THRESHOLD x MAD_TO_SD x their median absolute deviation.
+    1. Take the changes within HALF_WIDTH periods on either side (fewer at the ends).
+    2. With SEASONAL_PROFILE, subtract from each change in the window the median of the
+       window's changes at the same season position (index modulo SEASONAL_PERIOD; a weekday
+       profile for daily data), and judge the change by the residue; the bounds get the
+       change's own position's median added back.
+    3. Bounds = their median +/- THRESHOLD x MAD_TO_SD x their median absolute deviation.
        When more than half the window's changes are equal (zero-flow days, for example), that
        deviation is zero and would flag every other change, so the mean absolute deviation,
        scaled to a standard deviation as well, stands in.
-    3. Flag the change if it lies outside its bounds. A window whose changes are all equal has
+    4. Flag the change if it lies outside its bounds. A window whose changes are all equal has
        no spread and flags nothing.
     """
-    lower, upper = np.empty(len(changes)), np.empty(len(changes))
-    for index in range(len(changes)):
-        window = changes[max(0, index - HALF_WIDTH) : index + HALF_WIDTH + 1]
-        median = np.median(window)
-        deviations = np.abs(window - median)
-        mad = np.median(deviations)
-        scale = MAD_TO_SD * mad if mad > 0 else MEAN_AD_TO_SD * np.mean(deviations)
-        spread = THRESHOLD * scale
-        lower[index], upper[index] = median - spread, median + spread
+    # One row per change: its window, padded with NaN where it is cut at the ends; the nan-
+    # functions then ignore the padding. Vectorized because clip_levels runs this filter at
+    # every forecast origin of every trial.
+    count, width = len(changes), 2 * HALF_WIDTH + 1
+    padded = np.pad(changes.astype(float), HALF_WIDTH, constant_values=np.nan)
+    windows = sliding_window_view(padded, width)
+    profile = np.zeros(count)
+    with warnings.catch_warnings():
+        # A window edge can hold no member of a season position: an all-NaN slice, ignored.
+        warnings.simplefilter("ignore", RuntimeWarning)
+        if SEASONAL_PROFILE:
+            # Each window member's season position, the window's median per position, and the
+            # residues from it; the change's own position's median is its profile.
+            offsets = np.arange(-HALF_WIDTH, HALF_WIDTH + 1)
+            positions = (np.arange(count)[:, None] + offsets[None, :]) % SEASONAL_PERIOD
+            medians = np.column_stack(
+                [
+                    np.nanmedian(np.where(positions == p, windows, np.nan), axis=1)
+                    for p in range(SEASONAL_PERIOD)
+                ]
+            )
+            windows = windows - medians[np.arange(count)[:, None], positions]
+            profile = medians[np.arange(count), np.arange(count) % SEASONAL_PERIOD]
+        median = np.nanmedian(windows, axis=1)
+        deviations = np.abs(windows - median[:, None])
+        mad = np.nanmedian(deviations, axis=1)
+        mean_deviation = np.nanmean(deviations, axis=1)
+    scale = np.where(mad > 0, MAD_TO_SD * mad, MEAN_AD_TO_SD * mean_deviation)
+    spread = THRESHOLD * scale
+    lower, upper = profile + median - spread, profile + median + spread
     return lower, upper, (changes < lower) | (changes > upper)
 
 
@@ -181,28 +218,37 @@ def outlier_report(data: pd.DataFrame) -> str:
     str
         The report text.
     """
+    profile = (
+        f" The median and spread are taken after removing the window's profile by season "
+        f"position (every {SEASONAL_PERIOD} {PERIOD}s), so a regular rhythm is not flagged."
+        if SEASONAL_PROFILE
+        else ""
+    )
     lines = [
-        "Outliers: monthly changes flagged by a Hampel filter",
+        f"Outliers: {PERIODLY} changes flagged by a Hampel filter",
         (
-            f"History: {data[DATE_COLUMN].iloc[0]:%Y-%m} to {data[DATE_COLUMN].iloc[-1]:%Y-%m} "
-            "(train and validation; the test months are never examined here). A change is flagged "
-            f"when it lies more than {THRESHOLD:g} robust standard deviations (1.4826 x the "
-            "median absolute deviation) from the median of the changes within "
-            f"{HALF_WIDTH} months on either side. Each model's tuned 'outliers' setting decides "
-            "whether flagged changes are left as they are, clipped to the bounds, or given a "
-            "pulse regressor; forecasts are always scored against the actual data."
+            f"History: {data[DATE_COLUMN].iloc[0]:{DATE_FORMAT}} to "
+            f"{data[DATE_COLUMN].iloc[-1]:{DATE_FORMAT}} "
+            f"(train and validation; the test {PERIOD}s are never examined here). A change is "
+            f"flagged when it lies more than {THRESHOLD:g} robust standard deviations (1.4826 x "
+            "the median absolute deviation) from the median of the changes within "
+            f"{HALF_WIDTH} {PERIOD}s on either side.{profile} Each model's tuned 'outliers' "
+            "setting decides whether flagged changes are left as they are, clipped to the "
+            "bounds, or given a pulse regressor; forecasts are always scored against the actual "
+            "data."
         ),
         "",
     ]
     dates = data[DATE_COLUMN].iloc[1:]
+    width = max(8, len(f"{dates.iloc[0]:{DATE_FORMAT}}"))
     for column in VALUE_COLUMNS:
         changes = np.diff(data[column].to_numpy(dtype=float))
         lower, upper, flags = hampel(changes)
         lines.append(f"{column}: {int(flags.sum())} of {len(changes)} changes flagged")
-        lines.append(f"  {'month':8s} {'change':>9s} {'lower':>9s} {'upper':>9s}")
+        lines.append(f"  {PERIOD:{width}s} {'change':>9s} {'lower':>9s} {'upper':>9s}")
         for index in np.flatnonzero(flags):
             lines.append(
-                f"  {dates.iloc[index]:%Y-%m}  {changes[index]:9.4f} {lower[index]:9.4f} "
+                f"  {dates.iloc[index]:{DATE_FORMAT}}  {changes[index]:9.4f} {lower[index]:9.4f} "
                 f"{upper[index]:9.4f}"
             )
         lines.append("")
@@ -238,7 +284,9 @@ def outlier_figure(data: pd.DataFrame) -> Figure:
         axis.fill_between(
             dates, lower, upper, color=MUTED_INK, alpha=0.18, linewidth=0, label="window bounds"
         )
-        axis.plot(dates, changes, color=SERIES_PALETTE[0], linewidth=1.2, label="monthly change")
+        axis.plot(
+            dates, changes, color=SERIES_PALETTE[0], linewidth=1.2, label=f"{PERIODLY} change"
+        )
         axis.scatter(
             dates[flags],
             changes[flags],
@@ -248,10 +296,10 @@ def outlier_figure(data: pd.DataFrame) -> Figure:
             label=f"flagged ({int(flags.sum())})",
         )
         axis.axhline(0, color=PRIMARY_INK, linewidth=0.8)
-        axis.set_ylabel("Change (trillions)", color=SECONDARY_INK)
+        axis.set_ylabel(f"Change ({UNIT})", color=SECONDARY_INK)
         axis.set_title(
-            f"{series_title(column)}: monthly changes outside {THRESHOLD:g} robust standard "
-            f"deviations of their {2 * HALF_WIDTH + 1}-month window are flagged",
+            f"{series_title(column)}: {PERIODLY} changes outside {THRESHOLD:g} robust standard "
+            f"deviations of their {2 * HALF_WIDTH + 1}-{PERIOD} window are flagged",
             loc="left",
             fontsize=10,
         )
@@ -261,13 +309,13 @@ def outlier_figure(data: pd.DataFrame) -> Figure:
 
 
 @app.command()
-def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv") -> None:
+def main(levels_path: Path = LEVELS_PATH) -> None:
     """
     Flag the outliers of the train and validation history and write the report and figure.
 
     Parameters
     ----------
-    levels_path : Path, default=INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv"
+    levels_path : Path, default=LEVELS_PATH
         Cleaned monthly levels of both series, trillions.
 
     Returns

@@ -4,12 +4,13 @@ seasonality and noise, fitted by Stan.
 
 Each series is modelled on its own, on its levels with their month-end dates, and refitted at
 every forecast origin on the months up to it. The trend is piecewise linear (or flat) with
-automatically placed changepoints; weekly and daily seasonality are switched off, since the data
-is monthly. Point forecasts are Prophet's yhat.
+automatically placed changepoints; weekly seasonality is a setting (off for monthly data)
+and daily seasonality is off, since there is one observation per period. Point forecasts
+are Prophet's yhat.
 
 Prophet belongs to the econometric family. Every setting is chosen per series by ``tuning`` on
 the validation split (Optuna) from the search space in the ``ready_made`` section of
-``configs/hyperparameters.json``. Its bands, like every model's, come from its own past errors
+``configs/<dataset>.json``. Its bands, like every model's, come from its own past errors
 (forecast_evaluation).
 
 Input: levels and dates handed over by ``model_forecasts``.
@@ -29,24 +30,25 @@ from autoregressive_experiments.features import FREQUENCY
 
 PROPHET = "Prophet"
 READY_MADE_MODELS = (PROPHET,)
-# Settings; each value's reasoning is in configs/hyperparameters.json.
+# Settings; each value's reasoning is in the dataset's config file (configs/<dataset>.json).
 READY_MADE_SPACES: dict[str, Mapping[str, Any]] = {PROPHET: HYPERPARAMETERS.ready_made.prophet}
 
 
 def prophet_model(settings: Mapping[str, Any]) -> Any:
     """
-    An unfitted Prophet model for monthly data.
+    An unfitted Prophet model.
 
     Parameters
     ----------
     settings : Mapping of str to Any
         The tuned settings: growth, changepoint_prior_scale, changepoint_range,
-        seasonality_mode, seasonality_prior_scale and yearly_seasonality.
+        seasonality_mode, seasonality_prior_scale, yearly_seasonality and weekly_seasonality.
 
     Returns
     -------
     prophet.Prophet
-        The model, with weekly and daily seasonality off and cmdstanpy's logging quiet.
+        The model, with daily seasonality off (one observation per period) and cmdstanpy's
+        logging quiet.
     """
     # Prophet reports at import that plotly, for its interactive plots, is missing; no plots are
     # drawn with it here.
@@ -57,12 +59,7 @@ def prophet_model(settings: Mapping[str, Any]) -> Any:
     for name in ("cmdstanpy", "prophet"):
         logging.getLogger(name).setLevel(logging.WARNING)
 
-    return Prophet(
-        **settings,
-        weekly_seasonality=False,
-        daily_seasonality=False,
-        uncertainty_samples=0,
-    )
+    return Prophet(**settings, daily_seasonality=False, uncertainty_samples=0)
 
 
 def prophet_forecast(

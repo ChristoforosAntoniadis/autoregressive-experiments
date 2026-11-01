@@ -45,4 +45,4 @@ monetary_base_T  SARIMA(1,1,1)x(1,0,1,12)  (AIC tie (+1.997))
 
 monetary_base_T: carry forward SARIMA(0,1,1)x(1,0,1,12), SARIMA(0,1,1), SARIMA(1,1,1)x(1,0,1,12)
 
-Figure: reports/figures/residual_diagnostics.png
+Figure: reports/fed_balance_sheet/figures/residual_diagnostics.png

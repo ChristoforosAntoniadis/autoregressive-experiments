@@ -1,7 +1,8 @@
 """
 Loading and validation of the hyperparameter config.
 
-Defines `ConfigLoader`, which reads ``hyperparameters.json`` (beside this file), checks every
+Defines `ConfigLoader`, which reads the dataset profile's ``<dataset>.json`` (beside this
+file; config.DATASET names it), checks every
 entry against the definitions in ``configurables`` and returns them as one typed, frozen
 `Hyperparameters` object. Every module takes its settings from `HYPERPARAMETERS`, loaded once
 on import.
@@ -10,7 +11,7 @@ Each entry in the file is an object with exactly two keys: "value" and "reasonin
 setting without reasoning is rejected: every choice must say why it was made (a
 reference, a calculation or an earlier step's result).
 
-Input: ``autoregressive_experiments/configs/hyperparameters.json`` (or another path given to
+Input: ``autoregressive_experiments/configs/<dataset>.json`` (or another path given to
 `ConfigLoader`).
 
 Output: the validated `Hyperparameters` object and each setting's reasoning. Nothing is
@@ -268,7 +269,10 @@ def cross_checks(hyperparameters: Hyperparameters) -> list[str]:
 
     Notes
     -----
-    - Train and validation must leave months for test.
+    - Train and validation must leave periods for test.
+    - The tuning's score reference must be one of the benchmarks the evaluation runs.
+    - With the outliers' seasonal profile, the Hampel window must hold at least two full
+      seasons, so every season position has two or more members to take a median of.
     - The primary VAR criterion must be one of the reported criteria.
     - The carried-forward VAR order must be one of the candidates checked by var_models.
     - The impulse-response band's z must match the significance level (within
@@ -277,7 +281,20 @@ def cross_checks(hyperparameters: Hyperparameters) -> list[str]:
     errors = []
     split = hyperparameters.split
     if split.train_percent + split.validation_percent >= 100:
-        errors.append("split: train_percent + validation_percent must leave months for test")
+        errors.append("split: train_percent + validation_percent must leave periods for test")
+    if (
+        hyperparameters.tuning.score_reference
+        not in hyperparameters.forecast_evaluation.benchmarks
+    ):
+        errors.append("tuning: score_reference must be one of forecast_evaluation.benchmarks")
+    outliers = hyperparameters.outliers
+    if outliers.seasonal_profile and (
+        2 * outliers.half_width + 1 < 2 * hyperparameters.diagnostics.seasonal_period
+    ):
+        errors.append(
+            "outliers: with seasonal_profile the window 2 x half_width + 1 must hold two "
+            "seasons (diagnostics.seasonal_period)"
+        )
     var = hyperparameters.var_diagnostics
     if var.primary_criterion not in var.criteria:
         errors.append("var_diagnostics: primary_criterion must be one of criteria")
