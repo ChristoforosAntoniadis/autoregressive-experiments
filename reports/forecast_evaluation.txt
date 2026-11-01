@@ -1,79 +1,99 @@
 Test of the champions (one per family and series, chosen on validation)
-Three-way split: training fits, validation (2016-11 to 2021-06; an origin every 4 months) tunes and chooses, test (2021-07 to 2026-02) measures. This step runs each champion and naive over the test months once; nothing is tuned or chosen after it. Rolling origin, expanding window: at every test month each model is refitted on all months from 2002-12 to it, with its tuned settings, and forecasts up to 12 months ahead.
-Errors are on the levels: MAE, RMSE in trillions; MSE in trillions squared; MAPE in %; MASE = MAE / the training split's mean absolute monthly change (scales: fed_total_assets_T 0.0337, monetary_base_T 0.0402). DM: Diebold-Mariano test against naive, absolute-error loss, with the Harvey-Leybourne-Newbold correction; 'better' / 'worse' when significant at 5%.
+Three-way split: training fits, validation (2016-11 to 2021-06; an origin every 4 months) tunes and chooses, test (2021-07 to 2026-02) measures. This step runs each champion, the mean of the three champions, naive and drift over the test months once; nothing is tuned or chosen after it. Rolling origin, expanding window: at every test month each model is refitted on all months from 2002-12 to it, with its tuned settings, and forecasts up to 12 months ahead.
+Errors are on the levels: MAE, RMSE in trillions; MSE in trillions squared; MAPE in %; MASE = MAE / the training split's mean absolute monthly change (scales: fed_total_assets_T 0.0337, monetary_base_T 0.0402), so naive's own MASE is above 1 when the test moves more than training did; MAE/naive compares like with like. ME: mean of actual - forecast (negative: the model forecasts too high); over: share of forecasts above the actual (0.50 when unbiased). DM: Diebold-Mariano test against naive, absolute-error loss, with the Harvey-Leybourne-Newbold correction; 'better' / 'worse' when significant at 5%. 100 such tests are reported (absolute and squared loss); about 5 would come out significant by chance alone, so one borderline p-value is weak evidence. LB p: Ljung-Box p-value of the 1-month errors at 12 lags; below 5%, the errors are autocorrelated and the model leaves structure unused.
 Bands: each forecast plus the 2.5 / 10 / 50 / 90 / 97.5% quantiles of the same model's errors at that horizon from every earlier forecast since the end of training whose target was already known (empirical prediction intervals, split-conformal style); coverage targets 0.80 and 0.95.
 
 fed_total_assets_T
-  Champions (validation MASE averaged over the horizons) and their settings:
-    econometric       SARIMAX                    15.353   outliers=clip, lags=1
-    machine learning  XGBoost                    14.123   outliers=clip, loss=mse, lags=7, n_estimators=200, learning_rate=0.05, max_depth=3, min_child_weight=4, subsample=0.5, colsample_bytree=0.5, gamma=0.0, reg_alpha=0.1, reg_lambda=5.0
-    neural network    LSTM                       13.475   outliers=none, loss=mse, lags=3, hidden_units=16, layers=2, dropout=0.023788792870816335, optimizer=sgd, learning_rate=0.23456714042857235, weight_decay=0.0011363399306360876, batch_size=8, use_bias=True, epochs=100, patience=10, min_delta=0.0001, min_epochs=20, validation_share=0.25
+  Champions (validation score: MAE / naive's, mean over horizons; its standard error; models tied within one standard error) and their settings:
+    econometric       VECM                       0.905 (se 0.065; tied with: exponential smoothing, SARIMAX, SARIMA, SARIMA + naive average)   outliers=clip, transform=none, lags=3, deterministic=li
+    machine learning  XGBoost                    0.820 (se 0.080; tied with: random forest)   outliers=clip, transform=none, loss=mse, lags=8, n_estimators=500, learning_rate=0.1, max_depth=3, min_child_weight=2, subsample=0.7, colsample_bytree=0.7, gamma=0.5, reg_alpha=0.01, reg_lambda=1.0
+    neural network    LSTM                       0.863 (se 0.077; tied with: GRU, PyTorch MLP, TensorFlow MLP, NumPy A1, MLP, TCN)   outliers=clip, transform=none, loss=huber, lags=12, hidden_units=32, layers=1, dropout=0.22859265864890188, optimizer=muon, learning_rate=0.013207146584217618, weight_decay=0.0003898411307031868, batch_size=8, use_bias=True, epochs=100, patience=10, min_delta=0.0001, min_epochs=20, validation_share=0.25
   1-month horizon (56 forecasts)
-    model                     family                 MAE  MAPE %    MASE        MSE    RMSE   DM vs naive        cov 80% cov 95%  pinball
-    SARIMAX                   econometric         0.0412    0.52   1.224   0.004789  0.0692   better p=0.000        0.77    0.96   0.0123
-    XGBoost                   machine learning    0.0514    0.64   1.525   0.006025  0.0776   better p=0.001        0.79    0.93   0.0148
-    LSTM                      neural network      0.0720    0.91   2.137   0.009133  0.0956   p=0.90                0.73    0.96   0.0169
-    naive                     benchmark           0.0727    0.92   2.159   0.008158  0.0903   -                     0.73    0.93   0.0174
+    model                     family                 MAE /naive  MAPE %    MASE    RMSE      ME  over   DM vs naive         LB p cov 80% cov 95%  pinball
+    mean of champions         combination         0.0434   0.60    0.54   1.289  0.0716  -0.013  0.66   better p=0.000      0.88    0.77    0.93   0.0131
+    LSTM                      neural network      0.0438   0.60    0.55   1.301  0.0718  -0.012  0.64   better p=0.000      0.73    0.77    0.95   0.0131
+    VECM                      econometric         0.0456   0.63    0.57   1.355  0.0740  -0.011  0.64   better p=0.000      0.26    0.77    0.93   0.0134
+    XGBoost                   machine learning    0.0530   0.73    0.67   1.574  0.0792  -0.015  0.61   better p=0.002      0.97    0.75    0.93   0.0154
+    naive                     benchmark           0.0727   1.00    0.92   2.159  0.0903  -0.026  0.75   -                   0.00    0.73    0.93   0.0174
+    drift                     benchmark           0.0883   1.21    1.13   2.623  0.1016  -0.055  0.80   worse p=0.000       0.00    0.71    0.91   0.0179
   3-month horizon (54 forecasts)
-    model                     family                 MAE  MAPE %    MASE        MSE    RMSE   DM vs naive        cov 80% cov 95%  pinball
-    SARIMAX                   econometric         0.0992    1.22   2.945   0.016508  0.1285   better p=0.023        0.78    0.98   0.0330
-    XGBoost                   machine learning    0.1287    1.57   3.820   0.030990  0.1760   p=0.13                0.72    0.83   0.0436
-    naive                     benchmark           0.1819    2.32   5.401   0.044539  0.2110   -                     0.72    0.80   0.0493
-    LSTM                      neural network      0.1886    2.39   5.600   0.052921  0.2300   p=0.80                0.61    0.91   0.0497
+    model                     family                 MAE /naive  MAPE %    MASE    RMSE      ME  over   DM vs naive         LB p cov 80% cov 95%  pinball
+    LSTM                      neural network      0.1025   0.56    1.29   3.042  0.1340  -0.053  0.76   better p=0.005         -    0.70    0.93   0.0323
+    mean of champions         combination         0.1064   0.58    1.33   3.159  0.1451  -0.058  0.70   better p=0.009         -    0.74    0.85   0.0359
+    VECM                      econometric         0.1191   0.65    1.49   3.535  0.1549  -0.064  0.72   better p=0.007         -    0.70    0.98   0.0368
+    XGBoost                   machine learning    0.1335   0.73    1.68   3.965  0.1790  -0.056  0.57   p=0.12                 -    0.72    0.80   0.0473
+    naive                     benchmark           0.1819   1.00    2.32   5.401  0.2110  -0.089  0.74   -                      -    0.72    0.80   0.0493
+    drift                     benchmark           0.2285   1.26    2.96   6.785  0.2575  -0.176  0.85   worse p=0.020          -    0.70    0.78   0.0515
   6-month horizon (51 forecasts)
-    model                     family                 MAE  MAPE %    MASE        MSE    RMSE   DM vs naive        cov 80% cov 95%  pinball
-    SARIMAX                   econometric         0.1844    2.29   5.474   0.064496  0.2540   p=0.10                0.78    0.98   0.0700
-    XGBoost                   machine learning    0.2624    3.25   7.791   0.143046  0.3782   p=0.46                0.65    0.76   0.1017
-    naive                     benchmark           0.3364    4.36   9.988   0.149786  0.3870   -                     0.65    0.76   0.1014
-    LSTM                      neural network      0.4068    5.21  12.079   0.233822  0.4836   p=0.35                0.53    0.78   0.1211
+    model                     family                 MAE /naive  MAPE %    MASE    RMSE      ME  over   DM vs naive         LB p cov 80% cov 95%  pinball
+    LSTM                      neural network      0.1991   0.59    2.53   5.912  0.2595  -0.155  0.76   better p=0.010         -    0.69    0.82   0.0711
+    mean of champions         combination         0.2210   0.66    2.77   6.563  0.3112  -0.190  0.76   p=0.09                 -    0.69    0.78   0.0804
+    VECM                      econometric         0.2628   0.78    3.33   7.804  0.3274  -0.207  0.84   p=0.21                 -    0.67    0.98   0.0793
+    XGBoost                   machine learning    0.2997   0.89    3.82   8.899  0.4242  -0.208  0.73   p=0.65                 -    0.63    0.75   0.1140
+    naive                     benchmark           0.3364   1.00    4.36   9.988  0.3870  -0.210  0.82   -                      -    0.65    0.76   0.1014
+    drift                     benchmark           0.4569   1.36    6.00  13.565  0.5019  -0.387  0.88   worse p=0.022          -    0.55    0.69   0.1084
   9-month horizon (48 forecasts)
-    model                     family                 MAE  MAPE %    MASE        MSE    RMSE   DM vs naive        cov 80% cov 95%  pinball
-    SARIMAX                   econometric         0.3174    3.98   9.424   0.168741  0.4108   p=0.28                0.71    1.00   0.1263
-    XGBoost                   machine learning    0.4807    6.07  14.272   0.430613  0.6562   p=0.94                0.52    0.73   0.1953
-    naive                     benchmark           0.4926    6.51  14.626   0.299820  0.5476   -                     0.48    0.56   0.1723
-    LSTM                      neural network      0.6583    8.54  19.546   0.581363  0.7625   p=0.15                0.50    0.75   0.2114
+    model                     family                 MAE /naive  MAPE %    MASE    RMSE      ME  over   DM vs naive         LB p cov 80% cov 95%  pinball
+    LSTM                      neural network      0.3314   0.67    4.26   9.840  0.4248  -0.298  0.83   p=0.05                 -    0.60    0.81   0.1338
+    mean of champions         combination         0.4026   0.82    5.13  11.952  0.5261  -0.377  0.90   p=0.45                 -    0.56    0.73   0.1530
+    VECM                      econometric         0.4471   0.91    5.76  13.273  0.5324  -0.403  0.90   p=0.68                 -    0.58    0.98   0.1486
+    naive                     benchmark           0.4926   1.00    6.51  14.626  0.5476  -0.362  0.85   -                      -    0.48    0.56   0.1723
+    XGBoost                   machine learning    0.5733   1.16    7.43  17.020  0.7384  -0.431  0.75   p=0.46                 -    0.52    0.62   0.2136
+    drift                     benchmark           0.6902   1.40    9.21  20.491  0.7499  -0.631  0.90   worse p=0.007          -    0.46    0.54   0.1886
   12-month horizon (45 forecasts)
-    model                     family                 MAE  MAPE %    MASE        MSE    RMSE   DM vs naive        cov 80% cov 95%  pinball
-    SARIMAX                   econometric         0.4824    6.13  14.322   0.359209  0.5993   p=0.56                0.60    1.00   0.1836
-    naive                     benchmark           0.6457    8.71  19.171   0.500906  0.7077   -                     0.47    0.53   0.2357
-    XGBoost                   machine learning    0.7508    9.68  22.291   0.923501  0.9610   p=0.68                0.49    0.67   0.2890
-    LSTM                      neural network      0.9488   12.46  28.169   1.148628  1.0717   p=0.16                0.36    0.60   0.3341
+    model                     family                 MAE /naive  MAPE %    MASE    RMSE      ME  over   DM vs naive         LB p cov 80% cov 95%  pinball
+    LSTM                      neural network      0.4986   0.77    6.49  14.805  0.6127  -0.469  0.89   p=0.36                 -    0.51    0.73   0.1934
+    mean of champions         combination         0.6188   0.96    8.02  18.374  0.7802  -0.601  0.89   p=0.90                 -    0.44    0.60   0.2412
+    naive                     benchmark           0.6457   1.00    8.71  19.171  0.7077  -0.534  0.89   -                      -    0.47    0.53   0.2357
+    VECM                      econometric         0.6608   1.02    8.68  19.619  0.7677  -0.637  0.96   p=0.93                 -    0.56    0.98   0.2178
+    XGBoost                   machine learning    0.9149   1.42   12.05  27.164  1.1136  -0.698  0.78   p=0.11                 -    0.44    0.51   0.3321
+    drift                     benchmark           0.9335   1.45   12.66  27.716  1.0093  -0.898  0.93   worse p=0.001          -    0.44    0.51   0.2642
 
 monetary_base_T
-  Champions (validation MASE averaged over the horizons) and their settings:
-    econometric       SARIMAX                     8.703   outliers=dummies, lags=6
-    machine learning  random forest               7.669   outliers=none, lags=1, n_estimators=100, criterion=squared_error, max_depth=5, min_samples_split=20, min_samples_leaf=4, min_weight_fraction_leaf=0.0, max_features=1.0, max_leaf_nodes=None, min_impurity_decrease=0.0, bootstrap=True, max_samples=None, ccp_alpha=0.001
-    neural network    GRU                         7.697   outliers=none, loss=mse, lags=6, hidden_units=4, layers=2, dropout=0.14556544248262065, optimizer=sgd, learning_rate=0.1878057604286291, weight_decay=0.003375528947096233, batch_size=32, use_bias=False, epochs=100, patience=10, min_delta=0.0001, min_epochs=20, validation_share=0.25
+  Champions (validation score: MAE / naive's, mean over horizons; its standard error; models tied within one standard error) and their settings:
+    econometric       SARIMAX                    0.834 (se 0.062; tied with: VECM, VAR)   outliers=clip, transform=none, lags=5
+    machine learning  XGBoost                    0.765 (se 0.080; tied with: random forest, KNN)   outliers=clip, transform=none, loss=mse, lags=8, n_estimators=500, learning_rate=0.1, max_depth=3, min_child_weight=2, subsample=0.7, colsample_bytree=0.7, gamma=0.5, reg_alpha=0.01, reg_lambda=1.0
+    neural network    NumPy A1                   0.768 (se 0.053; tied with: DLinear, GRU, LSTM, PyTorch MLP, MLP)   outliers=none, transform=none, loss=mse, lags=6, hidden_units=32, optimizer=muon, learning_rate=0.1, use_bias=True, dropout=0.2, batch_size=32, epochs=100, patience=10, min_delta=0.0001, min_epochs=20, validation_share=0.25
   1-month horizon (56 forecasts)
-    model                     family                 MAE  MAPE %    MASE        MSE    RMSE   DM vs naive        cov 80% cov 95%  pinball
-    SARIMAX                   econometric         0.0724    1.27   1.800   0.009432  0.0971   p=0.54                0.77    1.00   0.0174
-    naive                     benchmark           0.0766    1.34   1.906   0.011173  0.1057   -                     0.79    0.95   0.0205
-    GRU                       neural network      0.0816    1.42   2.029   0.013395  0.1157   p=0.30                0.80    0.98   0.0212
-    random forest             machine learning    0.0828    1.45   2.058   0.013628  0.1167   p=0.29                0.75    0.96   0.0211
+    model                     family                 MAE /naive  MAPE %    MASE    RMSE      ME  over   DM vs naive         LB p cov 80% cov 95%  pinball
+    SARIMAX                   econometric         0.0763   1.00    1.33   1.898  0.1029  -0.009  0.50   p=0.96              0.67    0.77    0.95   0.0188
+    naive                     benchmark           0.0766   1.00    1.34   1.906  0.1057  -0.011  0.52   -                   0.02    0.79    0.95   0.0205
+    mean of champions         combination         0.0780   1.02    1.37   1.940  0.1114  -0.020  0.59   p=0.80              0.17    0.73    0.95   0.0203
+    drift                     benchmark           0.0788   1.03    1.38   1.960  0.1100  -0.032  0.62   p=0.41              0.02    0.79    0.95   0.0206
+    NumPy A1                  neural network      0.0886   1.16    1.55   2.204  0.1252  -0.017  0.52   p=0.06              0.00    0.71    0.95   0.0228
+    XGBoost                   machine learning    0.0898   1.17    1.58   2.232  0.1228  -0.034  0.61   worse p=0.043       0.01    0.71    0.93   0.0224
   3-month horizon (54 forecasts)
-    model                     family                 MAE  MAPE %    MASE        MSE    RMSE   DM vs naive        cov 80% cov 95%  pinball
-    naive                     benchmark           0.1506    2.65   3.745   0.040356  0.2009   -                     0.81    0.83   0.0447
-    SARIMAX                   econometric         0.1637    2.88   4.071   0.045622  0.2136   p=0.33                0.78    1.00   0.0418
-    random forest             machine learning    0.1813    3.19   4.509   0.064902  0.2548   p=0.23                0.70    0.98   0.0488
-    GRU                       neural network      0.1861    3.26   4.629   0.065880  0.2567   p=0.12                0.67    0.96   0.0519
+    model                     family                 MAE /naive  MAPE %    MASE    RMSE      ME  over   DM vs naive         LB p cov 80% cov 95%  pinball
+    naive                     benchmark           0.1506   1.00    2.65   3.745  0.2009  -0.043  0.57   -                      -    0.81    0.83   0.0447
+    drift                     benchmark           0.1693   1.12    3.00   4.211  0.2237  -0.104  0.76   p=0.16                 -    0.81    0.83   0.0457
+    SARIMAX                   econometric         0.1838   1.22    3.23   4.571  0.2402  -0.044  0.50   p=0.11                 -    0.76    1.00   0.0490
+    mean of champions         combination         0.1883   1.25    3.30   4.683  0.2605  -0.078  0.56   p=0.18                 -    0.76    0.94   0.0530
+    XGBoost                   machine learning    0.2051   1.36    3.61   5.101  0.2691  -0.108  0.59   p=0.09                 -    0.78    0.93   0.0569
+    NumPy A1                  neural network      0.2167   1.44    3.80   5.389  0.3052  -0.081  0.52   p=0.07                 -    0.72    0.91   0.0625
   6-month horizon (51 forecasts)
-    model                     family                 MAE  MAPE %    MASE        MSE    RMSE   DM vs naive        cov 80% cov 95%  pinball
-    naive                     benchmark           0.2547    4.55   6.334   0.101732  0.3190   -                     0.69    0.84   0.0869
-    SARIMAX                   econometric         0.2975    5.28   7.397   0.141355  0.3760   p=0.11                0.78    0.96   0.0860
-    random forest             machine learning    0.3541    6.29   8.806   0.246612  0.4966   p=0.10                0.78    0.94   0.1026
-    GRU                       neural network      0.3560    6.31   8.854   0.214951  0.4636   p=0.10                0.78    0.82   0.1136
+    model                     family                 MAE /naive  MAPE %    MASE    RMSE      ME  over   DM vs naive         LB p cov 80% cov 95%  pinball
+    naive                     benchmark           0.2547   1.00    4.55   6.334  0.3190  -0.104  0.61   -                      -    0.69    0.84   0.0869
+    drift                     benchmark           0.2949   1.16    5.29   7.334  0.3829  -0.227  0.67   p=0.26                 -    0.69    0.82   0.0914
+    SARIMAX                   econometric         0.3398   1.33    6.03   8.450  0.4382  -0.115  0.57   p=0.07                 -    0.80    0.98   0.0968
+    mean of champions         combination         0.3525   1.38    6.25   8.767  0.4904  -0.209  0.65   p=0.21                 -    0.80    0.88   0.1147
+    XGBoost                   machine learning    0.3785   1.49    6.72   9.413  0.5139  -0.261  0.63   p=0.05                 -    0.76    0.82   0.1268
+    NumPy A1                  neural network      0.3943   1.55    6.98   9.805  0.5893  -0.251  0.59   p=0.28                 -    0.76    0.80   0.1412
   9-month horizon (48 forecasts)
-    model                     family                 MAE  MAPE %    MASE        MSE    RMSE   DM vs naive        cov 80% cov 95%  pinball
-    naive                     benchmark           0.2999    5.41   7.457   0.151732  0.3895   -                     0.79    0.81   0.1139
-    SARIMAX                   econometric         0.3746    6.73   9.315   0.251916  0.5019   p=0.06                0.81    0.96   0.1185
-    GRU                       neural network      0.4361    7.84  10.846   0.386902  0.6220   p=0.25                0.77    0.77   0.1705
-    random forest             machine learning    0.4692    8.41  11.668   0.499065  0.7064   p=0.14                0.75    0.96   0.1457
+    model                     family                 MAE /naive  MAPE %    MASE    RMSE      ME  over   DM vs naive         LB p cov 80% cov 95%  pinball
+    naive                     benchmark           0.2999   1.00    5.41   7.457  0.3895  -0.139  0.54   -                      -    0.79    0.81   0.1139
+    drift                     benchmark           0.3596   1.20    6.53   8.943  0.4983  -0.325  0.79   p=0.41                 -    0.79    0.81   0.1219
+    SARIMAX                   econometric         0.4425   1.48    7.95  11.005  0.5772  -0.150  0.54   p=0.05                 -    0.79    1.00   0.1339
+    mean of champions         combination         0.4536   1.51    8.16  11.282  0.6916  -0.345  0.67   p=0.32                 -    0.77    0.79   0.1735
+    XGBoost                   machine learning    0.5279   1.76    9.43  13.129  0.7334  -0.448  0.73   p=0.06                 -    0.71    0.79   0.1950
+    NumPy A1                  neural network      0.5702   1.90   10.26  14.182  0.8970  -0.436  0.73   p=0.29                 -    0.73    0.79   0.2326
   12-month horizon (45 forecasts)
-    model                     family                 MAE  MAPE %    MASE        MSE    RMSE   DM vs naive        cov 80% cov 95%  pinball
-    naive                     benchmark           0.3140    5.68   7.809   0.184462  0.4295   -                     0.78    0.78   0.1268
-    SARIMAX                   econometric         0.4342    7.85  10.798   0.354931  0.5958   p=0.11                0.78    0.91   0.1476
-    GRU                       neural network      0.4787    8.69  11.904   0.561617  0.7494   p=0.38                0.76    0.76   0.2115
-    random forest             machine learning    0.6132   11.04  15.250   0.862077  0.9285   p=0.09                0.73    0.93   0.1952
+    model                     family                 MAE /naive  MAPE %    MASE    RMSE      ME  over   DM vs naive         LB p cov 80% cov 95%  pinball
+    naive                     benchmark           0.3140   1.00    5.68   7.809  0.4295  -0.158  0.62   -                      -    0.78    0.78   0.1268
+    drift                     benchmark           0.4517   1.44    8.21  11.233  0.5854  -0.408  0.87   p=0.14                 -    0.78    0.78   0.1400
+    SARIMAX                   econometric         0.4905   1.56    8.86  12.198  0.6681  -0.167  0.49   p=0.13                 -    0.78    0.91   0.1589
+    mean of champions         combination         0.5638   1.80   10.24  14.021  0.8576  -0.470  0.73   p=0.23                 -    0.78    0.78   0.2355
+    XGBoost                   machine learning    0.6867   2.19   12.39  17.078  0.9453  -0.611  0.82   worse p=0.027          -    0.78    0.78   0.2565
+    NumPy A1                  neural network      0.7138   2.27   13.00  17.751  1.1378  -0.632  0.80   p=0.25                 -    0.71    0.76   0.2985
 
 All numbers: reports/test_metrics.csv, reports/test_intervals.csv, reports/test_forecasts.csv; champions and settings: reports/champions.csv
 Figures: reports/figures/test_forecasts_fed_total_assets.png, reports/figures/test_forecasts_monetary_base.png
@@ -82,15 +102,19 @@ Sensitivity (not the result): MAE relative to naive without the forecasts that s
 
 fed_total_assets_T  (flagged test months: 2023-03, 2025-12)
     model                    family                 h=1     h=3     h=6     h=9    h=12
-    SARIMAX                  econometric           0.45    0.50    0.52    0.61    0.71
-    XGBoost                  machine learning      0.62    0.66    0.73    0.94    1.11
-    LSTM                     neural network        0.92    1.01    1.17    1.32    1.44
+    VECM                     econometric           0.51    0.61    0.74    0.87    0.98
+    XGBoost                  machine learning      0.64    0.68    0.85    1.13    1.40
+    LSTM                     neural network        0.50    0.51    0.55    0.64    0.72
+    mean of champions        combination           0.48    0.53    0.61    0.78    0.92
     naive                    benchmark             1.00    1.00    1.00    1.00    1.00
+    drift                    benchmark             1.25    1.27    1.34    1.39    1.43
 
 monetary_base_T  (flagged test months: 2023-03)
     model                    family                 h=1     h=3     h=6     h=9    h=12
-    SARIMAX                  econometric           0.93    1.09    1.15    1.26    1.42
-    random forest            machine learning      1.02    1.11    1.26    1.43    1.78
-    GRU                      neural network        1.07    1.23    1.38    1.48    1.55
+    SARIMAX                  econometric           0.98    1.22    1.31    1.47    1.62
+    XGBoost                  machine learning      1.16    1.31    1.40    1.69    2.19
+    NumPy A1                 neural network        1.15    1.41    1.51    1.85    2.31
+    mean of champions        combination           1.00    1.22    1.33    1.51    1.82
     naive                    benchmark             1.00    1.00    1.00    1.00    1.00
+    drift                    benchmark             1.04    1.14    1.16    1.21    1.46
 

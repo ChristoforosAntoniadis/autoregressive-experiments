@@ -1,57 +1,72 @@
 {
   "fed_total_assets_T": {
     "econometric": {
-      "model": "SARIMAX",
+      "model": "VECM",
       "settings": {
         "outliers": "clip",
-        "lags": 1
+        "transform": "none",
+        "lags": 3,
+        "deterministic": "li"
       },
-      "validation_mean_MASE": 15.352815280943052,
+      "validation_score": 0.9054904713001909,
+      "validation_score_se": 0.06454634396304708,
+      "tied_with": [
+        "exponential smoothing",
+        "SARIMAX",
+        "SARIMA",
+        "SARIMA + naive average"
+      ],
       "validation_MASE": {
-        "1": 2.8877674383675016,
-        "3": 7.68032458441112,
-        "6": 15.263158232906642,
-        "9": 21.49237630176639,
-        "12": 29.4404498472636
+        "1": 2.689421870311024,
+        "3": 7.527029012404223,
+        "6": 16.023573210983045,
+        "9": 22.82607209455606,
+        "12": 30.77402126039739
       }
     },
     "machine learning": {
       "model": "XGBoost",
       "settings": {
         "outliers": "clip",
+        "transform": "none",
         "loss": "mse",
-        "lags": 7,
-        "n_estimators": 200,
-        "learning_rate": 0.05,
+        "lags": 8,
+        "n_estimators": 500,
+        "learning_rate": 0.1,
         "max_depth": 3,
-        "min_child_weight": 4,
-        "subsample": 0.5,
-        "colsample_bytree": 0.5,
-        "gamma": 0.0,
-        "reg_alpha": 0.1,
-        "reg_lambda": 5.0
+        "min_child_weight": 2,
+        "subsample": 0.7,
+        "colsample_bytree": 0.7,
+        "gamma": 0.5,
+        "reg_alpha": 0.01,
+        "reg_lambda": 1.0
       },
-      "validation_mean_MASE": 14.123321842207769,
+      "validation_score": 0.8201498977384123,
+      "validation_score_se": 0.08019302138461276,
+      "tied_with": [
+        "random forest"
+      ],
       "validation_MASE": {
-        "1": 2.8645148766802144,
-        "3": 7.813911245626212,
-        "6": 14.302069351576767,
-        "9": 19.30072291286821,
-        "12": 26.335390824287447
+        "1": 2.6849209143028197,
+        "3": 7.372444895704575,
+        "6": 13.18720895100382,
+        "9": 19.278018477481098,
+        "12": 27.856559289894353
       }
     },
     "neural network": {
       "model": "LSTM",
       "settings": {
-        "outliers": "none",
-        "loss": "mse",
-        "lags": 3,
-        "hidden_units": 16,
-        "layers": 2,
-        "dropout": 0.023788792870816335,
-        "optimizer": "sgd",
-        "learning_rate": 0.23456714042857235,
-        "weight_decay": 0.0011363399306360876,
+        "outliers": "clip",
+        "transform": "none",
+        "loss": "huber",
+        "lags": 12,
+        "hidden_units": 32,
+        "layers": 1,
+        "dropout": 0.22859265864890188,
+        "optimizer": "muon",
+        "learning_rate": 0.013207146584217618,
+        "weight_decay": 0.0003898411307031868,
         "batch_size": 8,
         "use_bias": true,
         "epochs": 100,
@@ -60,13 +75,22 @@
         "min_epochs": 20,
         "validation_share": 0.25
       },
-      "validation_mean_MASE": 13.474676859592899,
+      "validation_score": 0.8628678027172427,
+      "validation_score_se": 0.07659786689958967,
+      "tied_with": [
+        "GRU",
+        "PyTorch MLP",
+        "TensorFlow MLP",
+        "NumPy A1",
+        "MLP",
+        "TCN"
+      ],
       "validation_MASE": {
-        "1": 3.4415838570461954,
-        "3": 9.146916646448606,
-        "6": 13.20605734273161,
-        "9": 17.786617235617292,
-        "12": 23.792209216120785
+        "1": 3.061374843051962,
+        "3": 7.666649899278624,
+        "6": 14.70720623130297,
+        "9": 19.881668701335066,
+        "12": 26.51800722141137
       }
     }
   },
@@ -74,72 +98,89 @@
     "econometric": {
       "model": "SARIMAX",
       "settings": {
-        "outliers": "dummies",
-        "lags": 6
+        "outliers": "clip",
+        "transform": "none",
+        "lags": 5
       },
-      "validation_mean_MASE": 8.703081662497276,
+      "validation_score": 0.8341769952184709,
+      "validation_score_se": 0.0623752420966393,
+      "tied_with": [
+        "VECM",
+        "VAR"
+      ],
       "validation_MASE": {
-        "1": 2.3938375605053714,
-        "3": 5.414554148929337,
-        "6": 9.940887496476243,
-        "9": 10.483743857380004,
-        "12": 15.282385249195421
+        "1": 2.2150511760112583,
+        "3": 5.479236679028849,
+        "6": 10.445915444186626,
+        "9": 10.639689389501575,
+        "12": 15.4793695582368
       }
     },
     "machine learning": {
-      "model": "random forest",
+      "model": "XGBoost",
       "settings": {
-        "outliers": "none",
-        "lags": 1,
-        "n_estimators": 100,
-        "criterion": "squared_error",
-        "max_depth": 5,
-        "min_samples_split": 20,
-        "min_samples_leaf": 4,
-        "min_weight_fraction_leaf": 0.0,
-        "max_features": 1.0,
-        "max_leaf_nodes": null,
-        "min_impurity_decrease": 0.0,
-        "bootstrap": true,
-        "max_samples": null,
-        "ccp_alpha": 0.001
+        "outliers": "clip",
+        "transform": "none",
+        "loss": "mse",
+        "lags": 8,
+        "n_estimators": 500,
+        "learning_rate": 0.1,
+        "max_depth": 3,
+        "min_child_weight": 2,
+        "subsample": 0.7,
+        "colsample_bytree": 0.7,
+        "gamma": 0.5,
+        "reg_alpha": 0.01,
+        "reg_lambda": 1.0
       },
-      "validation_mean_MASE": 7.669058936914565,
+      "validation_score": 0.765051870407134,
+      "validation_score_se": 0.08019302138461276,
+      "tied_with": [
+        "random forest",
+        "KNN"
+      ],
       "validation_MASE": {
-        "1": 2.76428775359418,
-        "3": 5.468705770085184,
-        "6": 8.376291310252556,
-        "9": 8.944811969099785,
-        "12": 12.791197881541121
+        "1": 2.552904395519959,
+        "3": 5.571065790561965,
+        "6": 8.598137276736487,
+        "9": 8.841478844625192,
+        "12": 12.717842837814805
       }
     },
     "neural network": {
-      "model": "GRU",
+      "model": "NumPy A1",
       "settings": {
         "outliers": "none",
+        "transform": "none",
         "loss": "mse",
         "lags": 6,
-        "hidden_units": 4,
-        "layers": 2,
-        "dropout": 0.14556544248262065,
-        "optimizer": "sgd",
-        "learning_rate": 0.1878057604286291,
-        "weight_decay": 0.003375528947096233,
+        "hidden_units": 32,
+        "optimizer": "muon",
+        "learning_rate": 0.1,
+        "use_bias": true,
+        "dropout": 0.2,
         "batch_size": 32,
-        "use_bias": false,
         "epochs": 100,
         "patience": 10,
         "min_delta": 0.0001,
         "min_epochs": 20,
         "validation_share": 0.25
       },
-      "validation_mean_MASE": 7.6969697652097695,
+      "validation_score": 0.768418729156342,
+      "validation_score_se": 0.05303045879593404,
+      "tied_with": [
+        "DLinear",
+        "GRU",
+        "LSTM",
+        "PyTorch MLP",
+        "MLP"
+      ],
       "validation_MASE": {
-        "1": 3.1493428608841123,
-        "3": 5.774488575397849,
-        "6": 8.548106540140898,
-        "9": 8.482395908116407,
-        "12": 12.530514941509578
+        "1": 2.8870174450080275,
+        "3": 5.5961037701013625,
+        "6": 6.778313976852522,
+        "9": 9.061522565087365,
+        "12": 13.663722430722537
       }
     }
   }
