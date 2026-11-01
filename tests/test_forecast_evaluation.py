@@ -22,6 +22,7 @@ from autoregressive_experiments.metrics import (
 )
 from autoregressive_experiments.model_forecasts import (
     COMBINATION,
+    DRIFT,
     EXPONENTIAL,
     NAIVE,
     SARIMAX,
@@ -77,12 +78,17 @@ def one_series(levels: np.ndarray) -> np.ndarray:
     return np.column_stack([levels, levels])
 
 
-def test_naive_and_moving_average_by_hand() -> None:
-    """Naive repeats the last level, 7; SMA(2) forecasts the mean of 4 and 7, 5.5, every month."""
+def test_benchmarks_and_moving_average_by_hand() -> None:
+    """Naive repeats the last level, 7; drift adds the mean change 2 per step: 9, 11, 13; SMA(2)
+    forecasts the mean of 4 and 7, 5.5, every month; on the logarithm it forecasts the geometric
+    mean sqrt(4 x 7)."""
     history = one_series(LEVELS)
 
     assert series_path(NAIVE, {}, history, NO_DATES, 0, 2).tolist() == [7.0, 7.0]
+    assert series_path(DRIFT, {}, history, NO_DATES, 0, 3) == pytest.approx([9.0, 11.0, 13.0])
     assert series_path(SMA, {"window": 2}, history, NO_DATES, 0, 3).tolist() == [5.5] * 3
+    logged = series_path(SMA, {"window": 2, "transform": "log"}, history, NO_DATES, 0, 2)
+    assert logged == pytest.approx(np.full(2, np.sqrt(28.0)))
 
 
 def test_exponential_smoothing_forms_behave_as_their_definitions() -> None:
@@ -154,6 +160,17 @@ def test_forecasts_ignore_everything_after_the_origin() -> None:
     assert system.shape == (4, 2)
 
 
+def test_the_log_transform_fits_growth_rates_and_returns_levels() -> None:
+    """On a series growing 2% a month with no noise, a VAR on the logarithms continues the 2%
+    growth exactly (constant log changes) and returns levels, not logarithms."""
+    months = np.arange(60.0)
+    levels = np.column_stack([10 * 1.02**months, 5 * 1.02**months])
+
+    logged = joint_paths(VAR_MODEL, {"lags": 1, "trend": "c", "transform": "log"}, levels, 3)
+
+    assert logged == pytest.approx(levels[-1] * 1.02 ** np.arange(1, 4)[:, None], rel=1e-6)
+
+
 def test_lagged_exog_by_hand() -> None:
     """Changes 1..5 with 2 lags: months 2, 3 and 4 get rows (most recent change first); months
     0 and 1 have no full history and get none."""
@@ -169,11 +186,20 @@ def test_mase_scale_is_the_mean_absolute_monthly_change() -> None:
 
 def test_accuracy_metrics_on_two_hand_computed_errors() -> None:
     """Actual 2 and 4, forecast 1 and 7: errors 1 and -3. MAE (1 + 3) / 2 = 2; MSE (1 + 9) / 2
-    = 5; RMSE sqrt(5); MAPE 100 * (1/2 + 3/4) / 2 = 62.5; MASE with scale 0.5 is 2 / 0.5 = 4."""
+    = 5; RMSE sqrt(5); MAPE 100 * (1/2 + 3/4) / 2 = 62.5; MASE with scale 0.5 is 2 / 0.5 = 4;
+    mean error (1 - 3) / 2 = -1; one of the two forecasts is above the actual."""
     scores = accuracy(np.array([2.0, 4.0]), np.array([1.0, 7.0]), scale=0.5)
 
     assert scores == pytest.approx(
-        {"MAE": 2.0, "MSE": 5.0, "RMSE": np.sqrt(5.0), "MAPE": 62.5, "MASE": 4.0}
+        {
+            "MAE": 2.0,
+            "MSE": 5.0,
+            "RMSE": np.sqrt(5.0),
+            "MAPE": 62.5,
+            "MASE": 4.0,
+            "ME": -1.0,
+            "share_over": 0.5,
+        }
     )
 
 
@@ -285,3 +311,6 @@ def test_score_model_tests_against_naive_but_not_naive_against_itself() -> None:
     assert np.isnan(own[0]["DM_absolute_p"])
     assert np.isfinite(other[0]["DM_absolute_p"])
     assert 0 <= other[0]["coverage_80"] <= 1
+    # MAE relative to naive is 1 for naive itself; the Ljung-Box test is for 1-step errors only.
+    assert own[0]["MAE_vs_naive"] == pytest.approx(1.0)
+    assert 0 <= other[0]["LB_p"] <= 1 and np.isnan(other[1]["LB_p"])

@@ -255,14 +255,15 @@ SPACES: dict[str, frozenset[str]] = {
     ),
 }
 # Every model but the SARIMA + naive average (which inherits its SARIMA's) chooses its outlier
-# handling; the models trained by gradient steps also choose their loss.
+# handling and whether it works on the logarithm of the levels; the models trained by gradient
+# steps also choose their loss.
 LOSS_MODELS = frozenset(
     {"xgboost", "numpy_a1", "numpy_a2", "tensorflow_mlp", "pytorch_mlp"}
     | {"lstm", "gru", "tcn", "nbeats", "dlinear"}
 )
 SPACES = {
     name: keys
-    | ({"outliers"} if name != "combination" else set())
+    | ({"outliers", "transform"} if name != "combination" else set())
     | ({"loss"} if name in LOSS_MODELS else set())
     for name, keys in SPACES.items()
 }
@@ -428,6 +429,23 @@ class SplitSettings:
 
     train_percent: int = setting(lambda v: 0 < v < 100, "between 1 and 99")
     validation_percent: int = setting(lambda v: 0 < v < 100, "between 1 and 99")
+
+
+@dataclass(frozen=True)
+class FrequencySettings:
+    """
+    The spacing of the series (features.py), the one place the code learns it.
+
+    Attributes
+    ----------
+    alias : str
+        pandas' offset alias of the spacing, e.g. "ME" (month ends), "D" or "B".
+    period : str
+        The word for one step in reports and figure titles, e.g. "month" or "day".
+    """
+
+    alias: str = setting(lambda v: isinstance(v, str) and v.strip() != "", "a pandas offset alias")
+    period: str = setting(lambda v: isinstance(v, str) and v.isalpha(), "one word")
 
 
 @dataclass(frozen=True)
@@ -681,12 +699,15 @@ class TuningSettings:
         Months between consecutive validation origins.
     candidates : int
         Optuna trials per model; spaces of at most this many settings are tried in full.
+    bootstrap_samples : int
+        Resamples of the validation origins behind each tuned model's score standard error.
     sarima, var, vecm, sma, exponential_smoothing, sarimax, combination
         Mapping of str to list: each model's settings and the values tried.
     """
 
     validation_step: int = setting(lambda v: v >= 1, "at least 1")
     candidates: int = setting(lambda v: v >= 1, "at least 1")
+    bootstrap_samples: int = setting(lambda v: v >= 1, "at least 1")
     sarima: Mapping[str, Any] = space("sarima")
     var: Mapping[str, Any] = space("var")
     vecm: Mapping[str, Any] = space("vecm")
@@ -772,13 +793,14 @@ class Hyperparameters:
 
     Attributes
     ----------
-    split, tests, diagnostics, residual_checks, volatility_checks, volatility_models,
-    var_diagnostics, var_models, var_analysis, outliers, forecast_evaluation, tuning, ml, nn,
-    ready_made
+    split, frequency, tests, diagnostics, residual_checks, volatility_checks,
+    volatility_models, var_diagnostics, var_models, var_analysis, outliers, forecast_evaluation,
+    tuning, ml, nn, ready_made
         The sections, in pipeline order; see each class.
     """
 
     split: SplitSettings
+    frequency: FrequencySettings
     tests: StatisticalTestSettings
     diagnostics: DiagnosticsSettings
     residual_checks: ResidualCheckSettings

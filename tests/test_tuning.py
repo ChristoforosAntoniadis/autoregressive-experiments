@@ -12,10 +12,12 @@ from autoregressive_experiments.model_forecasts import EXPONENTIAL, NAIVE, SARIM
 from autoregressive_experiments.tuning import (
     choose_champions,
     decode,
+    failed_metrics,
     grid_size,
     horizon_metrics,
-    mean_mase,
     origin_paths,
+    score,
+    score_error,
     search_space,
     usable,
     validation_origins,
@@ -60,55 +62,66 @@ def test_linked_settings_become_one_choice_of_valid_combinations() -> None:
 
     assert len(sarima["p+q"]) == 15
     assert all(sum(json.loads(choice).values()) <= 4 for choice in sarima["p+q"])
-    assert len(smoothing["trend+damped_trend"]) == 5
+    # 5 trend forms x 3 seasons x 2 Box-Cox = 30 on the levels; on the logarithm only the
+    # additive forms without Box-Cox, 3 x 2 x 1 = 6.
+    assert len(smoothing["trend+damped_trend+seasonal+use_boxcox+transform"]) == 36
     assert decode({"p+q": '{"p": 2, "q": 1}', "trend": "n"}) == {"p": 2, "q": 1, "trend": "n"}
 
 
 def test_grid_sizes_by_hand() -> None:
-    """SMA tries 23 windows x 2 outlier handlings = 46; exponential smoothing 5 forms x 3
-    seasons x 2 Box-Cox x 2 initializations x 2 outlier handlings = 120; a space with a
+    """SMA tries 23 windows x 2 outlier handlings x 2 transforms = 92; exponential smoothing 36
+    valid linked combinations x 2 initializations x 2 outlier handlings = 144; a space with a
     continuous range has no grid."""
-    assert grid_size(search_space(SMA)) == 46
-    assert grid_size(search_space(EXPONENTIAL)) == 120
+    assert grid_size(search_space(SMA)) == 92
+    assert grid_size(search_space(EXPONENTIAL)) == 144
     assert grid_size({"rate": {"low": 0.1, "high": 1.0, "log": True}}) is None
 
 
-def test_horizon_metrics_and_their_mean_by_hand() -> None:
+def test_horizon_metrics_and_the_score_by_hand() -> None:
     """Levels 0..20 with a scale of 1; from origins 0 and 10 a path that is 1 too low at every
-    step: MAE 1 at every horizon, so MASE 1 and its mean 1; only horizons the paths reach are
-    scored."""
+    step: MAE 1 at every horizon, so MASE 1; only horizons the paths reach are scored. Against a
+    reference 2 too low everywhere the score is 0.5 at every horizon, so 0.5 overall."""
     actual = np.arange(21.0)
     paths = [actual[1:13] - 1, actual[11:21] - 1]
+    reference = [actual[1:13] - 2, actual[11:21] - 2]
 
     metrics = horizon_metrics(paths, [0, 10], actual, scale=1.0)
+    naive = horizon_metrics(reference, [0, 10], actual, scale=1.0)
 
     assert metrics[1]["MAE"] == pytest.approx(1.0) and metrics[1]["n"] == 2
     # The second origin forecasts 10 months, so only the first reaches horizon 12.
     assert metrics[12]["n"] == 1
-    assert mean_mase(metrics) == pytest.approx(1.0)
+    assert score(metrics, naive) == pytest.approx(0.5)
+    assert score(metrics, metrics) == pytest.approx(1.0)
 
 
-def scored(value: float) -> dict[int, dict[str, float]]:
-    """
-    Metrics with the same MASE at every horizon.
+def test_a_failed_setting_scores_nan_and_ranks_last() -> None:
+    """A fit that raised leaves NaN metrics with nothing scored, which usable() ranks last."""
+    metrics = failed_metrics()
 
-    Parameters
-    ----------
-    value : float
-        The MASE.
-
-    Returns
-    -------
-    dict of int to dict of str to float
-        Horizon -> {"MASE": value}.
-    """
-    return {horizon: {"MASE": value} for horizon in (1, 3, 6, 9, 12)}
+    assert metrics[1]["n"] == 0 and np.isnan(metrics[12]["MAE"])
+    assert usable(score(metrics, metrics)) == np.inf
 
 
-def test_unusable_scores_rank_last_and_the_lowest_score_is_champion() -> None:
-    """NaN ranks as infinity; within each family the lowest mean MASE wins: SMA (0.9) among the
+def test_score_error_is_zero_when_every_origin_agrees() -> None:
+    """A model whose error is half naive's at every origin and step scores 0.5 in every resample
+    of the origins, so its bootstrap standard error is 0."""
+    actual = np.arange(40.0)
+    origins = [10, 15, 20, 25]
+    naive = {0: [actual[o + 1 : o + 13] - 2 for o in origins]}
+    model = {0: [actual[o + 1 : o + 13] - 1 for o in origins]}
+
+    error = score_error(model, naive, origins, actual[:, None], [1.0], [0])
+
+    assert error == pytest.approx(0.0)
+
+
+def test_unusable_scores_rank_last_and_the_lowest_score_is_champion_with_its_ties() -> None:
+    """NaN ranks as infinity; within each family the lowest score wins: SMA (0.9) among the
     econometric models at 1.0, KNN (0.5) among ML at 2.0 with Lasso unusable, GRU (1.1) among
-    the networks at 1.5."""
+    the networks at 1.5. Models within one standard error of the champion are tied with it: SMA's
+    standard error 0.1 reaches the 1.0 models, KNN's 0.1 reaches nothing, GRU's 0.5 reaches the
+    1.5 models but not the unusable one."""
     assert usable(np.nan) == np.inf and usable(0.5) == 0.5
     econometric = (
         "SARIMA",
@@ -133,18 +146,21 @@ def test_unusable_scores_rank_last_and_the_lowest_score_is_champion() -> None:
         "N-BEATS",
         "DLinear",
     )
-    by_model = {model: scored(1.0) for model in econometric}
-    by_model |= {model: scored(2.0) for model in ml} | {model: scored(1.5) for model in networks}
-    by_model |= {"SMA": scored(0.9), "Lasso": scored(np.nan), "KNN": scored(0.5)}
-    by_model |= {"GRU": scored(1.1)}
+    by_model = {model: 1.0 for model in econometric}
+    by_model |= {model: 2.0 for model in ml} | {model: 1.5 for model in networks}
+    by_model |= {"SMA": 0.9, "Lasso": np.nan, "KNN": 0.5, "GRU": 1.1}
+    errors = {model: 0.0 for model in by_model} | {"SMA": 0.1, "KNN": 0.1, "GRU": 0.5}
 
-    champions = choose_champions({0: by_model})
+    champions = choose_champions({0: by_model}, {0: errors})
 
-    assert champions[0] == {
+    assert {f: r["model"] for f, r in champions[0].items()} == {
         "econometric": "SMA",
         "machine learning": "KNN",
         "neural network": "GRU",
     }
+    assert set(champions[0]["econometric"]["tied_with"]) == set(econometric) - {"SMA"}
+    assert champions[0]["machine learning"]["tied_with"] == []
+    assert set(champions[0]["neural network"]["tied_with"]) == set(networks) - {"GRU"}
 
 
 def test_origin_paths_ignore_later_months_and_match_one_fit() -> None:

@@ -25,13 +25,12 @@ import numpy as np
 import pandas as pd
 
 from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
+from autoregressive_experiments.features import FREQUENCY
 
 PROPHET = "Prophet"
 READY_MADE_MODELS = (PROPHET,)
 # Settings; each value's reasoning is in configs/hyperparameters.json.
 READY_MADE_SPACES: dict[str, Mapping[str, Any]] = {PROPHET: HYPERPARAMETERS.ready_made.prophet}
-# Month-end dates, as in the data; the future months Prophet forecasts follow them.
-FREQUENCY = "ME"
 
 
 def prophet_model(settings: Mapping[str, Any]) -> Any:

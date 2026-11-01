@@ -39,6 +39,9 @@ VALUE_COLUMNS = ["fed_total_assets_T", "monetary_base_T"]
 # arithmetic. Test takes the rest.
 TRAIN_PERCENT = HYPERPARAMETERS.split.train_percent
 VALIDATION_PERCENT = HYPERPARAMETERS.split.validation_percent
+# The series' spacing: pandas' offset alias, and the word for one step in reports.
+FREQUENCY = HYPERPARAMETERS.frequency.alias
+PERIOD = HYPERPARAMETERS.frequency.period
 
 
 def read_dataset(input_path: Path = RAW_DATA_DIR) -> pd.DataFrame:
@@ -255,6 +258,60 @@ def split_by_time(
         "test": dates > validation_end,
     }
     return {name: dataframe[mask].reset_index(drop=True) for name, mask in masks.items()}
+
+
+def load_levels(path: Path) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
+    """
+    The cleaned levels in date order, and their train / validation / test split.
+
+    Parameters
+    ----------
+    path : Path
+        The cleaned levels CSV (``data/interim/fed_balance_sheet_cleaned.csv``).
+
+    Returns
+    -------
+    tuple of (pd.DataFrame, dict of str to pd.DataFrame)
+        The whole table, sorted by date and renumbered from 0, and split_by_time's parts.
+    """
+    data = pd.read_csv(path, parse_dates=[DATE_COLUMN]).sort_values(DATE_COLUMN)
+    data = data.reset_index(drop=True)
+    return data, split_by_time(data, split_boundaries(data))
+
+
+def load_training_split(
+    levels_path: Path, differences_path: Path
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    The training split of the cleaned levels and of their first differences.
+
+    Parameters
+    ----------
+    levels_path : Path
+        The cleaned levels CSV (``data/interim/``).
+    differences_path : Path
+        The first differences CSV (``data/processed/``).
+
+    Returns
+    -------
+    tuple of (pd.DataFrame, pd.DataFrame)
+        The training rows of each, with ``date`` parsed; cut at the same months, since the
+        boundaries come from the levels.
+
+    Raises
+    ------
+    FileNotFoundError
+        If either file is missing (run make features).
+    """
+    for path in (levels_path, differences_path):
+        if not path.is_file():
+            raise FileNotFoundError(f"{path} not found. Generate it with make features.")
+    levels = pd.read_csv(levels_path, parse_dates=[DATE_COLUMN])
+    differences = pd.read_csv(differences_path, parse_dates=[DATE_COLUMN])
+    boundaries = split_boundaries(levels)
+    return split_by_time(levels, boundaries)["train"], split_by_time(differences, boundaries)[
+        "train"
+    ]
 
 
 def series_title(column: str) -> str:

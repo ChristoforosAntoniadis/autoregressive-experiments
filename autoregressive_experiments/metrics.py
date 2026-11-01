@@ -20,7 +20,7 @@ MAX_HORIZON = max(HORIZONS)
 # Ordered low to high: interval_scores unpacks them as 95% low, 80% low, median, 80% high,
 # 95% high.
 QUANTILES = HYPERPARAMETERS.forecast_evaluation.quantiles
-METRICS = ("MAE", "MSE", "RMSE", "MAPE", "MASE")
+METRICS = ("MAE", "MSE", "RMSE", "MAPE", "MASE", "ME", "share_over")
 
 
 def mase_scale(train_levels: np.ndarray) -> float:
@@ -62,8 +62,11 @@ def accuracy(actual: np.ndarray, forecast: np.ndarray, scale: float) -> dict[str
     Returns
     -------
     dict of str to float
-        "MAE" and "RMSE" (trillions), "MSE" (trillions squared), "MAPE" (%), "MASE" (unitless;
-        below 1 is better than the training split's one-month naive).
+        "MAE" and "RMSE" (trillions), "MSE" (trillions squared), "MAPE" (%), "MASE" (MAE in
+        units of `scale`: comparable across models and horizons, but not a test against naive,
+        whose own MASE is far above 1 when the data move more than the training split did),
+        "ME" (mean of actual - forecast, trillions: negative when the model forecasts too high)
+        and "share_over" (the share of forecasts above the actual; 0.5 when unbiased).
     """
     errors = np.asarray(actual) - np.asarray(forecast)
     mae = float(np.mean(np.abs(errors)))
@@ -74,6 +77,8 @@ def accuracy(actual: np.ndarray, forecast: np.ndarray, scale: float) -> dict[str
         "RMSE": float(np.sqrt(mse)),
         "MAPE": float(100 * np.mean(np.abs(errors / np.asarray(actual)))),
         "MASE": mae / scale,
+        "ME": float(np.mean(errors)),
+        "share_over": float(np.mean(errors < 0)),
     }
 
 
@@ -118,9 +123,10 @@ def diebold_mariano(loss_a: np.ndarray, loss_b: np.ndarray, horizon: int) -> tup
     count = len(differences)
     deviations = differences - differences.mean()
     # h-step forecasts from consecutive origins overlap, so their loss differences are
-    # autocorrelated up to lag h - 1.
+    # autocorrelated up to lag h - 1 (fewer lags than forecasts, on a short test).
     autocovariances = [
-        np.sum(deviations[lag:] * deviations[: count - lag]) / count for lag in range(horizon)
+        np.sum(deviations[lag:] * deviations[: count - lag]) / count
+        for lag in range(min(horizon, count))
     ]
     long_run_variance = autocovariances[0] + 2 * sum(autocovariances[1:])
     # shortcut: the rectangular kernel can turn negative for h > 1; fall back to the lag-0

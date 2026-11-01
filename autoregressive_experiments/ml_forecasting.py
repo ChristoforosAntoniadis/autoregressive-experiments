@@ -173,7 +173,9 @@ def build_model(model: str, settings: Mapping[str, Any]) -> TransformedTargetReg
         loss = options.pop("loss", "mse")
         if loss == "huber":
             options |= {"objective": "reg:pseudohubererror", "huber_slope": HUBER_DELTA}
-        base = XGBRegressor(**options, random_state=RANDOM_SEED, verbosity=0)
+        # One thread, as for the forest: the histogram sums then add up in a fixed order, so a
+        # computer with another core count reproduces the same trees.
+        base = XGBRegressor(**options, random_state=RANDOM_SEED, verbosity=0, n_jobs=1)
     elif model == KNN:
         base = KNeighborsRegressor(**options)
     elif model in NN_MODELS:

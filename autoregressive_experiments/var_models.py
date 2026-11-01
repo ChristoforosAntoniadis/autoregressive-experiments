@@ -49,7 +49,11 @@ from autoregressive_experiments.config import (
 )
 from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.diagnostics import SIGNIFICANCE_LEVEL, VALUE_COLUMNS, repo_path
-from autoregressive_experiments.features import DATE_COLUMN, split_boundaries, split_by_time
+from autoregressive_experiments.features import (
+    DATE_COLUMN,
+    FREQUENCY,
+    load_training_split,
+)
 from autoregressive_experiments.residual_checks import (
     BASELINE,
     CRITICAL_COLOR,
@@ -529,15 +533,7 @@ def main(
     """
     start_run_log("var-checks")
     begin_phase("VAR / VECM candidates and their checks")
-    for path in (levels_path, differences_path):
-        if not path.is_file():
-            raise FileNotFoundError(f"{path} not found. Generate it with make features.")
-    levels = pd.read_csv(levels_path, parse_dates=[DATE_COLUMN])
-    boundaries = split_boundaries(levels)
-    train_levels = split_by_time(levels, boundaries)["train"]
-    train_differences = split_by_time(
-        pd.read_csv(differences_path, parse_dates=[DATE_COLUMN]), boundaries
-    )["train"]
+    train_levels, train_differences = load_training_split(levels_path, differences_path)
     period = (
         f"levels {train_levels[DATE_COLUMN].min():%Y-%m} to "
         f"{train_levels[DATE_COLUMN].max():%Y-%m}"
@@ -547,8 +543,8 @@ def main(
     # Month-end frequency on the index: statsmodels then knows the spacing, and a missing month
     # would surface as NaN rows that the fit rejects, instead of passing silently.
     candidates = fit_candidates(
-        train_levels.set_index(DATE_COLUMN)[list(VALUE_COLUMNS)].asfreq("ME"),
-        train_differences.set_index(DATE_COLUMN)[list(VALUE_COLUMNS)].asfreq("ME"),
+        train_levels.set_index(DATE_COLUMN)[list(VALUE_COLUMNS)].asfreq(FREQUENCY),
+        train_differences.set_index(DATE_COLUMN)[list(VALUE_COLUMNS)].asfreq(FREQUENCY),
     )
     results = {name: check_candidate(candidate) for name, candidate in candidates.items()}
 

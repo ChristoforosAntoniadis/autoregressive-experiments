@@ -42,8 +42,7 @@ from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.features import (
     DATE_COLUMN,
     VALUE_COLUMNS,
-    split_boundaries,
-    split_by_time,
+    load_training_split,
 )
 from autoregressive_experiments.runlog import (
     Progress,
@@ -691,15 +690,7 @@ def main(
     """
     start_run_log("diagnostics")
     begin_phase("Stationarity, ACF / PACF and the SARIMA grid")
-    for path in (levels_path, differences_path):
-        if not path.is_file():
-            raise FileNotFoundError(f"{path} not found. Generate it with make features.")
-    levels = pd.read_csv(levels_path, parse_dates=[DATE_COLUMN])
-    boundaries = split_boundaries(levels)
-    train_levels = split_by_time(levels, boundaries)["train"]
-    train_differences = split_by_time(
-        pd.read_csv(differences_path, parse_dates=[DATE_COLUMN]), boundaries
-    )["train"]
+    train_levels, train_differences = load_training_split(levels_path, differences_path)
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
     # Trending levels are tested against trend-stationarity; their differences against a

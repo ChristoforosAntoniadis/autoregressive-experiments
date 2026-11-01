@@ -42,7 +42,10 @@ from autoregressive_experiments.diagnostics import (
     repo_path,
     series,
 )
-from autoregressive_experiments.features import DATE_COLUMN, split_boundaries, split_by_time
+from autoregressive_experiments.features import (
+    DATE_COLUMN,
+    load_training_split,
+)
 from autoregressive_experiments.runlog import begin_phase, finish_run, start_run_log
 
 app = typer.Typer()
@@ -627,11 +630,7 @@ def checked_models(
     for path, command in required.items():
         if not path.is_file():
             raise FileNotFoundError(f"{path} not found. Generate it with make {command}.")
-    levels = pd.read_csv(levels_path, parse_dates=[DATE_COLUMN])
-    # The boundaries come from the levels, so levels and differences are cut at the same months.
-    train = split_by_time(
-        pd.read_csv(differences_path, parse_dates=[DATE_COLUMN]), split_boundaries(levels)
-    )["train"]
+    _, train = load_training_split(levels_path, differences_path)
     candidates = pd.read_csv(candidates_path)
     models = recommended_orders(candidates)
 

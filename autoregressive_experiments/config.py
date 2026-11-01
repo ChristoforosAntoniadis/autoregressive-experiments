@@ -26,7 +26,7 @@ INTERIM_DATA_DIR = DATA_DIR / "interim"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
 EXTERNAL_DATA_DIR = DATA_DIR / "external"
 
-# models/: the CCDS slot for saved models; only the template stub in modeling/train.py uses it.
+# models/: every model's tuned settings and each family's champion (tuning).
 MODELS_DIR = PROJ_ROOT / "models"
 
 # reports/: the committed text reports and CSVs; reports/figures/: every generated figure.

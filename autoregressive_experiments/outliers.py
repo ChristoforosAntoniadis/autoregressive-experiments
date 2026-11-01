@@ -45,9 +45,8 @@ from autoregressive_experiments.diagnostics import repo_path
 from autoregressive_experiments.features import (
     DATE_COLUMN,
     VALUE_COLUMNS,
+    load_levels,
     series_title,
-    split_boundaries,
-    split_by_time,
 )
 from autoregressive_experiments.residual_checks import (
     CRITICAL_COLOR,
@@ -67,8 +66,10 @@ SETTINGS = HYPERPARAMETERS.outliers
 HALF_WIDTH = SETTINGS.half_width
 THRESHOLD = SETTINGS.threshold
 HUBER_DELTA = SETTINGS.huber_delta
-# The median absolute deviation times this estimates the standard deviation of normal data.
+# The median absolute deviation times this estimates the standard deviation of normal data; the
+# mean absolute deviation times sqrt(pi / 2) does the same, for windows whose MAD is zero.
 MAD_TO_SD = 1.4826
+MEAN_AD_TO_SD = float(np.sqrt(np.pi / 2))
 NONE, CLIP, DUMMIES = "none", "clip", "dummies"
 
 REPORT_PATH = REPORTS_DIR / "outliers.txt"
@@ -95,6 +96,9 @@ def hampel(changes: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     Processing, for each change:
     1. Take the changes within HALF_WIDTH months on either side (fewer at the ends).
     2. Bounds = their median +/- THRESHOLD x MAD_TO_SD x their median absolute deviation.
+       When more than half the window's changes are equal (zero-flow days, for example), that
+       deviation is zero and would flag every other change, so the mean absolute deviation,
+       scaled to a standard deviation as well, stands in.
     3. Flag the change if it lies outside its bounds. A window whose changes are all equal has
        no spread and flags nothing.
     """
@@ -102,7 +106,10 @@ def hampel(changes: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     for index in range(len(changes)):
         window = changes[max(0, index - HALF_WIDTH) : index + HALF_WIDTH + 1]
         median = np.median(window)
-        spread = THRESHOLD * MAD_TO_SD * np.median(np.abs(window - median))
+        deviations = np.abs(window - median)
+        mad = np.median(deviations)
+        scale = MAD_TO_SD * mad if mad > 0 else MEAN_AD_TO_SD * np.mean(deviations)
+        spread = THRESHOLD * scale
         lower[index], upper[index] = median - spread, median + spread
     return lower, upper, (changes < lower) | (changes > upper)
 
@@ -276,9 +283,7 @@ def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv")
     """
     start_run_log("outliers")
     begin_phase("Flag the outliers of the train and validation history")
-    data = pd.read_csv(levels_path, parse_dates=[DATE_COLUMN])
-    data = data.sort_values(DATE_COLUMN).reset_index(drop=True)
-    splits = split_by_time(data, split_boundaries(data))
+    _, splits = load_levels(levels_path)
     known = pd.concat([splits["train"], splits["validation"]], ignore_index=True)
     report = outlier_report(known)
     REPORT_PATH.write_text(report + "\n", encoding="utf-8")

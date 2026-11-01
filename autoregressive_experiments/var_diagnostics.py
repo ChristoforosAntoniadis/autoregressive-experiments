@@ -43,7 +43,10 @@ from autoregressive_experiments.config import (
 )
 from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.diagnostics import SIGNIFICANCE_LEVEL, VALUE_COLUMNS, repo_path
-from autoregressive_experiments.features import DATE_COLUMN, split_boundaries, split_by_time
+from autoregressive_experiments.features import (
+    DATE_COLUMN,
+    load_training_split,
+)
 from autoregressive_experiments.residual_checks import (
     BASELINE,
     PRIMARY_INK,
@@ -531,15 +534,7 @@ def main(
     """
     start_run_log("var")
     begin_phase("VAR lag order and Johansen")
-    for path in (levels_path, differences_path):
-        if not path.is_file():
-            raise FileNotFoundError(f"{path} not found. Generate it with make features.")
-    levels = pd.read_csv(levels_path, parse_dates=[DATE_COLUMN])
-    boundaries = split_boundaries(levels)
-    train_levels = split_by_time(levels, boundaries)["train"]
-    train_differences = split_by_time(
-        pd.read_csv(differences_path, parse_dates=[DATE_COLUMN]), boundaries
-    )["train"]
+    train_levels, train_differences = load_training_split(levels_path, differences_path)
     periods = {
         name: f"{frame[DATE_COLUMN].min():%Y-%m} to {frame[DATE_COLUMN].max():%Y-%m} "
         f"({len(frame)} months)"

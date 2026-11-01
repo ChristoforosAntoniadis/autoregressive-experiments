@@ -5,38 +5,45 @@ model's parameters, validation chooses its hyperparameters and each family's cha
 test split (forecast_evaluation) measures the champions once.
 
 Validation is rolling-origin with an expanding window (Tashman 2000): an origin every
-VALIDATION_STEP months through the validation split, at least 10 of them. At each origin a model
-is fitted on every month from the start of the data up to the origin and forecasts up to 12
-months ahead; only targets inside the validation split are scored, so test months are never
-seen. A setting's score is its MASE (Hyndman and Koehler 2006) averaged over the forecast
-horizons, so it must forecast well at every horizon.
+VALIDATION_STEP periods through the validation split, at least 10 of them. At each origin a model
+is fitted on every period from the start of the data up to the origin and forecasts up to
+MAX_HORIZON ahead; only targets inside the validation split are scored, so test periods are
+never seen. A setting's score is its MAE relative to naive's at the same horizon, averaged over
+the forecast horizons: 0.8 means 20% more accurate than naive on average, and every horizon
+counts the same (a plain average of MASE would be set by the longest horizon, whose errors are
+ten times the shortest's).
 
 Each model's settings are searched by Optuna: spaces of at most CANDIDATES settings in full by
 its grid sampler, larger ones by its seeded TPE sampler (Bergstra et al. 2011) with CANDIDATES
 trials, run one after another so the choices repeat exactly. Settings that only exist together
 (SARIMA's p and q under the order budget, exponential smoothing's damping and trend) are tried
-as one choice of their valid combinations. A setting without a usable forecast ranks last.
-Univariate models are tuned per series; VAR, VECM and the lag-feature models forecast both
-series together and are tuned once, on the two series' average score. Each origin's fit runs in
-a separate process, in parallel; every fit gives the same forecast wherever it runs.
+as one choice of their valid combinations. A setting without a usable forecast, or whose fit
+fails, ranks last. Univariate models are tuned per series; VAR, VECM and the lag-feature models
+forecast both series together and are tuned once, on the two series' average score. Each
+origin's fit runs in a separate process, in parallel; every fit gives the same forecast wherever
+it runs.
 
-Each family's champion per series (econometric, machine learning, neural network; see
-model_forecasts) is its model with the lowest validation score.
+Each tuned model's score gets a standard error from a bootstrap over the validation origins
+(Efron and Tibshirani 1993), because a dozen origins decide it. Each family's champion per
+series (econometric, machine learning, neural network; see model_forecasts) is its model with
+the lowest score; the family's other models within one standard error of it are reported as
+tied (the one-standard-error rule of Breiman et al. 1984; Hastie, Tibshirani and Friedman 2009,
+section 7.10), so a win inside the noise is not read as a win.
 
-Input: ``data/interim/fed_balance_sheet_cleaned.csv`` (train and validation months only).
+Input: ``data/interim/fed_balance_sheet_cleaned.csv`` (train and validation periods only).
 
 Output:
 
 - ``models/tuned_hyperparameters.json``: every model's tuned settings per series
-- ``models/champions.json``: each series' champion per family, with its settings and validation
-  scores, read by forecast_evaluation
-- ``reports/tuning.txt``: the origins, and per series every model's validation MASE by horizon,
-  its settings, and the champions
-- ``reports/validation_metrics.csv``: every tuned model's and naive's MAE, MSE, RMSE, MAPE and
-  MASE per series and horizon on validation
+- ``models/champions.json``: each series' champion per family, with its settings, validation
+  score, standard error, tied models and MASE by horizon, read by forecast_evaluation
+- ``reports/tuning.txt``: the origins, and per series every model's score, standard error and
+  MASE by horizon, its settings, the champions and their ties
+- ``reports/validation_metrics.csv``: every tuned model's and both benchmarks' metrics per
+  series and horizon on validation, with the score and its standard error
 - ``reports/tuning_scores.csv``: every setting tried and its score
-- ``reports/figures/tuning.png``: per series, every setting's validation score relative to naive's,
-  the tuned settings and the champions marked
+- ``reports/figures/tuning.png``: per series, every setting's validation score, the tuned
+  settings and the champions marked
 """
 
 from collections.abc import Mapping, Sequence
@@ -69,19 +76,22 @@ from autoregressive_experiments.diagnostics import (
     VALUE_COLUMNS,
     repo_path,
 )
-from autoregressive_experiments.features import (
-    DATE_COLUMN,
-    series_title,
-    split_boundaries,
-    split_by_time,
+from autoregressive_experiments.features import DATE_COLUMN, PERIOD, load_levels, series_title
+from autoregressive_experiments.metrics import (
+    HORIZONS,
+    MAX_HORIZON,
+    METRICS,
+    accuracy,
+    mase_scale,
 )
-from autoregressive_experiments.metrics import HORIZONS, MAX_HORIZON, accuracy, mase_scale
 from autoregressive_experiments.ml_forecasting import ML_SPACES
 from autoregressive_experiments.model_forecasts import (
+    BENCHMARKS,
     COMBINATION,
     EXPONENTIAL,
     FAMILIES,
     JOINT_MODELS,
+    LOG,
     NAIVE,
     SARIMA,
     SARIMAX,
@@ -110,6 +120,10 @@ app = typer.Typer()
 SETTINGS = HYPERPARAMETERS.tuning
 VALIDATION_STEP = SETTINGS.validation_step
 CANDIDATES = SETTINGS.candidates
+BOOTSTRAP_SAMPLES = SETTINGS.bootstrap_samples
+# Models within this many standard errors of a family's best score are reported as tied with it:
+# the one-standard-error rule (Breiman et al. 1984).
+TIE_STANDARD_ERRORS = 1.0
 # Model -> its search space: setting name -> a list of values, or a {"low", "high", "log"} range.
 SPACES: dict[str, Mapping[str, Any]] = {
     SARIMA: SETTINGS.sarima,
@@ -124,7 +138,10 @@ SPACES: dict[str, Mapping[str, Any]] = {
     **NN_SPACES,
 }
 # Settings that only exist together: tried as one choice of their valid combinations.
-LINKED: dict[str, tuple[str, ...]] = {SARIMA: ("p", "q"), EXPONENTIAL: ("trend", "damped_trend")}
+LINKED: dict[str, tuple[str, ...]] = {
+    SARIMA: ("p", "q"),
+    EXPONENTIAL: ("trend", "damped_trend", "seasonal", "use_boxcox", "transform"),
+}
 # The univariate models, in tuning order: SARIMA first, since SARIMAX and the average use it.
 UNIVARIATE = (SARIMA, SARIMAX, COMBINATION, SMA, EXPONENTIAL, PROPHET)
 
@@ -138,8 +155,10 @@ FIGURE_PATH = FIGURES_DIR / "tuning.png"
 # and a diverged network's score (thousands of times naive's) would squash the useful range.
 MAX_SHOWN_RATIO = 3.0
 
-# Per-horizon metrics of one series: horizon -> {"n", "MAE", "MSE", "RMSE", "MAPE", "MASE"}.
+# Per-horizon metrics of one series: horizon -> {"n", plus every name in metrics.METRICS}.
 Metrics = dict[int, dict[str, float]]
+# One series' forecasts: one level path per origin, in origin order.
+Paths = list[np.ndarray]
 
 
 def usable(score: float) -> float:
@@ -199,13 +218,18 @@ def valid_setting(model: str, setting: Mapping[str, Any]) -> bool:
     Returns
     -------
     bool
-        False for SARIMA orders over the budget p + d + q <= MAX_ORDER_SUM, and for exponential
-        smoothing with a damped trend but no trend; True otherwise.
+        False for SARIMA orders over the budget p + d + q <= MAX_ORDER_SUM; for exponential
+        smoothing with a damped trend but no trend, or with the logarithm and a multiplicative
+        trend or season or Box-Cox (those need positive data, and the logarithm of a level
+        below 1 is negative); True otherwise.
     """
     if model == SARIMA:
         return bool(setting["p"] + DIFFERENCING_ORDER + setting["q"] <= MAX_ORDER_SUM)
     if model == EXPONENTIAL:
-        return bool(setting["trend"] is not None or not setting["damped_trend"])
+        damped_without_trend = setting["trend"] is None and setting["damped_trend"]
+        positive_only = setting["trend"] == "mul" or setting["seasonal"] == "mul"
+        positive_only = positive_only or bool(setting["use_boxcox"])
+        return not damped_without_trend and not (setting["transform"] == LOG and positive_only)
     return True
 
 
@@ -292,7 +316,7 @@ def origin_paths(
     Parameters
     ----------
     model : str
-        NAIVE, or any model of model_forecasts.FAMILIES.
+        One of BENCHMARKS, or any model of model_forecasts.FAMILIES.
     settings : Mapping of str to Any
         Its settings.
     levels : np.ndarray
@@ -376,21 +400,97 @@ def horizon_metrics(
     return metrics
 
 
-def mean_mase(metrics: Metrics) -> float:
+def score(metrics: Metrics, reference: Metrics) -> float:
     """
-    MASE averaged over the horizons: the validation score.
+    The validation score: MAE relative to naive's, averaged over the horizons.
 
     Parameters
     ----------
     metrics : dict of int to dict of str to float
-        From horizon_metrics().
+        A model's per-horizon metrics, from horizon_metrics().
+    reference : dict of int to dict of str to float
+        Naive's, on the same origins.
 
     Returns
     -------
     float
-        The mean of the horizons' MASE (NaN if a forecast was not finite).
+        The mean over the horizons both reach of the model's MAE / naive's MAE (NaN if a
+        forecast was not finite); 1 is naive's own score.
+
+    Notes
+    -----
+    Dividing horizon by horizon gives every horizon the same weight; the ratio also reads
+    directly as the accuracy gained or lost against the benchmark.
     """
-    return float(np.mean([metrics[horizon]["MASE"] for horizon in HORIZONS]))
+    horizons = [h for h in HORIZONS if h in metrics and h in reference]
+    return float(np.mean([metrics[h]["MAE"] / reference[h]["MAE"] for h in horizons]))
+
+
+def failed_metrics() -> Metrics:
+    """
+    The metrics of a setting whose fit failed: nothing scored, every metric NaN.
+
+    Returns
+    -------
+    dict of int to dict of str to float
+        Horizon -> {"n": 0, every METRICS name: NaN}, so the setting scores NaN and ranks
+        last (usable()) while the tables keep their shape.
+    """
+    return {h: {"n": 0.0, **{name: np.nan for name in METRICS}} for h in HORIZONS}
+
+
+def score_error(
+    paths: Mapping[int, Paths],
+    reference: Mapping[int, Paths],
+    origins: Sequence[int],
+    levels: np.ndarray,
+    scales: Sequence[float],
+    columns: Sequence[int],
+) -> float:
+    """
+    The bootstrap standard error of a model's validation score.
+
+    Parameters
+    ----------
+    paths : Mapping of int to list of np.ndarray
+        The model's forecasts: column -> one level path per origin.
+    reference : Mapping of int to list of np.ndarray
+        Naive's, from the same origins.
+    origins : Sequence of int
+        The validation origins.
+    levels : np.ndarray
+        Both series' levels, shape (months, 2), trillions.
+    scales : Sequence of float
+        Each series' MASE denominator.
+    columns : Sequence of int
+        The series the model is scored on.
+
+    Returns
+    -------
+    float
+        The standard deviation of the score over BOOTSTRAP_SAMPLES resamples of the origins
+        (drawn with replacement, seeded with RANDOM_SEED); NaN when the score itself is.
+
+    Notes
+    -----
+    The origins are the sampling unit, because every forecast from one origin shares its fit
+    and the months it saw; resampling single forecasts would understate the error (Efron and
+    Tibshirani 1993, chapter 6). Model and naive are resampled together, so their ratio keeps
+    the pairing.
+    """
+    rng = np.random.default_rng(RANDOM_SEED)
+    draws = []
+    for _ in range(BOOTSTRAP_SAMPLES):
+        picked = rng.integers(0, len(origins), len(origins))
+        chosen = [origins[i] for i in picked]
+        per_series = []
+        for column in columns:
+            actual, scale = levels[:, column], scales[column]
+            own = horizon_metrics([paths[column][i] for i in picked], chosen, actual, scale)
+            naive = horizon_metrics([reference[column][i] for i in picked], chosen, actual, scale)
+            per_series.append(score(own, naive))
+        draws.append(float(np.mean(per_series)))
+    return float(np.std(draws))
 
 
 def tune_model(
@@ -401,6 +501,7 @@ def tune_model(
     origins: Sequence[int],
     last_target: int,
     scales: Sequence[float],
+    reference: Mapping[int, Paths],
     sarima: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """
@@ -417,24 +518,29 @@ def tune_model(
         As in origin_paths(); last_target is the last validation month.
     scales : Sequence of float
         Each series' MASE denominator.
+    reference : Mapping of int to list of np.ndarray
+        Naive's forecasts from the same origins, column -> paths: the score's denominator.
     sarima : Sequence of Mapping of str to Any, default=()
         Both series' tuned SARIMA settings (for SARIMAX and the SARIMA + naive average).
 
     Returns
     -------
     dict of str to Any
-        "settings" (the best), "score" (its validation score), "metrics" (column -> its
-        per-horizon metrics), "trials" (every trial's settings, score and per-series score) and
-        "size" (settings in the space; None with a continuous range).
+        "settings" (the best), "score" (its validation score), "error" (the score's bootstrap
+        standard error), "metrics" (column -> its per-horizon metrics), "trials" (every trial's
+        settings, score and per-series score) and "size" (settings in the space; None with a
+        continuous range).
 
     Notes
     -----
     Processing:
     1. Build the Optuna space (search_space()); use the grid sampler when it has at most
        CANDIDATES settings and no ranges, otherwise the TPE sampler seeded with RANDOM_SEED.
-    2. Each trial forecasts from every origin and scores the mean of the horizons' MASE,
-       averaged over the series tuned on; an unusable score counts as infinity.
-    3. Keep the trial with the lowest score (the first one on a tie).
+    2. Each trial forecasts from every origin and scores MAE relative to naive, averaged over
+       the horizons and then over the series tuned on; an unusable score, or a fit that raises,
+       counts as infinity, so one broken setting cannot stop a run of many hours.
+    3. Keep the trial with the lowest score (the first one on a tie) and bootstrap its standard
+       error.
     """
     import optuna
 
@@ -450,6 +556,10 @@ def tune_model(
     trials = size if grid and size is not None else CANDIDATES
     label = " + ".join(series_title(VALUE_COLUMNS[column]) for column in columns)
     progress = Progress(f"TUNE | {label} | {model}", trials)
+    naive_metrics = {
+        column: horizon_metrics(reference[column], origins, levels[:, column], scales[column])
+        for column in columns
+    }
     results: list[dict[str, Any]] = []
 
     def objective(trial: Any) -> float:
@@ -464,7 +574,8 @@ def tune_model(
         Returns
         -------
         float
-            The mean over the series of their horizon-averaged MASE; inf when unusable.
+            The mean over the series of their horizon-averaged MAE relative to naive; inf when
+            unusable or when the fit failed.
         """
         params = {
             name: trial.suggest_float(name, choices["low"], choices["high"], log=choices["log"])
@@ -473,17 +584,29 @@ def tune_model(
             for name, choices in space.items()
         }
         settings = decode(params)
-        paths = origin_paths(model, settings, levels, dates, origins, last_target, columns, sarima)
-        metrics = {
-            column: horizon_metrics(paths[column], origins, levels[:, column], scales[column])
-            for column in columns
-        }
-        per_series = {column: mean_mase(metrics[column]) for column in columns}
-        score = usable(float(np.mean(list(per_series.values()))))
+        try:
+            paths = origin_paths(
+                model, settings, levels, dates, origins, last_target, columns, sarima
+            )
+            metrics = {
+                column: horizon_metrics(paths[column], origins, levels[:, column], scales[column])
+                for column in columns
+            }
+        except Exception as error:  # noqa: BLE001  one failed setting must not end the run
+            logger.warning(f"{model} {settings} failed and ranks last: {error!r}")
+            paths, metrics = {}, {column: failed_metrics() for column in columns}
+        per_series = {column: score(metrics[column], naive_metrics[column]) for column in columns}
+        value = usable(float(np.mean(list(per_series.values()))))
         results.append(
-            {"settings": settings, "score": score, "per_series": per_series, "metrics": metrics}
+            {
+                "settings": settings,
+                "score": value,
+                "per_series": per_series,
+                "metrics": metrics,
+                "paths": paths,
+            }
         )
-        return score
+        return value
 
     def report(study: Any, trial: Any) -> None:
         """
@@ -505,9 +628,15 @@ def tune_model(
     study = optuna.create_study(direction="minimize", sampler=sampler)
     study.optimize(objective, n_trials=trials, callbacks=[report])
     best = min(results, key=lambda row: row["score"])
+    error = (
+        score_error(best["paths"], reference, origins, levels, scales, columns)
+        if np.isfinite(best["score"])
+        else np.nan
+    )
     return {
         "settings": best["settings"],
         "score": best["score"],
+        "error": error,
         "metrics": best["metrics"],
         "trials": [
             {key: row[key] for key in ("settings", "score", "per_series")} for row in results
@@ -517,32 +646,48 @@ def tune_model(
 
 
 def choose_champions(
-    metrics: Mapping[int, Mapping[str, Metrics]],
-) -> dict[int, dict[str, str]]:
+    scores: Mapping[int, Mapping[str, float]], errors: Mapping[int, Mapping[str, float]]
+) -> dict[int, dict[str, dict[str, Any]]]:
     """
-    Each series' champion per family: the model with the lowest validation score.
+    Each series' champion per family, and the family's models tied with it.
 
     Parameters
     ----------
-    metrics : Mapping of int to Mapping of str to dict
-        Column -> model -> its tuned settings' validation metrics.
+    scores : Mapping of int to Mapping of str to float
+        Column -> model -> its tuned settings' validation score.
+    errors : Mapping of int to Mapping of str to float
+        Column -> model -> that score's standard error.
 
     Returns
     -------
-    dict of int to dict of str to str
-        Column -> family -> champion model.
+    dict of int to dict of str to dict
+        Column -> family -> {"model": the lowest score, "tied_with": the family's other
+        models whose score is within TIE_STANDARD_ERRORS of the champion's standard error of
+        it, in score order}.
+
+    Notes
+    -----
+    The one-standard-error rule: a difference smaller than the noise in the champion's own
+    score is not evidence that the champion is better, so those models are named as ties
+    rather than hidden behind a single winner.
     """
-    return {
-        column: {
-            family: min(models, key=lambda model: usable(mean_mase(by_model[model])))
-            for family, models in FAMILIES.items()
-        }
-        for column, by_model in metrics.items()
-    }
+    champions: dict[int, dict[str, dict[str, Any]]] = {}
+    for column, by_model in scores.items():
+        champions[column] = {}
+        for family, models in FAMILIES.items():
+            ranked = sorted(models, key=lambda model: usable(by_model[model]))
+            best = ranked[0]
+            limit = by_model[best] + TIE_STANDARD_ERRORS * errors[column][best]
+            tied = [m for m in ranked[1:] if usable(by_model[m]) <= limit]
+            champions[column][family] = {"model": best, "tied_with": tied}
+    return champions
 
 
 def metrics_rows(
-    metrics: Mapping[int, Mapping[str, Metrics]], champions: Mapping[int, Mapping[str, str]]
+    metrics: Mapping[int, Mapping[str, Metrics]],
+    scores: Mapping[int, Mapping[str, float]],
+    errors: Mapping[int, Mapping[str, float]],
+    champions: Mapping[int, Mapping[str, Mapping[str, Any]]],
 ) -> pd.DataFrame:
     """
     The validation metrics as a table.
@@ -550,22 +695,26 @@ def metrics_rows(
     Parameters
     ----------
     metrics : Mapping of int to Mapping of str to dict
-        Column -> model (naive included) -> per-horizon metrics.
-    champions : Mapping of int to Mapping of str to str
+        Column -> model (benchmarks included) -> per-horizon metrics.
+    scores : Mapping of int to Mapping of str to float
+        Column -> model -> validation score (the benchmarks' too; naive's is 1).
+    errors : Mapping of int to Mapping of str to float
+        Column -> model -> the score's standard error (NaN for the benchmarks).
+    champions : Mapping of int to Mapping of str to Mapping
         From choose_champions().
 
     Returns
     -------
     pd.DataFrame
-        One row per series, model and horizon: "series", "family" ("benchmark" for naive),
-        "model", "champion", "horizon", "n", "MAE", "MSE", "RMSE", "MAPE", "MASE", and
-        "mean_MASE" (the validation score).
+        One row per series, model and horizon: "series", "family" ("benchmark" for naive and
+        drift), "model", "champion", "horizon", "n", every METRICS name, "score" (the
+        validation score) and "score_se" (its standard error).
     """
     rows = []
     for column, by_model in metrics.items():
-        winners = set(champions[column].values())
+        winners = {record["model"] for record in champions[column].values()}
         for model, per_horizon in by_model.items():
-            family = "benchmark" if model == NAIVE else family_of(model)
+            family = "benchmark" if model in BENCHMARKS else family_of(model)
             for horizon, values in per_horizon.items():
                 rows.append(
                     {
@@ -575,7 +724,8 @@ def metrics_rows(
                         "champion": model in winners,
                         "horizon": horizon,
                         **values,
-                        "mean_MASE": mean_mase(per_horizon),
+                        "score": scores[column][model],
+                        "score_se": errors[column].get(model, np.nan),
                     }
                 )
     return pd.DataFrame(rows)
@@ -584,6 +734,7 @@ def metrics_rows(
 def tuning_report(
     table: pd.DataFrame,
     tuned: Mapping[str, Mapping[str, Any]],
+    champions: Mapping[int, Mapping[str, Mapping[str, Any]]],
     origins: Sequence[int],
     dates: pd.Series,
     validation_end: int,
@@ -597,12 +748,14 @@ def tuning_report(
         From metrics_rows().
     tuned : Mapping of str to Mapping of str to Any
         Series -> model -> tuned settings.
+    champions : Mapping of int to Mapping of str to Mapping
+        From choose_champions(), for the ties.
     origins : Sequence of int
         The validation origins.
     dates : pd.Series
-        Month-end dates of the whole sample.
+        The dates of the whole sample.
     validation_end : int
-        Position of the last validation month.
+        Position of the last validation period.
 
     Returns
     -------
@@ -612,33 +765,43 @@ def tuning_report(
     lines = [
         "Tuning and champion selection on the validation split",
         (
-            f"{len(origins)} expanding-window origins, every {VALIDATION_STEP} months from "
+            f"{len(origins)} expanding-window origins, every {VALIDATION_STEP} {PERIOD}s from "
             f"{dates.iloc[origins[0]]:%Y-%m} to {dates.iloc[origins[-1]]:%Y-%m}: each model is "
-            f"fitted on every month from {dates.iloc[0]:%Y-%m} to the origin and forecasts the "
-            f"validation months up to {dates.iloc[validation_end]:%Y-%m}, at most "
-            f"{MAX_HORIZON} ahead. Score: MASE averaged over horizons "
-            f"{', '.join(map(str, HORIZONS))}. Settings searched by Optuna (grid when the space "
-            f"has at most {CANDIDATES} settings, seeded TPE with {CANDIDATES} trials "
-            "otherwise); joint models (VAR, VECM, ML, networks) tuned once on both series. "
-            "Champion per family and series: the lowest score. Search spaces and their "
-            "reasoning: autoregressive_experiments/configs/hyperparameters.json."
+            f"fitted on every {PERIOD} from {dates.iloc[0]:%Y-%m} to the origin and forecasts "
+            f"the validation {PERIOD}s up to {dates.iloc[validation_end]:%Y-%m}, at most "
+            f"{MAX_HORIZON} ahead. Score: MAE relative to naive's at the same horizon, averaged "
+            f"over horizons {', '.join(map(str, HORIZONS))} (0.8: 20% more accurate than naive; "
+            "every horizon counts the same). se: the score's standard error from "
+            f"{BOOTSTRAP_SAMPLES} bootstrap resamples of the origins. Settings searched by "
+            f"Optuna (grid when the space has at most {CANDIDATES} settings, seeded TPE with "
+            f"{CANDIDATES} trials otherwise); joint models (VAR, VECM, ML, networks) tuned once "
+            "on both series. Champion per family and series: the lowest score; models within "
+            f"{TIE_STANDARD_ERRORS:g} standard error of it are tied with it, not beaten. "
+            "Search spaces and their reasoning: "
+            "autoregressive_experiments/configs/hyperparameters.json."
         ),
         "",
     ]
-    for column in VALUE_COLUMNS:
+    for index, column in enumerate(VALUE_COLUMNS):
         rows = table[table["series"] == column]
-        scores = rows.drop_duplicates("model").sort_values("mean_MASE")
-        lines.append(f"{column}  (validation MASE by horizon; * champion of its family)")
+        scores = rows.drop_duplicates("model").sort_values("score")
+        lines.append(f"{column}  (score, its se, then MASE by horizon; * champion of its family)")
         header = "".join(f"{f'h={h}':>8}" for h in HORIZONS)
-        lines.append(f"  {'model':<26}{'family':<18}{'mean':>8}{header}   tuned settings")
+        lines.append(
+            f"  {'model':<26}{'family':<18}{'score':>7}{'se':>7}{header}   tuned settings"
+        )
         for row in scores.itertuples():
             per_horizon = rows[rows["model"] == row.model].set_index("horizon")["MASE"]
             cells = "".join(f"{per_horizon.get(h, np.nan):8.3f}" for h in HORIZONS)
             settings = ", ".join(f"{k}={v}" for k, v in tuned[column].get(row.model, {}).items())
             mark = "*" if row.champion else " "
+            se = f"{row.score_se:7.3f}" if np.isfinite(row.score_se) else f"{'-':>7}"
             lines.append(
-                f" {mark}{row.model:<26}{row.family:<18}{row.mean_MASE:8.3f}{cells}   {settings}"
+                f" {mark}{row.model:<26}{row.family:<18}{row.score:7.3f}{se}{cells}   {settings}"
             )
+        for family, record in champions[index].items():
+            tied = ", ".join(record["tied_with"]) or "none"
+            lines.append(f"  {family} champion {record['model']}; tied with: {tied}")
         lines.append("")
     lines.append(
         f"All numbers: {repo_path(VALIDATION_METRICS_PATH)}; every setting tried: "
@@ -687,13 +850,13 @@ def tuning_figure(
     for column, axis in enumerate(axes[0]):
         name = VALUE_COLUMNS[column]
         rows = table[table["series"] == name].drop_duplicates("model").set_index("model")
-        reference = rows.loc[NAIVE, "mean_MASE"]
         axis.set_facecolor(SURFACE)
         for position, model in enumerate(models):
+            # The score is already the ratio to naive, so naive sits at 1 by construction.
             scores = np.array(
                 [trial["per_series"].get(column, np.nan) for trial in trials[model]], dtype=float
             )
-            ratios = scores[np.isfinite(scores)] / reference
+            ratios = scores[np.isfinite(scores)]
             shown = ratios[ratios <= MAX_SHOWN_RATIO]
             axis.scatter(
                 shown,
@@ -708,7 +871,7 @@ def tuning_figure(
                 axis.scatter([MAX_SHOWN_RATIO], [position], marker=">", s=30, color=MUTED_INK)
             champion = bool(rows.loc[model, "champion"])
             axis.scatter(
-                [min(rows.loc[model, "mean_MASE"] / reference, MAX_SHOWN_RATIO)],
+                [min(rows.loc[model, "score"], MAX_SHOWN_RATIO)],
                 [position],
                 s=70 if champion else 45,
                 color=SERIES_PALETTE[1] if champion else SERIES_PALETTE[0],
@@ -719,12 +882,12 @@ def tuning_figure(
         axis.set_xlim(right=MAX_SHOWN_RATIO * 1.08)
         # Fixed ratios: the log locator leaves 1 to 2 unlabelled when the range is wide.
         low, high = axis.get_xlim()
-        ratios = (0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.2, 1.4, 1.6, 1.8, 2, 2.5, 3, 4, 5, 7, 10, 20, 50)
-        axis.set_xticks([r for r in ratios if low <= r <= high])
+        ticks = (0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.2, 1.4, 1.6, 1.8, 2, 2.5, 3, 4, 5, 7, 10, 20, 50)
+        axis.set_xticks([r for r in ticks if low <= r <= high])
         axis.xaxis.set_minor_locator(NullLocator())
         axis.xaxis.set_major_formatter(plain)
         axis.set_yticks(range(len(models)), [f"{m} ({families[m]})" for m in models])
-        axis.set_xlabel("Validation MASE (mean over horizons) / naive's", color=SECONDARY_INK)
+        axis.set_xlabel("Validation score: MAE / naive's, mean over horizons", color=SECONDARY_INK)
         axis.set_title(
             f"{series_title(name)}: every setting tried on the validation origins\n"
             "left of the line at 1: more accurate than naive",
@@ -789,35 +952,51 @@ def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv")
     Notes
     -----
     Processing:
-    1. Keep the train and validation months; test months are dropped before anything else.
-    2. Build the validation origins and each series' MASE scale (on the training split).
+    1. Keep the train and validation periods; test periods are dropped before anything else.
+    2. Build the validation origins and each series' MASE scale (on the training split), and
+       score the benchmarks (naive, the score's reference, and drift) on the origins.
     3. Tune SARIMA per series, then the other univariate models (SARIMAX and the average use the
        tuned SARIMA), then the joint models on both series.
-    4. Score naive on the same origins, as the reference.
-    5. Stop joblib's workers, choose the champions and write every output.
+    4. Stop joblib's workers, choose the champions and their ties, and write every output.
     """
     start_run_log("tune")
     begin_phase("Read the data and build the validation origins")
-    data = pd.read_csv(levels_path, parse_dates=[DATE_COLUMN])
-    data = data.sort_values(DATE_COLUMN).reset_index(drop=True)
-    splits = split_by_time(data, split_boundaries(data))
+    data, splits = load_levels(levels_path)
     train_end = len(splits["train"]) - 1
     validation_end = train_end + len(splits["validation"])
     known = data.iloc[: validation_end + 1]
     levels = known[list(VALUE_COLUMNS)].to_numpy(dtype=float)
     dates = known[DATE_COLUMN].to_numpy()
     origins = validation_origins(train_end, validation_end)
+    if levels.min() <= 0 and any(LOG in space.get("transform", ()) for space in SPACES.values()):
+        raise ValueError(
+            "a level is zero or negative, so no model can work on the logarithm: remove "
+            '"log" from every transform list in configs/hyperparameters.json'
+        )
     scales = [
         mase_scale(splits["train"][column].to_numpy(dtype=float)) for column in VALUE_COLUMNS
     ]
     columns = list(range(len(VALUE_COLUMNS)))
     tuned: dict[str, dict[str, Any]] = {name: {} for name in VALUE_COLUMNS}
     metrics: dict[int, dict[str, Metrics]] = {column: {} for column in columns}
+    scores: dict[int, dict[str, float]] = {column: {} for column in columns}
+    errors: dict[int, dict[str, float]] = {column: {} for column in columns}
     trials: dict[str, list[dict[str, Any]]] = {}
+    benchmarks = {
+        model: origin_paths(model, {}, levels, dates, origins, validation_end, columns)
+        for model in BENCHMARKS
+    }
+    reference = benchmarks[NAIVE]
+    for column in columns:
+        for model, paths in benchmarks.items():
+            metrics[column][model] = horizon_metrics(
+                paths[column], origins, levels[:, column], scales[column]
+            )
+            scores[column][model] = score(metrics[column][model], metrics[column][NAIVE])
 
     def store(model: str, result: Mapping[str, Any], tuned_columns: Sequence[int]) -> None:
         """
-        Keep one search's winner, metrics and trials.
+        Keep one search's winner, metrics, score and trials.
 
         Parameters
         ----------
@@ -835,6 +1014,8 @@ def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv")
         for column in tuned_columns:
             tuned[VALUE_COLUMNS[column]][model] = result["settings"]
             metrics[column][model] = result["metrics"][column]
+            scores[column][model] = score(result["metrics"][column], metrics[column][NAIVE])
+            errors[column][model] = result["error"]
         trials.setdefault(model, []).extend(result["trials"])
 
     begin_phase("Tune the univariate models per series")
@@ -842,37 +1023,37 @@ def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv")
         sarima = [tuned[name].get(SARIMA, {}) for name in VALUE_COLUMNS]
         for column in columns:
             result = tune_model(
-                model, [column], levels, dates, origins, validation_end, scales, sarima
+                model, [column], levels, dates, origins, validation_end, scales, reference, sarima
             )
             store(model, result, [column])
     begin_phase("Tune the joint models on both series")
     for model in JOINT_MODELS:
-        result = tune_model(model, columns, levels, dates, origins, validation_end, scales)
-        store(model, result, columns)
-    begin_phase("Score naive, choose the champions, write the outputs")
-    naive = origin_paths(NAIVE, {}, levels, dates, origins, validation_end, columns)
-    for column in columns:
-        metrics[column][NAIVE] = horizon_metrics(
-            naive[column], origins, levels[:, column], scales[column]
+        result = tune_model(
+            model, columns, levels, dates, origins, validation_end, scales, reference
         )
+        store(model, result, columns)
+    begin_phase("Choose the champions and write the outputs")
     # The parallel fits are done: stop joblib's workers now, releasing their memory.
     get_reusable_executor().shutdown(wait=True)
     champions = choose_champions(
-        {c: {m: v for m, v in metrics[c].items() if m != NAIVE} for c in columns}
+        {c: {m: v for m, v in scores[c].items() if m not in BENCHMARKS} for c in columns}, errors
     )
-    table = metrics_rows(metrics, champions)
+    table = metrics_rows(metrics, scores, errors, champions)
     TUNED_PATH.write_text(json.dumps(tuned, indent=2) + "\n", encoding="utf-8")
     champion_record = {
         VALUE_COLUMNS[column]: {
             family: {
-                "model": model,
-                "settings": tuned[VALUE_COLUMNS[column]][model],
-                "validation_mean_MASE": mean_mase(metrics[column][model]),
+                "model": record["model"],
+                "settings": tuned[VALUE_COLUMNS[column]][record["model"]],
+                "validation_score": scores[column][record["model"]],
+                "validation_score_se": errors[column][record["model"]],
+                "tied_with": record["tied_with"],
                 "validation_MASE": {
-                    str(h): values["MASE"] for h, values in metrics[column][model].items()
+                    str(h): values["MASE"]
+                    for h, values in metrics[column][record["model"]].items()
                 },
             }
-            for family, model in by_family.items()
+            for family, record in by_family.items()
         }
         for column, by_family in champions.items()
     }
@@ -885,13 +1066,13 @@ def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv")
                 "trial": number,
                 "settings": json.dumps(trial["settings"]),
                 "score": trial["score"],
-                **{f"{VALUE_COLUMNS[c]}_mean_MASE": s for c, s in trial["per_series"].items()},
+                **{f"{VALUE_COLUMNS[c]}_score": s for c, s in trial["per_series"].items()},
             }
             for model, rows in trials.items()
             for number, trial in enumerate(rows)
         ]
     ).to_csv(SCORES_PATH, index=False)
-    report = tuning_report(table, tuned, origins, data[DATE_COLUMN], validation_end)
+    report = tuning_report(table, tuned, champions, origins, data[DATE_COLUMN], validation_end)
     REPORT_PATH.write_text(report + "\n", encoding="utf-8")
     print(report)
     figure = tuning_figure(trials, table)

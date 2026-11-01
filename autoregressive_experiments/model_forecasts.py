@@ -16,9 +16,15 @@ champions are chosen from:
 VAR, VECM and the lag-feature models forecast both series together (each series' forecasts feed
 the other's), so they are tuned as one system with one setting; the others model one series.
 
-Every model except naive and the SARIMA + naive average has a tuned "outliers" setting (see
-outliers): its history is fitted as it is, with flagged changes clipped, or (SARIMA, SARIMAX)
-with a pulse regressor per flagged change. The average inherits its SARIMA's setting.
+Every model except the benchmarks and the SARIMA + naive average has two tuned settings that
+every family shares: "transform" (none, or the model works on the logarithm of the levels and
+its forecasts are converted back, so changes count relative to the level) and "outliers" (see
+outliers: the history is fitted as it is, with flagged changes clipped, or, for SARIMA and
+SARIMAX, with a pulse regressor per flagged change). The transform is applied first, so the
+outliers are judged on the transformed changes. The average inherits its SARIMA's settings.
+
+The benchmarks are naive (the last level repeated) and drift (the last level plus the mean
+change of the history per step, the random walk with drift); neither has a setting.
 
 Input: levels and dates handed over by tuning and forecast_evaluation.
 
@@ -46,7 +52,8 @@ from autoregressive_experiments.outliers import CLIP, DUMMIES, NONE, clip_levels
 from autoregressive_experiments.prophet_forecasting import PROPHET, prophet_forecast
 from autoregressive_experiments.var_models import VECM_RANK
 
-NAIVE = "naive"
+NAIVE, DRIFT = "naive", "drift"
+BENCHMARKS = (NAIVE, DRIFT)
 SARIMA, SARIMAX, COMBINATION = "SARIMA", "SARIMAX", "SARIMA + naive average"
 VAR_MODEL, VECM_MODEL = "VAR", "VECM"
 SMA, EXPONENTIAL = "SMA", "exponential smoothing"
@@ -59,6 +66,64 @@ FAMILIES: dict[str, tuple[str, ...]] = {
 }
 # Models that forecast both series together, tuned as one system with one setting.
 JOINT_MODELS = (VAR_MODEL, VECM_MODEL, *LAG_MODELS)
+# The "transform" setting's values: the levels as they are, or their logarithm.
+LOG = "log"
+
+
+def split_transform(settings: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    """
+    A model's transform and its other settings.
+
+    Parameters
+    ----------
+    settings : Mapping of str to Any
+        Tuned settings, possibly with a "transform" entry.
+
+    Returns
+    -------
+    tuple of (str, dict of str to Any)
+        NONE or LOG (NONE when the entry is missing), and the settings without it.
+    """
+    options = dict(settings)
+    return options.pop("transform", NONE), options
+
+
+def transformed(levels: np.ndarray, transform: str) -> np.ndarray:
+    """
+    The levels a model is fitted on: as they are, or their natural logarithm.
+
+    Parameters
+    ----------
+    levels : np.ndarray
+        Levels, any shape, trillions; positive when `transform` is LOG.
+    transform : str
+        NONE or LOG.
+
+    Returns
+    -------
+    np.ndarray
+        The same shape.
+    """
+    return np.log(levels) if transform == LOG else levels
+
+
+def restored(path: np.ndarray, transform: str) -> np.ndarray:
+    """
+    Forecasts back in trillions: the inverse of transformed().
+
+    Parameters
+    ----------
+    path : np.ndarray
+        Forecasts in the fitted units, any shape.
+    transform : str
+        NONE or LOG.
+
+    Returns
+    -------
+    np.ndarray
+        The same shape, trillions.
+    """
+    return np.exp(path) if transform == LOG else path
 
 
 def split_outliers(settings: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -106,7 +171,7 @@ def sarima_path(settings: Mapping[str, Any], levels: np.ndarray, steps: int) -> 
     Parameters
     ----------
     settings : Mapping of str to Any
-        Orders "p", "q", "P", "Q", "trend" and, optionally, "outliers".
+        Orders "p", "q", "P", "Q", "trend" and, optionally, "transform" and "outliers".
     levels : np.ndarray
         The series' levels up to the origin, shape (months,), trillions.
     steps : int
@@ -122,6 +187,8 @@ def sarima_path(settings: Mapping[str, Any], levels: np.ndarray, steps: int) -> 
     With "dummies", each flagged change gets a pulse regressor whose future values are zero, so
     the shock is absorbed by its own coefficient instead of the model's dynamics.
     """
+    transform, _ = split_transform(settings)
+    levels = transformed(levels, transform)
     mode, _ = split_outliers(settings)
     if mode == CLIP:
         levels = clip_levels(levels)
@@ -137,7 +204,8 @@ def sarima_path(settings: Mapping[str, Any], levels: np.ndarray, steps: int) -> 
         trend=settings["trend"],
     )
     future = None if pulses is None else np.zeros((steps, pulses.shape[1]))
-    return np.asarray(levels[-1] + np.cumsum(np.asarray(fitted.forecast(steps, exog=future))))
+    path = levels[-1] + np.cumsum(np.asarray(fitted.forecast(steps, exog=future)))
+    return np.asarray(restored(path, transform))
 
 
 def sarimax_path(
@@ -153,7 +221,7 @@ def sarimax_path(
     Parameters
     ----------
     settings : Mapping of str to Any
-        {"lags": k} and, optionally, "outliers".
+        {"lags": k} and, optionally, "transform" and "outliers".
     sarima : Sequence of Mapping of str to Any
         Both series' tuned SARIMA settings, in column order.
     history : np.ndarray
@@ -179,14 +247,17 @@ def sarimax_path(
        same-month regressor, which would be leakage.
 
     With "clip", both series' histories are clipped before the fit; with "dummies", the own
-    series' flagged changes get pulse regressors next to the lags, zero in the future.
+    series' flagged changes get pulse regressors next to the lags, zero in the future. With
+    "log", both series enter as logarithms, the other series' planned path included (its own
+    SARIMA forecasts it in trillions, whatever that SARIMA's transform).
     """
     lags, other = settings["lags"], 1 - column
+    transform, _ = split_transform(settings)
     mode, _ = split_outliers(settings)
+    planned_levels = sarima_path(sarima[other], history[:, other], steps)
+    history = transformed(history, transform)
     planned = np.diff(
-        np.concatenate(
-            [[history[-1, other]], sarima_path(sarima[other], history[:, other], steps)]
-        )
+        np.concatenate([[history[-1, other]], transformed(planned_levels, transform)])
     )
     fit_history = clip_levels(history) if mode == CLIP else history
     own_changes, other_changes = np.diff(fit_history[:, column]), np.diff(fit_history[:, other])
@@ -206,9 +277,8 @@ def sarimax_path(
         exog=exog,
         trend=own["trend"],
     )
-    return np.asarray(
-        history[-1, column] + np.cumsum(np.asarray(fitted.forecast(steps, exog=future)))
-    )
+    path = history[-1, column] + np.cumsum(np.asarray(fitted.forecast(steps, exog=future)))
+    return np.asarray(restored(path, transform))
 
 
 def smoothing_path(
@@ -311,15 +381,20 @@ def joint_paths(
 
     Notes
     -----
-    With "clip" the model is fitted on the clipped history, whose last levels are the actual
-    ones, so the forecasts start from the real latest values.
+    With "log" both series enter as logarithms; with "clip" the model is fitted on the clipped
+    history, whose last levels are the actual ones, so the forecasts start from the real latest
+    values.
     """
-    mode, options = split_outliers(settings)
+    transform, options = split_transform(settings)
+    mode, options = split_outliers(options)
+    history = transformed(history, transform)
     if mode == CLIP:
         history = clip_levels(history)
     if model in (VAR_MODEL, VECM_MODEL):
-        return system_path(model, options, history, steps)
-    return np.asarray(ml_forecast(model, [options, options], history, steps))
+        path = system_path(model, options, history, steps)
+    else:
+        path = np.asarray(ml_forecast(model, [options, options], history, steps))
+    return np.asarray(restored(path, transform))
 
 
 def series_path(
@@ -337,9 +412,9 @@ def series_path(
     Parameters
     ----------
     model : str
-        NAIVE, or any model of FAMILIES.
+        One of BENCHMARKS, or any model of FAMILIES.
     settings : Mapping of str to Any
-        Its settings (ignored by naive).
+        Its settings (ignored by the benchmarks).
     history : np.ndarray
         Both series' levels up to the origin, shape (months, 2), trillions.
     dates : np.ndarray
@@ -363,12 +438,16 @@ def series_path(
 
     Notes
     -----
-    Naive repeats the last level. The SARIMA + naive average weighs the series' tuned SARIMA by
-    settings["weight"] and the naive forecast by the rest.
+    Naive repeats the last level; drift adds the history's mean change for every step ahead
+    (the random walk with drift, the usual second benchmark for a trending series). The SARIMA
+    + naive average weighs the series' tuned SARIMA by settings["weight"] and the naive forecast
+    by the rest.
     """
     levels = history[:, column]
     if model == NAIVE:
         return np.full(steps, levels[-1])
+    if model == DRIFT:
+        return np.asarray(levels[-1] + np.arange(1, steps + 1) * np.mean(np.diff(levels)))
     if model == SARIMA:
         return sarima_path(settings, levels, steps)
     if model == SARIMAX:
@@ -379,12 +458,16 @@ def series_path(
             weight * sarima_path(sarima[column], levels, steps) + (1 - weight) * levels[-1]
         )
     if model in (SMA, EXPONENTIAL, PROPHET):
-        mode, options = split_outliers(settings)
+        transform, options = split_transform(settings)
+        mode, options = split_outliers(options)
+        levels = transformed(levels, transform)
         if mode == CLIP:
             levels = clip_levels(levels)
         if model == PROPHET:
-            return prophet_forecast(dates[: len(levels)], levels, options, steps)
-        return smoothing_path(model, options, levels, steps)
+            path = prophet_forecast(dates[: len(levels)], levels, options, steps)
+        else:
+            path = smoothing_path(model, options, levels, steps)
+        return np.asarray(restored(path, transform))
     if model in JOINT_MODELS:
         return joint_paths(model, settings, history, steps)[:, column]
     raise ValueError(f"unknown model {model!r}")

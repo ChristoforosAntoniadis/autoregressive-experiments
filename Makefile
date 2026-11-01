@@ -121,6 +121,11 @@ all: features plots diagnostics residuals volatility garch asymmetric-garch var 
 test:
 	$(PYTHON_INTERPRETER) -m pytest
 
+## Run the test suite without the end-to-end smoke test (about one minute)
+.PHONY: test-fast
+test-fast:
+	$(PYTHON_INTERPRETER) -m pytest -m "not slow"
+
 ## Check the type hints with mypy (reports only, changes nothing)
 .PHONY: typecheck
 typecheck:

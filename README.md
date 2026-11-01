@@ -15,8 +15,15 @@ Experiments on autoregressive approaches, from traditional econometrics (SARIMA,
 - **Smoothing baselines and a combination:** a moving average and exponential smoothing (trend, damping, season, Box-Cox and initialization all tuned), and a weighted average of SARIMA and the naive forecast (weight tuned).
 - **Neural networks:** a multilayer perceptron (scikit-learn's MLPRegressor) and two networks written by hand in NumPy (A1: one sigmoid hidden layer; A2: three ReLU hidden layers; SGD, momentum, AdaBelief or Muon), a TensorFlow (Keras) and a PyTorch multilayer perceptron (A1 or A2), and PyTorch sequence networks (LSTM, GRU, TCN, N-BEATS, DLinear) reading the same lags as a window.
 - **Prophet** on each series' levels, counted with the econometric models.
-- **Forecast comparison (train / validation / test, 60 / 20 / 20 in time order):** every model is fitted on an expanding window from the start of the data and forecasts 1, 3, 6, 9 and 12 months ahead. Its settings are tuned by Optuna on 14 validation origins, one every 4 months, scored by MASE averaged over the five horizons; the best model of each family (econometric, machine learning, neural network) is its champion. The champions and the naive forecast are then refitted at each of the 56 test months and scored once: MAE, MAPE, MASE, MSE and RMSE per horizon, Diebold-Mariano tests against naive, and 80% / 95% bands from the quantiles of each model's own past errors at that horizon (coverage, width, pinball loss); see [`reports/`](reports/).
-- **Outliers:** a Hampel filter flags unusual monthly changes (more than 3 robust standard deviations from the median of their 13-month window), using only the history up to each forecast date. Each model's tuned settings choose whether flagged changes are kept, clipped to the window's bounds, or (SARIMA, SARIMAX) given a pulse regressor, and the gradient-trained models choose between squared-error and Huber loss; validation decides. Forecasts are always scored on every month; the test report adds a labelled sensitivity table without the flagged months.
+- **Forecast comparison (train / validation / test, 60 / 20 / 20 in time order):** every model is fitted on an expanding window from the start of the data and forecasts 1, 3, 6, 9 and 12 months ahead. Its settings are tuned by Optuna on 14 validation origins, one every 4 months, scored by its MAE relative to the naive forecast's at the same horizon, averaged over the five horizons (so every horizon counts the same); the best model of each family (econometric, machine learning, neural network) is its champion, and the family's models within one bootstrap standard error of it are reported as tied, not beaten. The champions, their equal-weight mean, and two benchmarks (naive, and the random walk with drift) are then refitted at each of the 56 test months and scored once: MAE, MAPE, MASE, MSE and RMSE per horizon, MAE relative to naive, the bias (mean error and the share of forecasts above the actual), Diebold-Mariano tests against naive (with the number of tests stated, since about 5% come out significant by chance), a Ljung-Box test of the one-step errors, and 80% / 95% bands from the quantiles of each model's own past errors at that horizon (coverage, width, pinball loss); see [`reports/`](reports/).
+- **Transform and outliers, tuned per model:** every model (benchmarks aside) chooses on validation whether it works on the levels or their logarithm (growth rates once differenced, so the early, small years weigh as much as the recent, large ones). A Hampel filter flags unusual monthly changes (more than 3 robust standard deviations from the median of their 13-month window), using only the history up to each forecast date; each model's tuned settings choose whether flagged changes are kept, clipped to the window's bounds, or (SARIMA, SARIMAX) given a pulse regressor, and the gradient-trained models choose between squared-error and Huber loss. Forecasts are always scored on every month; the test report adds a labelled sensitivity table without the flagged months.
+
+## Limitations
+
+- **Three regimes, one test.** Training (2002-12 to 2016-10) is mostly the quantitative-easing era, validation (2016-11 to 2021-06) holds the 2017-19 runoff and the COVID expansion, and test (2021-07 to 2026-02) holds quantitative tightening. The test results measure how models tuned on the first two regimes fare in the third; they are 56 monthly forecasts per horizon from one regime, not a general ranking of the methods.
+- **Policy-driven series.** Both series move on Federal Reserve decisions that their own past does not predict (Meese and Rogoff 1983 found the same for exchange rates), so the naive forecast is a hard benchmark and the gains over it are modest beyond a few months. Known future information (announced runoff caps) is outside the autoregressive scope of this project.
+- **Selection noise.** About 1,300 settings per series are scored on 14 validation origins, so a champion's validation score is optimistic and the margins between champions are often inside their standard errors; the reports mark such ties.
+- **The volatility chapter is descriptive.** GARCH, EGARCH and GJR-GARCH are fitted and checked on the training residuals, but every test band is empirical (quantiles of each model's own past errors), so the variance models inform no forecast.
 
 ## Quickstart
 
@@ -36,13 +43,14 @@ make garch                        # GARCH(1,1) vs constant variance on those mod
 make asymmetric-garch             # EGARCH and GJR-GARCH vs that GARCH, bootstrap checks (~12 min) -> reports/
 make outliers                     # flag unusual monthly changes in the train and validation history -> reports/
 make tune                         # tune every model on validation, choose each family's champion -> models/, reports/
-make evaluate                     # test the champions and naive once: metrics, bands, figures -> reports/
+make evaluate                     # test the champions, their mean, naive and drift once: metrics, bands, figures -> reports/
 make var                          # VAR lag order and Johansen cointegration test -> reports/
 make var-checks                   # fit VAR / VECM candidates; stability and Portmanteau checks -> reports/
 make var-analysis                 # Granger causality, impulse responses, variance decomposition -> reports/
 make all                          # every step above, in order (~3.5-5 h)
 
-make test                         # unit tests
+make test                         # unit tests and an end-to-end smoke test of the forecast pipeline (~3.5 min)
+make test-fast                    # the unit tests alone (~1 min)
 make lint                         # check style and lint with ruff (changes nothing)
 make typecheck                    # check the type hints with mypy (changes nothing)
 make format                       # apply ruff's fixes and formatting
@@ -112,7 +120,7 @@ autoregressive-experiments/
 │   ├── metrics.py               # MAE / MAPE / MASE / MSE / RMSE, Diebold-Mariano, error-quantile bands
 │   ├── outliers.py              # Hampel detection of unusual changes; clipping and pulse regressors
 │   ├── tuning.py                # Optuna search of every model on validation; each family's champion
-│   ├── forecast_evaluation.py   # the champions and naive on test, once: metrics, bands, figures
+│   ├── forecast_evaluation.py   # the champions, their mean, naive and drift on test, once: metrics, bands, figures
 │   ├── ml_forecasting.py        # lag-feature ML: Ridge, Lasso, random forest, XGBoost, KNN
 │   ├── nn_forecasting.py        # neural networks: MLPs (scikit-learn, NumPy by hand, Keras, PyTorch), LSTM, GRU, TCN, N-BEATS, DLinear
 │   ├── prophet_forecasting.py   # Prophet
@@ -120,9 +128,8 @@ autoregressive-experiments/
 │   ├── var_models.py            # VAR / VECM candidates: estimation, stability, residual checks
 │   ├── var_analysis.py          # Granger causality, impulse responses, variance decomposition
 │   └── modeling/
-│       ├── train.py             # (template stub) model training
 │       └── utilities/           # the networks: NumPy by hand (activations, optimizers, network), Keras, PyTorch, sequence networks
-├── tests/                       # pytest: the split, each diagnostic step, GARCH, forecast metrics and baselines
+├── tests/                       # pytest: the split, each diagnostic step, GARCH, forecast metrics and baselines, an end-to-end smoke test
 └── tools/                       # make help
 ```
 

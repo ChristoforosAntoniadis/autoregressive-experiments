@@ -48,6 +48,22 @@ def test_a_constant_window_flags_nothing() -> None:
     assert not hampel(np.full(10, 0.3))[2].any()
 
 
+def test_a_zero_heavy_window_uses_the_mean_absolute_deviation() -> None:
+    """Thirteen changes, eleven of them 0, plus 2 and 10 (zero-flow days with two flows): every
+    window's median absolute deviation is 0, so the mean absolute deviation stands in, scaled by
+    sqrt(pi / 2). The 10 (8th change) sees the twelve changes from the 2nd on: mean deviation
+    12 / 12 = 1, bounds 0 +/- 3 x 1.2533, so it is flagged; the 2 sees all thirteen, mean
+    deviation 12 / 13, bounds +/- 3.471, so it is not. Not every non-zero change is flagged."""
+    changes = np.array([0.0] * 6 + [2.0, 10.0] + [0.0] * 5)
+
+    lower, upper, flags = hampel(changes)
+
+    assert np.flatnonzero(flags).tolist() == [7]
+    assert upper[7] == pytest.approx(3 * np.sqrt(np.pi / 2))
+    assert lower[7] == pytest.approx(-upper[7])
+    assert upper[6] == pytest.approx(3 * np.sqrt(np.pi / 2) * 12 / 13)
+
+
 def test_clipping_caps_the_spike_and_keeps_the_last_level() -> None:
     """The 5.0 change becomes its upper bound, 0.2 + 0.445; the last level is unchanged, and
     every level before the spike moves up by the amount clipped off, 5.0 - 0.645."""

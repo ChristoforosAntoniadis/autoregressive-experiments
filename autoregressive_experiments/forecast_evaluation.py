@@ -4,11 +4,17 @@ Friedman 2009, section 7.2). Each series' champion per family (econometric, mach
 neural network), chosen on validation by tuning, is run on the test split exactly once, with
 naive as the reference; nothing is tuned or chosen here.
 
-Rolling origin with an expanding window (Tashman 2000): at every test month a champion is fitted
-on every month from the start of the data up to it, with its tuned settings, and forecasts up to
-12 months ahead; forecasts are scored at horizons 1, 3, 6, 9 and 12 months by MAE, MSE, RMSE,
-MAPE and MASE (Hyndman and Koehler 2006), and against naive by the Diebold-Mariano test with the
-Harvey-Leybourne-Newbold correction.
+Rolling origin with an expanding window (Tashman 2000): at every test period a champion is fitted
+on every period from the start of the data up to it, with its tuned settings, and forecasts up to
+MAX_HORIZON ahead; forecasts are scored at the HORIZONS by MAE, MSE, RMSE, MAPE and MASE (Hyndman
+and Koehler 2006), by MAE relative to naive's, by their bias (the mean error and the share of
+forecasts above the actual: a model that keeps forecasting a trend that has ended shows up here,
+not in MAE), and against naive by the Diebold-Mariano test with the Harvey-Leybourne-Newbold
+correction. The one-step errors also get a Ljung-Box test: autocorrelated errors mean the model
+leaves structure a better one could use. Two benchmarks run beside the champions, naive and
+drift (the random walk with drift, the fair benchmark for a trending series), and so does the
+equal-weight mean of the three champions, the combination that is hard to beat out of sample
+(Clemen 1989).
 
 Uncertainty bands: every model's 2.5, 10, 50, 90 and 97.5% quantiles are its forecast plus the
 same quantiles of its own past errors at that horizon, the errors of every forecast made from the
@@ -27,8 +33,10 @@ Input: ``data/interim/fed_balance_sheet_cleaned.csv`` and ``models/champions.jso
 
 Output, in ``reports/``:
 
-- ``test_metrics.csv``: per series, champion (and naive) and horizon: MAE, MAPE, MASE, MSE, RMSE
-  and the Diebold-Mariano test against naive
+- ``test_metrics.csv``: per series, model (champions, their mean, naive and drift) and horizon:
+  MAE, MAPE, MASE, MSE, RMSE, MAE relative to naive, the mean error, the share of forecasts
+  above the actual, the Diebold-Mariano test against naive and the Ljung-Box p-value of the
+  one-step errors
 - ``test_intervals.csv``: the bands' coverage, width, pinball loss and below-quantile shares
 - ``test_forecasts.csv``: every test forecast with its band
 - ``champions.csv``: each champion's family, validation scores and hyperparameters
@@ -36,8 +44,8 @@ Output, in ``reports/``:
   without the forecasts that start or end in a flagged test month
 - ``forecast_evaluation.txt``: the method, the champions, the test tables and the sensitivity
   table
-- ``figures/test_forecasts_<series>.png``: per series, one panel per champion and horizon: the
-  actual levels against the forecasts, with their 80% and 95% bands and naive
+- ``figures/test_forecasts_<series>.png``: per series, one panel per champion (and their mean)
+  and horizon: the actual levels against the forecasts, with their 80% and 95% bands and naive
 """
 
 from collections.abc import Mapping, Sequence
@@ -52,18 +60,20 @@ from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from statsmodels.stats.diagnostic import acorr_ljungbox
 import typer
 
 from autoregressive_experiments.config import FIGURES_DIR, INTERIM_DATA_DIR, REPORTS_DIR
-from autoregressive_experiments.diagnostics import SIGNIFICANCE_LEVEL, VALUE_COLUMNS, repo_path
-from autoregressive_experiments.features import (
-    DATE_COLUMN,
-    series_title,
-    split_boundaries,
-    split_by_time,
+from autoregressive_experiments.diagnostics import (
+    SEASONAL_PERIOD,
+    SIGNIFICANCE_LEVEL,
+    VALUE_COLUMNS,
+    repo_path,
 )
+from autoregressive_experiments.features import DATE_COLUMN, PERIOD, load_levels, series_title
 from autoregressive_experiments.metrics import (
     HORIZONS,
+    MAX_HORIZON,
     QUANTILES,
     accuracy,
     diebold_mariano,
@@ -71,7 +81,7 @@ from autoregressive_experiments.metrics import (
     interval_scores,
     mase_scale,
 )
-from autoregressive_experiments.model_forecasts import FAMILIES, NAIVE, SARIMA
+from autoregressive_experiments.model_forecasts import BENCHMARKS, FAMILIES, NAIVE, SARIMA
 from autoregressive_experiments.outliers import hampel
 from autoregressive_experiments.residual_checks import (
     MUTED_INK,
@@ -92,11 +102,14 @@ from autoregressive_experiments.tuning import (
 app = typer.Typer()
 
 BENCHMARK = "benchmark"
+# The equal-weight mean of the three champions' forecasts, tested as a fourth line.
+COMBINED, COMBINED_FAMILY = "mean of champions", "combination"
 # Quantile column names, e.g. "q2.5", in QUANTILES order.
 QUANTILE_COLUMNS = [f"q{100 * level:g}" for level in QUANTILES]
 DM_COLUMNS = ("DM_absolute", "DM_absolute_p", "DM_squared", "DM_squared_p")
-# Each family's colour in the figures (palette slots 1-3); naive is drawn in grey.
-FAMILY_COLORS = dict(zip(FAMILIES, SERIES_PALETTE))
+BIAS_COLUMNS = ("MAE_vs_naive", "ME", "share_over", "LB_p")
+# Each family's colour in the figures (palette slots 1-4); naive is drawn in grey.
+FAMILY_COLORS = dict(zip((*FAMILIES, COMBINED_FAMILY), SERIES_PALETTE))
 
 METRICS_PATH = REPORTS_DIR / "test_metrics.csv"
 INTERVALS_PATH = REPORTS_DIR / "test_intervals.csv"
@@ -231,7 +244,8 @@ def add_bands(rows: pd.DataFrame, first_origin: int) -> pd.DataFrame:
 
 def score_model(test: pd.DataFrame, naive: pd.DataFrame, scale: float) -> list[dict[str, Any]]:
     """
-    Point metrics, the Diebold-Mariano test against naive and the band scores, per horizon.
+    Point metrics, the Diebold-Mariano test against naive, the Ljung-Box test of the one-step
+    errors and the band scores, per horizon.
 
     Parameters
     ----------
@@ -245,13 +259,17 @@ def score_model(test: pd.DataFrame, naive: pd.DataFrame, scale: float) -> list[d
     Returns
     -------
     list of dict of str to Any
-        One record per horizon in HORIZONS: "horizon", "n", the METRICS, the DM_COLUMNS (NaN for
-        naive itself) and interval_scores' columns.
+        One record per horizon in HORIZONS: "horizon", "n", the METRICS, "MAE_vs_naive" (MAE /
+        naive's MAE on the same forecasts), the DM_COLUMNS (NaN for naive itself), "LB_p" (the
+        Ljung-Box p-value of the one-step errors at SEASONAL_PERIOD lags; NaN at the other
+        horizons, whose errors overlap by construction) and interval_scores' columns.
 
     Notes
     -----
     The Diebold-Mariano pairs are matched on origin, so both losses in a pair are for the same
-    target month; absolute loss matches MAE, squared loss MSE.
+    target month; absolute loss matches MAE, squared loss MSE. One-step errors of an adequate
+    model are white noise, so a small Ljung-Box p-value says the model misses structure that its
+    own past errors could predict (the forecaster's usual check; Diebold 2007).
     """
     records = []
     for horizon in HORIZONS:
@@ -259,6 +277,12 @@ def score_model(test: pd.DataFrame, naive: pd.DataFrame, scale: float) -> list[d
         reference = naive[naive["horizon"] == horizon].set_index("origin_index").loc[rows.index]
         record: dict[str, Any] = {"horizon": horizon, "n": len(rows)}
         record |= accuracy(rows["actual"].to_numpy(), rows["forecast"].to_numpy(), scale)
+        record["MAE_vs_naive"] = record["MAE"] / float(np.mean(np.abs(reference["error"])))
+        record["LB_p"] = (
+            float(acorr_ljungbox(rows["error"], lags=[SEASONAL_PERIOD])["lb_pvalue"].iloc[0])
+            if horizon == 1
+            else np.nan
+        )
         for loss, function in (("absolute", np.abs), ("squared", np.square)):
             if rows["forecast"].equals(reference["forecast"]):
                 statistic, p_value = np.nan, np.nan
@@ -409,7 +433,8 @@ def evaluation_report(
     Parameters
     ----------
     champions : Mapping of str to Mapping of str to Any
-        Series -> family -> {"model", "settings", "validation_mean_MASE", ...}.
+        Series -> family -> {"model", "settings", "validation_score", "validation_score_se",
+        "tied_with", ...}.
     metrics : pd.DataFrame
         score_model()'s records with "series", "family" and "model".
     periods : Mapping of str to str
@@ -422,23 +447,32 @@ def evaluation_report(
     str
         The report text.
     """
+    tests = int(metrics[DM_COLUMNS[1]].notna().sum() + metrics[DM_COLUMNS[3]].notna().sum())
     lines = [
         "Test of the champions (one per family and series, chosen on validation)",
         (
             f"Three-way split: training fits, validation ({periods['validation']}; an origin "
-            f"every {VALIDATION_STEP} months) tunes and chooses, test ({periods['test']}) "
-            "measures. This step runs each champion and naive over the test months once; "
-            "nothing is tuned or chosen after it. Rolling origin, expanding window: at every "
-            f"test month each model is refitted on all months from {periods['data']} to it, "
-            "with its tuned settings, and forecasts up to 12 months ahead."
+            f"every {VALIDATION_STEP} {PERIOD}s) tunes and chooses, test ({periods['test']}) "
+            "measures. This step runs each champion, the mean of the three champions, naive and "
+            f"drift over the test {PERIOD}s once; nothing is tuned or chosen after it. Rolling "
+            f"origin, expanding window: at every test {PERIOD} each model is refitted on all "
+            f"{PERIOD}s from {periods['data']} to it, with its tuned settings, and forecasts up "
+            f"to {MAX_HORIZON} {PERIOD}s ahead."
         ),
         (
             "Errors are on the levels: MAE, RMSE in trillions; MSE in trillions squared; MAPE "
-            "in %; MASE = MAE / the training split's mean absolute monthly change (scales: "
+            f"in %; MASE = MAE / the training split's mean absolute {PERIOD}ly change (scales: "
             + ", ".join(f"{column} {scale:.4f}" for column, scale in scales.items())
-            + "). DM: Diebold-Mariano test against naive, absolute-error loss, with the "
+            + "), so naive's own MASE is above 1 when the test moves more than training did; "
+            "MAE/naive compares like with like. ME: mean of actual - forecast (negative: the "
+            "model forecasts too high); over: share of forecasts above the actual (0.50 when "
+            "unbiased). DM: Diebold-Mariano test against naive, absolute-error loss, with the "
             "Harvey-Leybourne-Newbold correction; 'better' / 'worse' when significant at "
-            f"{SIGNIFICANCE_LEVEL:.0%}."
+            f"{SIGNIFICANCE_LEVEL:.0%}. {tests} such tests are reported (absolute and squared "
+            f"loss); about {tests * SIGNIFICANCE_LEVEL:.0f} would come out significant by chance "
+            "alone, so one borderline p-value is weak evidence. LB p: Ljung-Box p-value of the "
+            f"1-{PERIOD} errors at {SEASONAL_PERIOD} lags; below {SIGNIFICANCE_LEVEL:.0%}, the "
+            "errors are autocorrelated and the model leaves structure unused."
         ),
         (
             "Bands: each forecast plus the 2.5 / 10 / 50 / 90 / 97.5% quantiles of the same "
@@ -451,28 +485,32 @@ def evaluation_report(
     for column in VALUE_COLUMNS:
         lines.append(f"{column}")
         lines.append(
-            "  Champions (validation MASE averaged over the horizons) and their settings:"
+            "  Champions (validation score: MAE / naive's, mean over horizons; its standard "
+            "error; models tied within one standard error) and their settings:"
         )
         for family, record in champions[column].items():
             settings = ", ".join(f"{k}={v}" for k, v in record["settings"].items())
+            tied = ", ".join(record["tied_with"]) or "none"
             lines.append(
-                f"    {family:<18}{record['model']:<26}{record['validation_mean_MASE']:7.3f}   "
-                f"{settings}"
+                f"    {family:<18}{record['model']:<26}{record['validation_score']:6.3f} "
+                f"(se {record['validation_score_se']:.3f}; tied with: {tied})   {settings}"
             )
         table = metrics[metrics["series"] == column]
         for horizon in HORIZONS:
-            rows = table[table["horizon"] == horizon].sort_values("MASE")
-            lines.append(f"  {horizon}-month horizon ({int(rows['n'].iloc[0])} forecasts)")
+            rows = table[table["horizon"] == horizon].sort_values("MAE")
+            lines.append(f"  {horizon}-{PERIOD} horizon ({int(rows['n'].iloc[0])} forecasts)")
             lines.append(
-                f"    {'model':<26}{'family':<18}{'MAE':>8}{'MAPE %':>8}{'MASE':>8}{'MSE':>11}"
-                f"{'RMSE':>8}   {'DM vs naive':<18}{'cov 80%':>8}{'cov 95%':>8}{'pinball':>9}"
+                f"    {'model':<26}{'family':<18}{'MAE':>8}{'/naive':>7}{'MAPE %':>8}{'MASE':>8}"
+                f"{'RMSE':>8}{'ME':>8}{'over':>6}   {'DM vs naive':<18}{'LB p':>6}"
+                f"{'cov 80%':>8}{'cov 95%':>8}{'pinball':>9}"
             )
             for row in rows.itertuples():
+                lb = f"{row.LB_p:6.2f}" if np.isfinite(row.LB_p) else f"{'-':>6}"
                 lines.append(
-                    f"    {row.model:<26}{row.family:<18}{row.MAE:8.4f}{row.MAPE:8.2f}"
-                    f"{row.MASE:8.3f}{row.MSE:11.6f}{row.RMSE:8.4f}   "
-                    f"{dm_text(row.DM_absolute, row.DM_absolute_p):<18}{row.coverage_80:8.2f}"
-                    f"{row.coverage_95:8.2f}{row.pinball:9.4f}"
+                    f"    {row.model:<26}{row.family:<18}{row.MAE:8.4f}{row.MAE_vs_naive:7.2f}"
+                    f"{row.MAPE:8.2f}{row.MASE:8.3f}{row.RMSE:8.4f}{row.ME:8.3f}"
+                    f"{row.share_over:6.2f}   {dm_text(row.DM_absolute, row.DM_absolute_p):<18}"
+                    f"{lb}{row.coverage_80:8.2f}{row.coverage_95:8.2f}{row.pinball:9.4f}"
                 )
         lines.append("")
     lines.append(
@@ -502,14 +540,14 @@ def test_figure(forecasts: pd.DataFrame, metrics: pd.DataFrame, column: str) -> 
     Returns
     -------
     Figure
-        One row per family's champion and one column per horizon. Each panel: the actual
-        levels (ink), the champion's forecasts placed on the month they forecast (its family's
-        colour) inside their 80% (darker) and 95% (lighter) bands, and naive's forecasts
-        (dashed grey); the title gives both MASE values.
+        One row per family's champion and one for their mean, one column per horizon. Each
+        panel: the actual levels (ink), the model's forecasts placed on the period they forecast
+        (its family's colour) inside their 80% (darker) and 95% (lighter) bands, and naive's
+        forecasts (dashed grey); the title gives both MASE values.
     """
     apply_chart_style()
     series = forecasts[forecasts["series"] == column]
-    families = list(FAMILIES)
+    families = [*FAMILIES, COMBINED_FAMILY]
     figure, axes = plt.subplots(
         len(families),
         len(HORIZONS),
@@ -546,13 +584,15 @@ def test_figure(forecasts: pd.DataFrame, metrics: pd.DataFrame, column: str) -> 
             )
             axis.plot(at["target"], at["forecast"], color=color, linewidth=1.6)
             axis.set_title(
-                f"{model}, {horizon} month{'s' if horizon > 1 else ''} ahead\n"
+                f"{model}, {horizon} {PERIOD}{'s' if horizon > 1 else ''} ahead\n"
                 f"MASE {scores[horizon]:.2f} (naive {naive_mase[horizon]:.2f})",
                 loc="left",
                 fontsize=9,
             )
-            axis.xaxis.set_major_locator(mdates.YearLocator(2))
-            axis.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+            # Ticks chosen from the span shown, so the axis reads for any spacing of the data.
+            locator = mdates.AutoDateLocator(minticks=3, maxticks=5)
+            axis.xaxis.set_major_locator(locator)
+            axis.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
             if col == 0:
                 axis.set_ylabel(f"{family}\ntrillions", color=SECONDARY_INK)
     handles = [
@@ -600,23 +640,29 @@ def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv")
     ------
     FileNotFoundError
         If the champions or tuned settings are missing (run make tune first).
+    ValueError
+        If the champions file predates the tie reporting (run make tune first).
 
     Notes
     -----
-    Processing, per series and model (the three champions and naive):
-    1. Forecast from every month from the end of training on, with the tuned settings; the
-       validation-period forecasts only supply past errors for the bands.
-    2. Keep the forecasts from the last validation month on (every target a test month) and
+    Processing, per series and model (the three champions, their mean, naive and drift):
+    1. Forecast from every period from the end of training on, with the tuned settings; the
+       validation-period forecasts only supply past errors for the bands. The mean of the
+       champions is averaged from their forecasts, so it needs no fit of its own.
+    2. Keep the forecasts from the last validation period on (every target a test period) and
        give each its empirical band from the errors already known at its origin.
-    3. Score each horizon: the five metrics, Diebold-Mariano against naive, and the bands.
+    3. Score each horizon: the metrics, the bias, Diebold-Mariano against naive, Ljung-Box of
+       the one-step errors, and the bands.
     """
     start_run_log("evaluate")
     begin_phase("Read the champions and the data")
     champions = load_json(CHAMPIONS_PATH)
+    if any("tied_with" not in r for by_family in champions.values() for r in by_family.values()):
+        raise ValueError(
+            f"{repo_path(CHAMPIONS_PATH)} is from an older tuning: run make tune first"
+        )
     tuned = load_json(TUNED_PATH)
-    data = pd.read_csv(levels_path, parse_dates=[DATE_COLUMN])
-    data = data.sort_values(DATE_COLUMN).reset_index(drop=True)
-    splits = split_by_time(data, split_boundaries(data))
+    data, splits = load_levels(levels_path)
     train_end = len(splits["train"]) - 1
     validation_end = train_end + len(splits["validation"])
     last = len(data) - 1
@@ -642,15 +688,26 @@ def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv")
     flagged: dict[str, list[str]] = {}
     for index, column in enumerate(VALUE_COLUMNS):
         entries = [(f, r["model"], r["settings"]) for f, r in champions[column].items()]
-        entries.append((BENCHMARK, NAIVE, {}))
-        tests = {}
+        entries.extend((BENCHMARK, model, {}) for model in BENCHMARKS)
+        rows_by_model: dict[str, pd.DataFrame] = {}
         for family, model, settings in entries:
             logger.info(f"TEST | {series_title(column)} | {family} | {model}")
             paths = origin_paths(model, settings, levels, dates, origins, last, [index], sarima)
-            rows = forecast_rows(paths[index], origins, levels[:, index], dates)
-            tests[model] = add_bands(rows, validation_end).assign(
+            rows_by_model[model] = forecast_rows(paths[index], origins, levels[:, index], dates)
+        # The champions' forecasts share origins and horizons in the same row order, so their
+        # mean is a row-wise average of the forecast column.
+        champion_rows = [rows_by_model[record["model"]] for record in champions[column].values()]
+        combined = champion_rows[0].assign(
+            forecast=np.mean([rows["forecast"].to_numpy() for rows in champion_rows], axis=0)
+        )
+        rows_by_model[COMBINED] = combined.assign(error=combined["actual"] - combined["forecast"])
+        entries.insert(len(champions[column]), (COMBINED_FAMILY, COMBINED, {}))
+        tests = {
+            model: add_bands(rows_by_model[model], validation_end).assign(
                 series=column, family=family, model=model
             )
+            for family, model, _ in entries
+        }
         for family, model, _ in entries:
             for record in score_model(tests[model], tests[NAIVE], scales[column]):
                 all_metrics.append({"series": column, "family": family, "model": model, **record})
@@ -672,7 +729,7 @@ def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv")
     forecasts = pd.concat(all_forecasts, ignore_index=True)
     metrics = pd.DataFrame(all_metrics)
     keys = ["series", "family", "model", "horizon", "n"]
-    metrics[[*keys, "MAE", "MAPE", "MASE", "MSE", "RMSE", *DM_COLUMNS]].to_csv(
+    metrics[[*keys, "MAE", "MAPE", "MASE", "MSE", "RMSE", *BIAS_COLUMNS, *DM_COLUMNS]].to_csv(
         METRICS_PATH, index=False
     )
     interval_columns = [c for c in metrics.columns if c.startswith(("coverage", "width", "below"))]
@@ -696,7 +753,9 @@ def main(levels_path: Path = INTERIM_DATA_DIR / "fed_balance_sheet_cleaned.csv")
                 "series": column,
                 "family": family,
                 "model": record["model"],
-                "validation_mean_MASE": record["validation_mean_MASE"],
+                "validation_score": record["validation_score"],
+                "validation_score_se": record["validation_score_se"],
+                "tied_with": ", ".join(record["tied_with"]),
                 **{f"validation_MASE_h{h}": v for h, v in record["validation_MASE"].items()},
                 "settings": json.dumps(record["settings"]),
             }
