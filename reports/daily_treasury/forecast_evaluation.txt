@@ -1,0 +1,114 @@
+Test of the champions (one per family and series, chosen on validation)
+Three-way split: training fits, validation (2016-04-01 to 2019-10-01; an origin every 40 days) tunes and chooses, test (2019-10-02 to 2023-04-03) measures. This step runs each champion, the mean of the three champions, naive, drift and seasonal naive over the test days once; nothing is tuned or chosen after it. Rolling origin, expanding window: at every 20th test day (an origin every 20 days) each model is refitted on all days from 2005-10-03 to it, with its tuned settings, and forecasts up to 21 days ahead.
+Errors are on the levels: MAE, RMSE in billions; MSE in billions squared; MAPE in %; MASE = MAE / the training split's mean absolute change over 5 days (the seasonal naive's one-step error) (scales: deposits_cumulative_B 26.8303, withdrawals_cumulative_B 23.1045), so seasonal naive's own MASE is above 1 when the test moves more than training did; MAE/seasonal naive compares like with like. ME: mean of actual - forecast (negative: the model forecasts too high); over: share of forecasts above the actual (0.50 when unbiased). DM: Diebold-Mariano test against seasonal naive, absolute-error loss, with the Harvey-Leybourne-Newbold correction; 'better' / 'worse' when significant at 5%. 96 such tests are reported (absolute and squared loss); about 5 would come out significant by chance alone, so one borderline p-value is weak evidence. LB p: Ljung-Box p-value of the 1-day errors at 5 lags; below 5%, the errors are autocorrelated and the model leaves structure unused (not applicable here: the origins are 20 days apart).
+Bands: each forecast plus the 2.5 / 10 / 50 / 90 / 97.5% quantiles of the same model's errors at that horizon from every earlier forecast since the end of training whose target was already known (empirical prediction intervals, split-conformal style); coverage targets 0.80 and 0.95.
+
+deposits_cumulative_B
+  Champions (validation score: MAE / seasonal naive's, mean over horizons; its standard error; models tied within one standard error) and their settings:
+    econometric       VECM                       0.464 (se 0.066; tied with: SARIMA, SARIMA + naive average, SARIMAX, exponential smoothing, VAR)   outliers=clip, transform=none, lags=10, deterministic=lo
+    machine learning  XGBoost                    0.351 (se 0.063; tied with: none)   outliers=none, transform=none, loss=mse, lags=30, n_estimators=1000, learning_rate=0.05, max_depth=6, min_child_weight=4, subsample=0.85, colsample_bytree=0.7, gamma=0.01, reg_alpha=1.0, reg_lambda=10.0
+    neural network    NumPy A2                   0.347 (se 0.056; tied with: N-BEATS, PyTorch MLP, MLP)   outliers=none, transform=none, loss=huber, lags=30, hidden_units=4, optimizer=momentum, learning_rate=0.1, use_bias=True, dropout=0.0, batch_size=64, epochs=100, patience=10, min_delta=0.0001, min_epochs=20, validation_share=0.25
+  1-day horizon (46 forecasts)
+    model                     family                 MAE /seasonal naive  MAPE %    MASE    RMSE      ME  over   DM vs seasonal naive    LB p cov 80% cov 95%  pinball
+    XGBoost                   machine learning   18.5883            0.43    0.01   0.693 39.7734   3.209  0.48   better p=0.004             -    0.67    0.91   6.3221
+    NumPy A2                  neural network     19.1153            0.44    0.01   0.712 31.5133   3.926  0.50   better p=0.009             -    0.67    0.80   5.9948
+    mean of champions         combination        19.5798            0.45    0.01   0.730 38.1892   5.408  0.63   better p=0.003             -    0.72    0.89   6.0996
+    VECM                      econometric        26.1061            0.60    0.01   0.973 51.6935   9.089  0.57   better p=0.014             -    0.76    0.91   8.5031
+    naive                     benchmark          33.6827            0.78    0.02   1.255 59.2003  33.683  0.00   p=0.22                     -    0.83    0.93   6.8838
+    drift                     benchmark          36.7505            0.85    0.02   1.370 51.2258 -15.899  0.85   p=0.41                     -    0.52    0.91   6.8740
+    seasonal naive            benchmark          43.1724            1.00    0.02   1.609 77.6176  -6.361  0.48   -                          -    0.72    0.87  14.2815
+  5-day horizon (46 forecasts)
+    model                     family                 MAE /seasonal naive  MAPE %    MASE    RMSE      ME  over   DM vs seasonal naive    LB p cov 80% cov 95%  pinball
+    XGBoost                   machine learning   67.5245            0.30    0.03   2.517 95.5964   3.478  0.57   better p=0.000             -    0.59    0.85  18.9809
+    mean of champions         combination        70.7058            0.32    0.04   2.635 97.7922  30.644  0.41   better p=0.000             -    0.63    0.83  18.8629
+    NumPy A2                  neural network     76.7692            0.34    0.04   2.861100.1809  37.533  0.30   better p=0.000             -    0.57    0.80  20.5000
+    VECM                      econometric       119.7328            0.54    0.06   4.463144.0346  50.920  0.46   better p=0.000             -    0.50    0.76  26.8122
+    drift                     benchmark         211.3688            0.95    0.11   7.878251.5415 206.100  0.04   p=0.68                     -    0.63    0.87  35.2598
+    seasonal naive            benchmark         223.1094            1.00    0.11   8.316252.6320 -39.349  0.50   -                          -    0.37    0.67  51.0943
+    naive                     benchmark         454.0066            2.03    0.22  16.921476.2177 454.007  0.00   worse p=0.000              -    0.57    0.87  38.1427
+  10-day horizon (45 forecasts)
+    model                     family                 MAE /seasonal naive  MAPE %    MASE    RMSE      ME  over   DM vs seasonal naive    LB p cov 80% cov 95%  pinball
+    mean of champions         combination        82.0098            0.29    0.04   3.057142.3530  51.639  0.31   better p=0.000             -    0.73    0.89  24.0174
+    XGBoost                   machine learning   87.3227            0.31    0.04   3.255141.3032  -9.084  0.64   better p=0.000             -    0.71    0.87  24.8817
+    NumPy A2                  neural network    108.1522            0.38    0.06   4.031167.4695  81.975  0.24   better p=0.000             -    0.69    0.89  30.3076
+    VECM                      econometric       119.8003            0.42    0.06   4.465166.5498  82.026  0.31   better p=0.000             -    0.62    0.89  27.9886
+    seasonal naive            benchmark         282.4383            1.00    0.14  10.527350.8974 -90.363  0.44   -                          -    0.38    0.78  68.4285
+    drift                     benchmark         406.7449            1.44    0.20  15.160442.3442 406.745  0.00   worse p=0.004              -    0.60    0.89  63.4172
+    naive                     benchmark         901.5791            3.19    0.45  33.603917.8439 901.579  0.00   worse p=0.000              -    0.56    0.89  72.1871
+  21-day horizon (45 forecasts)
+    model                     family                 MAE /seasonal naive  MAPE %    MASE    RMSE      ME  over   DM vs seasonal naive    LB p cov 80% cov 95%  pinball
+    XGBoost                   machine learning  176.4388            0.30    0.09   6.576262.9627 -21.632  0.62   better p=0.000             -    0.64    0.78  47.8093
+    mean of champions         combination       195.4162            0.33    0.10   7.283287.9522 160.470  0.20   better p=0.000             -    0.67    0.87  43.8686
+    VECM                      econometric       261.1619            0.45    0.13   9.734345.9922 213.739  0.20   better p=0.000             -    0.67    0.87  54.7623
+    NumPy A2                  neural network    297.2450            0.51    0.15  11.079390.8987 289.304  0.07   better p=0.000             -    0.71    0.91  59.0013
+    seasonal naive            benchmark         584.3139            1.00    0.29  21.778701.9043-146.921  0.44   -                          -    0.47    0.76 141.4444
+    drift                     benchmark         838.3999            1.43    0.42  31.248892.1170 838.400  0.00   worse p=0.007              -    0.60    0.89 123.2275
+    naive                     benchmark         1877.5516            3.21    0.93  69.9791901.64591877.552  0.00   worse p=0.000              -    0.56    0.87 141.9124
+
+withdrawals_cumulative_B
+  Champions (validation score: MAE / seasonal naive's, mean over horizons; its standard error; models tied within one standard error) and their settings:
+    econometric       VECM                       0.562 (se 0.066; tied with: SARIMAX, exponential smoothing)   outliers=clip, transform=none, lags=10, deterministic=lo
+    machine learning  XGBoost                    0.453 (se 0.063; tied with: Ridge, Lasso, random forest)   outliers=none, transform=none, loss=mse, lags=30, n_estimators=1000, learning_rate=0.05, max_depth=6, min_child_weight=4, subsample=0.85, colsample_bytree=0.7, gamma=0.01, reg_alpha=1.0, reg_lambda=10.0
+    neural network    NumPy A2                   0.397 (se 0.056; tied with: N-BEATS)   outliers=none, transform=none, loss=huber, lags=30, hidden_units=4, optimizer=momentum, learning_rate=0.1, use_bias=True, dropout=0.0, batch_size=64, epochs=100, patience=10, min_delta=0.0001, min_epochs=20, validation_share=0.25
+  1-day horizon (46 forecasts)
+    model                     family                 MAE /seasonal naive  MAPE %    MASE    RMSE      ME  over   DM vs seasonal naive    LB p cov 80% cov 95%  pinball
+    NumPy A2                  neural network     16.2506            0.36    0.01   0.703 31.8700   2.859  0.50   better p=0.002             -    0.72    0.91   5.5332
+    mean of champions         combination        17.5028            0.39    0.01   0.758 32.1980   0.988  0.67   better p=0.001             -    0.76    0.85   5.0893
+    XGBoost                   machine learning   17.7756            0.39    0.01   0.769 30.6419  -2.380  0.57   better p=0.002             -    0.80    0.91   5.2345
+    VECM                      econometric        22.8749            0.51    0.01   0.990 42.8044   2.483  0.67   better p=0.004             -    0.78    0.93   6.9600
+    naive                     benchmark          30.3400            0.67    0.02   1.313 49.8177  30.340  0.00   p=0.07                     -    0.91    0.93   5.6109
+    drift                     benchmark          35.6466            0.79    0.02   1.543 44.2147 -19.048  0.89   p=0.25                     -    0.67    0.89   5.5534
+    seasonal naive            benchmark          45.2738            1.00    0.02   1.960 76.5918 -20.052  0.76   -                          -    0.70    0.83  14.3965
+  5-day horizon (46 forecasts)
+    model                     family                 MAE /seasonal naive  MAPE %    MASE    RMSE      ME  over   DM vs seasonal naive    LB p cov 80% cov 95%  pinball
+    XGBoost                   machine learning   56.9225            0.35    0.03   2.464 75.7609  -1.456  0.52   better p=0.000             -    0.67    0.83  14.2748
+    mean of champions         combination        69.7993            0.43    0.03   3.021 87.9987  38.275  0.37   better p=0.000             -    0.59    0.83  15.9312
+    VECM                      econometric        89.2875            0.55    0.04   3.865110.4196  33.887  0.48   better p=0.000             -    0.57    0.83  19.5939
+    NumPy A2                  neural network    104.1110            0.64    0.05   4.506119.8177  82.395  0.20   better p=0.001             -    0.48    0.78  21.0042
+    seasonal naive            benchmark         161.7528            1.00    0.08   7.001199.7409 -51.196  0.54   -                          -    0.61    0.74  37.5088
+    drift                     benchmark         204.2670            1.26    0.10   8.841231.2163 200.857  0.02   p=0.12                     -    0.57    0.76  30.6681
+    naive                     benchmark         447.7991            2.77    0.22  19.381462.5477 447.799  0.00   worse p=0.000              -    0.50    0.74  34.7160
+  10-day horizon (45 forecasts)
+    model                     family                 MAE /seasonal naive  MAPE %    MASE    RMSE      ME  over   DM vs seasonal naive    LB p cov 80% cov 95%  pinball
+    XGBoost                   machine learning   62.1060            0.30    0.03   2.688 77.1886   2.377  0.51   better p=0.000             -    0.71    0.87  13.8200
+    mean of champions         combination        96.3988            0.47    0.05   4.172115.6476  83.060  0.22   better p=0.002             -    0.67    0.87  16.7941
+    VECM                      econometric       111.5816            0.55    0.06   4.829127.8414  63.558  0.31   better p=0.003             -    0.67    0.84  20.5921
+    NumPy A2                  neural network    183.6557            0.90    0.09   7.949206.4550 183.245  0.02   p=0.54                     -    0.58    0.80  30.3859
+    seasonal naive            benchmark         203.9436            1.00    0.10   8.827281.3441 -95.336  0.56   -                          -    0.62    0.78  49.2337
+    drift                     benchmark         411.1670            2.02    0.20  17.796438.0294 411.167  0.00   worse p=0.000              -    0.60    0.82  56.3748
+    naive                     benchmark         904.0386            4.43    0.45  39.128917.3025 904.039  0.00   worse p=0.000              -    0.53    0.76  65.7680
+  21-day horizon (45 forecasts)
+    model                     family                 MAE /seasonal naive  MAPE %    MASE    RMSE      ME  over   DM vs seasonal naive    LB p cov 80% cov 95%  pinball
+    XGBoost                   machine learning  108.1940            0.25    0.05   4.683153.7307  10.683  0.51   better p=0.000             -    0.71    0.87  29.0719
+    mean of champions         combination       210.7248            0.50    0.11   9.121259.7728 208.361  0.07   better p=0.012             -    0.73    0.89  33.5584
+    VECM                      econometric       239.8955            0.56    0.12  10.383293.4099 168.265  0.18   better p=0.016             -    0.53    0.80  49.3814
+    seasonal naive            benchmark         424.7384            1.00    0.21  18.383595.3449-173.221  0.51   -                          -    0.58    0.78 112.1304
+    NumPy A2                  neural network    446.1342            1.05    0.22  19.309473.5441 446.134  0.00   p=0.80                     -    0.69    0.89  61.3120
+    drift                     benchmark         841.5538            1.98    0.42  36.424884.7355 841.554  0.00   worse p=0.000              -    0.62    0.84 116.1386
+    naive                     benchmark         1876.5840            4.42    0.93  81.2221896.97661876.584  0.00   worse p=0.000              -    0.58    0.80 135.5227
+
+All numbers: reports/daily_treasury/test_metrics.csv, reports/daily_treasury/test_intervals.csv, reports/daily_treasury/test_forecasts.csv; champions and settings: reports/daily_treasury/champions.csv
+Figures: reports/daily_treasury/figures/test_forecasts_deposits_cumulative.png, reports/daily_treasury/figures/test_forecasts_withdrawals_cumulative.png
+
+Sensitivity (not the result): MAE relative to seasonal naive without the forecasts that start or end in a test day whose change the Hampel filter flags (outliers module). Below 1: more accurate than seasonal naive on the same forecasts.
+
+deposits_cumulative_B  (flagged test days: 2019-10-10, 2019-10-14, 2019-10-15, 2019-10-24, 2019-10-31, 2019-11-01, 2019-11-15, 2019-11-28, 2019-11-29, 2019-12-02, 2019-12-16, 2019-12-31, 2020-01-02, 2020-01-15, 2020-01-31, 2020-02-06, 2020-02-17, 2020-02-18, 2020-02-20, 2020-02-28, 2020-03-02, 2020-03-16, 2020-03-31, 2020-04-03, 2020-04-15, 2020-04-16, 2020-04-30, 2020-05-15, 2020-05-21, 2020-05-28, 2020-06-01, 2020-06-15, 2020-06-23, 2020-06-30, 2020-07-15, 2020-07-16, 2020-07-30, 2020-07-31, 2020-08-10, 2020-08-13, 2020-08-17, 2020-08-28, 2020-08-31, 2020-09-07, 2020-09-10, 2020-09-15, 2020-09-30, 2020-10-08, 2020-10-12, 2020-10-15, 2020-10-22, 2020-10-30, 2020-11-02, 2020-11-05, 2020-11-11, 2020-11-26, 2020-11-27, 2020-11-30, 2020-12-03, 2020-12-15, 2020-12-31, 2021-01-04, 2021-01-15, 2021-01-18, 2021-01-19, 2021-01-28, 2021-02-01, 2021-02-11, 2021-02-15, 2021-02-16, 2021-02-23, 2021-02-26, 2021-03-01, 2021-03-15, 2021-03-23, 2021-03-25, 2021-03-26, 2021-03-31, 2021-04-15, 2021-04-22, 2021-04-30, 2021-05-17, 2021-05-20, 2021-05-28, 2021-05-31, 2021-06-01, 2021-06-15, 2021-06-17, 2021-06-30, 2021-07-05, 2021-07-15, 2021-07-29, 2021-07-30, 2021-08-02, 2021-08-05, 2021-08-12, 2021-08-16, 2021-08-19, 2021-08-26, 2021-08-27, 2021-08-31, 2021-09-09, 2021-09-15, 2021-09-16, 2021-09-23, 2021-09-30, 2021-10-15, 2021-11-01, 2021-11-11, 2021-11-15, 2021-11-26, 2021-11-30, 2021-12-15, 2021-12-22, 2021-12-30, 2021-12-31, 2022-01-03, 2022-01-17, 2022-01-18, 2022-01-27, 2022-01-31, 2022-02-08, 2022-02-15, 2022-02-21, 2022-02-24, 2022-02-25, 2022-02-28, 2022-03-08, 2022-03-15, 2022-03-16, 2022-03-31, 2022-04-07, 2022-04-18, 2022-05-02, 2022-05-16, 2022-05-19, 2022-05-27, 2022-05-30, 2022-05-31, 2022-06-15, 2022-06-30, 2022-07-14, 2022-07-15, 2022-07-29, 2022-08-01, 2022-08-08, 2022-08-11, 2022-08-15, 2022-08-18, 2022-08-25, 2022-08-26, 2022-08-31, 2022-09-01, 2022-09-15, 2022-09-22, 2022-09-30, 2022-10-17, 2022-10-31, 2022-11-03, 2022-11-15, 2022-11-24, 2022-11-25, 2022-11-30, 2022-12-01, 2022-12-15, 2023-01-03, 2023-01-10, 2023-01-19, 2023-01-31, 2023-02-02, 2023-02-15, 2023-02-28, 2023-03-15, 2023-03-31, 2023-04-03)
+    model                    family                 h=1     h=5    h=10    h=21
+    VECM                     econometric           0.49    0.52    0.47    0.58
+    XGBoost                  machine learning      0.31    0.34    0.33    0.33
+    NumPy A2                 neural network        0.24    0.40    0.44    0.69
+    mean of champions        combination           0.28    0.36    0.36    0.48
+    naive                    benchmark             0.51    1.82    2.88    3.28
+    drift                    benchmark             0.70    0.74    1.31    1.48
+    seasonal naive           benchmark             1.00    1.00    1.00    1.00
+
+withdrawals_cumulative_B  (flagged test days: 2019-10-17, 2019-10-30, 2019-10-31, 2019-11-01, 2019-11-15, 2019-11-28, 2019-11-29, 2019-12-02, 2019-12-05, 2019-12-25, 2019-12-31, 2020-01-01, 2020-01-02, 2020-01-15, 2020-01-20, 2020-01-29, 2020-01-30, 2020-01-31, 2020-02-03, 2020-02-05, 2020-02-18, 2020-02-26, 2020-02-28, 2020-03-02, 2020-03-16, 2020-03-31, 2020-04-15, 2020-04-30, 2020-05-15, 2020-06-01, 2020-06-02, 2020-06-15, 2020-06-30, 2020-07-01, 2020-07-15, 2020-07-29, 2020-07-31, 2020-08-17, 2020-08-31, 2020-09-03, 2020-09-10, 2020-09-15, 2020-09-17, 2020-09-24, 2020-09-30, 2020-10-01, 2020-10-02, 2020-10-07, 2020-10-12, 2020-10-13, 2020-10-15, 2020-10-22, 2020-10-30, 2020-11-02, 2020-11-26, 2020-11-27, 2020-11-30, 2020-12-01, 2020-12-03, 2020-12-15, 2020-12-31, 2021-01-04, 2021-01-05, 2021-01-15, 2021-01-28, 2021-02-01, 2021-02-15, 2021-02-16, 2021-02-25, 2021-03-01, 2021-03-17, 2021-03-31, 2021-04-01, 2021-04-02, 2021-04-08, 2021-04-15, 2021-04-22, 2021-04-30, 2021-05-03, 2021-05-05, 2021-05-17, 2021-05-18, 2021-06-01, 2021-06-30, 2021-07-15, 2021-07-27, 2021-07-30, 2021-08-02, 2021-08-04, 2021-08-12, 2021-08-16, 2021-08-20, 2021-08-31, 2021-09-01, 2021-09-03, 2021-09-16, 2021-09-30, 2021-10-01, 2021-10-15, 2021-11-01, 2021-11-04, 2021-11-11, 2021-11-15, 2021-11-26, 2021-11-30, 2021-12-14, 2021-12-15, 2021-12-31, 2022-01-03, 2022-01-31, 2022-02-15, 2022-02-24, 2022-02-28, 2022-03-10, 2022-03-15, 2022-03-17, 2022-03-30, 2022-03-31, 2022-04-01, 2022-04-15, 2022-04-21, 2022-04-29, 2022-05-02, 2022-05-16, 2022-05-19, 2022-05-31, 2022-06-01, 2022-06-15, 2022-06-30, 2022-07-01, 2022-07-14, 2022-07-15, 2022-08-01, 2022-08-11, 2022-08-15, 2022-08-25, 2022-08-31, 2022-09-01, 2022-09-02, 2022-09-15, 2022-09-22, 2022-09-30, 2022-10-03, 2022-10-05, 2022-10-06, 2022-10-10, 2022-10-31, 2022-11-01, 2022-11-02, 2022-11-03, 2022-11-08, 2022-11-15, 2022-11-24, 2022-11-25, 2022-11-30, 2022-12-01, 2022-12-02, 2022-12-07, 2022-12-22, 2023-01-03, 2023-01-26, 2023-01-31, 2023-02-01, 2023-02-15, 2023-02-23, 2023-02-28, 2023-03-31)
+    model                    family                 h=1     h=5    h=10    h=21
+    VECM                     econometric           0.43    0.48    0.61    0.75
+    XGBoost                  machine learning      0.45    0.30    0.39    0.37
+    NumPy A2                 neural network        0.28    0.60    1.04    1.41
+    mean of champions        combination           0.33    0.37    0.57    0.66
+    naive                    benchmark             0.59    2.44    4.92    6.22
+    drift                    benchmark             0.80    1.07    2.32    2.87
+    seasonal naive           benchmark             1.00    1.00    1.00    1.00
+

@@ -1,0 +1,173 @@
+{
+  "deposits_cumulative_B": {
+    "econometric": {
+      "model": "VECM",
+      "settings": {
+        "outliers": "clip",
+        "transform": "none",
+        "lags": 10,
+        "deterministic": "lo"
+      },
+      "validation_score": 0.46440881919917876,
+      "validation_score_se": 0.06593448748175124,
+      "tied_with": [
+        "SARIMA",
+        "SARIMA + naive average",
+        "SARIMAX",
+        "exponential smoothing",
+        "VAR"
+      ],
+      "validation_MASE": {
+        "1": 0.33812980043953905,
+        "5": 1.6692900659380556,
+        "10": 2.0218187753425183,
+        "21": 5.0465906254886495
+      }
+    },
+    "machine learning": {
+      "model": "XGBoost",
+      "settings": {
+        "outliers": "none",
+        "transform": "none",
+        "loss": "mse",
+        "lags": 30,
+        "n_estimators": 1000,
+        "learning_rate": 0.05,
+        "max_depth": 6,
+        "min_child_weight": 4,
+        "subsample": 0.85,
+        "colsample_bytree": 0.7,
+        "gamma": 0.01,
+        "reg_alpha": 1.0,
+        "reg_lambda": 10.0
+      },
+      "validation_score": 0.35121957816614846,
+      "validation_score_se": 0.06282351703164381,
+      "tied_with": [],
+      "validation_MASE": {
+        "1": 0.33373300296377845,
+        "5": 0.894272967917043,
+        "10": 1.5020140918554434,
+        "21": 3.404978302247052
+      }
+    },
+    "neural network": {
+      "model": "NumPy A2",
+      "settings": {
+        "outliers": "none",
+        "transform": "none",
+        "loss": "huber",
+        "lags": 30,
+        "hidden_units": 4,
+        "optimizer": "momentum",
+        "learning_rate": 0.1,
+        "use_bias": true,
+        "dropout": 0.0,
+        "batch_size": 64,
+        "epochs": 100,
+        "patience": 10,
+        "min_delta": 0.0001,
+        "min_epochs": 20,
+        "validation_share": 0.25
+      },
+      "validation_score": 0.3471388710308449,
+      "validation_score_se": 0.05642284707210285,
+      "tied_with": [
+        "N-BEATS",
+        "PyTorch MLP",
+        "MLP"
+      ],
+      "validation_MASE": {
+        "1": 0.2971083612246253,
+        "5": 0.9083820397067184,
+        "10": 1.9371367440966711,
+        "21": 3.04956221080906
+      }
+    }
+  },
+  "withdrawals_cumulative_B": {
+    "econometric": {
+      "model": "VECM",
+      "settings": {
+        "outliers": "clip",
+        "transform": "none",
+        "lags": 10,
+        "deterministic": "lo"
+      },
+      "validation_score": 0.5615219094358961,
+      "validation_score_se": 0.06593448748175124,
+      "tied_with": [
+        "SARIMAX",
+        "exponential smoothing"
+      ],
+      "validation_MASE": {
+        "1": 0.7802887131542711,
+        "5": 2.0083541139050967,
+        "10": 2.7971144988990373,
+        "21": 4.534666694515967
+      }
+    },
+    "machine learning": {
+      "model": "XGBoost",
+      "settings": {
+        "outliers": "none",
+        "transform": "none",
+        "loss": "mse",
+        "lags": 30,
+        "n_estimators": 1000,
+        "learning_rate": 0.05,
+        "max_depth": 6,
+        "min_child_weight": 4,
+        "subsample": 0.85,
+        "colsample_bytree": 0.7,
+        "gamma": 0.01,
+        "reg_alpha": 1.0,
+        "reg_lambda": 10.0
+      },
+      "validation_score": 0.45332022449590076,
+      "validation_score_se": 0.06282351703164381,
+      "tied_with": [
+        "Ridge",
+        "Lasso",
+        "random forest"
+      ],
+      "validation_MASE": {
+        "1": 0.6295695074411236,
+        "5": 1.531089631477708,
+        "10": 2.2021549635819926,
+        "21": 3.9701045344819272
+      }
+    },
+    "neural network": {
+      "model": "NumPy A2",
+      "settings": {
+        "outliers": "none",
+        "transform": "none",
+        "loss": "huber",
+        "lags": 30,
+        "hidden_units": 4,
+        "optimizer": "momentum",
+        "learning_rate": 0.1,
+        "use_bias": true,
+        "dropout": 0.0,
+        "batch_size": 64,
+        "epochs": 100,
+        "patience": 10,
+        "min_delta": 0.0001,
+        "min_epochs": 20,
+        "validation_share": 0.25
+      },
+      "validation_score": 0.39718989275873995,
+      "validation_score_se": 0.05642284707210285,
+      "tied_with": [
+        "N-BEATS"
+      ],
+      "validation_MASE": {
+        "1": 0.42559679299098624,
+        "5": 1.4930815938500341,
+        "10": 1.8987422404914032,
+        "21": 4.627887512877598
+      }
+    }
+  }
+}

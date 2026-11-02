@@ -1,0 +1,57 @@
+series,family,model,horizon,n,MAE,MAE_vs_seasonal_naive
+deposits_cumulative_B,econometric,VECM,1,17,21.446004148230287,0.489702538116146
+deposits_cumulative_B,econometric,VECM,5,14,119.55130961194767,0.5203243013275797
+deposits_cumulative_B,econometric,VECM,10,16,147.57237698233075,0.4720765763957735
+deposits_cumulative_B,econometric,VECM,21,15,334.49275033379286,0.5754665801802576
+deposits_cumulative_B,machine learning,XGBoost,1,17,13.426968439441065,0.306594201817417
+deposits_cumulative_B,machine learning,XGBoost,5,14,78.29124848175186,0.3407477450356623
+deposits_cumulative_B,machine learning,XGBoost,10,16,103.33501184654051,0.330563480861817
+deposits_cumulative_B,machine learning,XGBoost,21,15,189.60292624613504,0.3261958516295229
+deposits_cumulative_B,neural network,NumPy A2,1,17,10.553491602795582,0.24098063155055843
+deposits_cumulative_B,neural network,NumPy A2,5,14,92.21127064526912,0.40133198982734547
+deposits_cumulative_B,neural network,NumPy A2,10,16,138.06949379543585,0.4416773333091392
+deposits_cumulative_B,neural network,NumPy A2,21,15,398.9004196404693,0.6862745458426139
+deposits_cumulative_B,combination,mean of champions,1,17,12.453175037787707,0.28435839988926354
+deposits_cumulative_B,combination,mean of champions,5,14,82.06961581972635,0.35719236911942936
+deposits_cumulative_B,combination,mean of champions,10,16,112.86224527723243,0.36104061914781826
+deposits_cumulative_B,combination,mean of champions,21,15,279.50348893344443,0.4808621913762597
+deposits_cumulative_B,benchmark,naive,1,17,22.317352941177568,0.5095990984516496
+deposits_cumulative_B,benchmark,naive,5,14,418.3341428571418,1.8207196668120886
+deposits_cumulative_B,benchmark,naive,10,16,901.2435000000023,2.8830324121558766
+deposits_cumulative_B,benchmark,naive,21,15,1904.630666666668,3.2767565071570424
+deposits_cumulative_B,benchmark,drift,1,17,30.62372170338537,0.6992684577069723
+deposits_cumulative_B,benchmark,drift,5,14,170.6066367805262,0.7425328871161434
+deposits_cumulative_B,benchmark,drift,10,16,410.89493091774057,1.314432119428759
+deposits_cumulative_B,benchmark,drift,21,15,862.5131341022498,1.4838811398664655
+deposits_cumulative_B,benchmark,seasonal naive,1,17,43.79394117647762,1.0
+deposits_cumulative_B,benchmark,seasonal naive,5,14,229.76307142856655,1.0
+deposits_cumulative_B,benchmark,seasonal naive,10,16,312.6026249999977,1.0
+deposits_cumulative_B,benchmark,seasonal naive,21,15,581.2548666666572,1.0
+withdrawals_cumulative_B,econometric,VECM,1,22,15.226084384053882,0.43168903649696144
+withdrawals_cumulative_B,econometric,VECM,5,17,86.01225660154287,0.48400923730955564
+withdrawals_cumulative_B,econometric,VECM,10,19,113.35478208570336,0.6124678826958503
+withdrawals_cumulative_B,econometric,VECM,21,21,226.66383599827253,0.7473152139520758
+withdrawals_cumulative_B,machine learning,XGBoost,1,22,16.023909622887995,0.45430893009258316
+withdrawals_cumulative_B,machine learning,XGBoost,5,17,53.84065969489508,0.30297282811554616
+withdrawals_cumulative_B,machine learning,XGBoost,10,19,72.58351538327406,0.39217641432899325
+withdrawals_cumulative_B,machine learning,XGBoost,21,21,113.68690203566803,0.37482799646513276
+withdrawals_cumulative_B,neural network,NumPy A2,1,22,10.026811807735198,0.28427957045546914
+withdrawals_cumulative_B,neural network,NumPy A2,5,17,106.34840820205864,0.5984450818610468
+withdrawals_cumulative_B,neural network,NumPy A2,10,19,192.3946894830687,1.0395288662857607
+withdrawals_cumulative_B,neural network,NumPy A2,21,21,426.8174132749305,1.407225573127851
+withdrawals_cumulative_B,combination,mean of champions,1,22,11.540147082120795,0.32718556191185216
+withdrawals_cumulative_B,combination,mean of champions,5,17,66.58964485764805,0.374714075571484
+withdrawals_cumulative_B,combination,mean of champions,10,19,105.20012211009222,0.5684073919298673
+withdrawals_cumulative_B,combination,mean of champions,21,21,201.20344936341974,0.6633718085052863
+withdrawals_cumulative_B,benchmark,naive,1,22,20.956909090910234,0.5941690368460154
+withdrawals_cumulative_B,benchmark,naive,5,17,434.290470588235,2.443844723362939
+withdrawals_cumulative_B,benchmark,naive,10,19,911.029894736842,4.9223909255123575
+withdrawals_cumulative_B,benchmark,naive,21,21,1885.6615238095235,6.2170638686166555
+withdrawals_cumulative_B,benchmark,drift,1,22,28.296359604006284,0.8022567001282283
+withdrawals_cumulative_B,benchmark,drift,5,17,190.1388068690225,1.0699514526395262
+withdrawals_cumulative_B,benchmark,drift,10,19,428.9104933355243,2.317448782360395
+withdrawals_cumulative_B,benchmark,drift,21,21,871.9872729614449,2.8749595302077022
+withdrawals_cumulative_B,benchmark,seasonal naive,1,22,35.27095454545104,1.0
+withdrawals_cumulative_B,benchmark,seasonal naive,5,17,177.7078823529403,1.0
+withdrawals_cumulative_B,benchmark,seasonal naive,10,19,185.07873684209986,1.0
+withdrawals_cumulative_B,benchmark,seasonal naive,21,21,303.3041904761866,1.0
