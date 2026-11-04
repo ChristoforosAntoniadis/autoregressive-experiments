@@ -516,14 +516,14 @@ def fit_sarima(
     how the first few observations are weighted, not the model. The first fit is kept whenever
     it succeeds.
     """
-    specification = dict(
-        exog=exog,
-        order=(p, 0, q),
-        seasonal_order=(seasonal_p, 0, seasonal_q, SEASONAL_PERIOD),
-        trend=trend,
-        enforce_stationarity=True,
-        enforce_invertibility=True,
-    )
+    specification = {
+        "exog": exog,
+        "order": (p, 0, q),
+        "seasonal_order": (seasonal_p, 0, seasonal_q, SEASONAL_PERIOD),
+        "trend": trend,
+        "enforce_stationarity": True,
+        "enforce_invertibility": True,
+    }
     try:
         return SARIMAX(values, **specification).fit(disp=False, maxiter=MAX_ITERATIONS)
     except np.linalg.LinAlgError:

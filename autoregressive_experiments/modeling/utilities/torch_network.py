@@ -10,6 +10,8 @@ with early stopping.
 - dropout after every hidden layer when the rate is above 0; biases on every layer, or none
 - optimizers: SGD, momentum SGD (0.9), Adam or Muon, with optional weight decay
 - early stopping on the last rows of each training window, in time order
+- the LSTM, GRU and TCN train on an NVIDIA GPU when PyTorch finds one (fit_device), the other
+  networks always on the CPU
 
 PyTorch is imported when a network is first fitted, so modules that only list the networks
 don't pay its start-up time.
@@ -21,6 +23,7 @@ Output: a fitted estimator; nothing is written to disk.
 
 import copy
 import math
+import os
 from typing import Any
 
 import numpy as np
@@ -32,6 +35,38 @@ from autoregressive_experiments.modeling.utilities.network import HUBER_DELTA
 # The hidden layers of each architecture: name -> (hidden layers, their activation). The output
 # layer is always one linear unit.
 ARCHITECTURES = {"A1": (1, "sigmoid"), "A2": (3, "relu")}
+# The architectures a GPU speeds up: cuDNN runs a recurrent layer's whole time loop, or a
+# convolution over the window, in one kernel, where the CPU steps through up to 60 days one at a
+# time. The multilayer perceptrons, N-BEATS and DLinear multiply matrices of a few dozen
+# numbers, which a kernel launch costs more than, so they stay on the CPU.
+GPU_ARCHITECTURES = ("lstm", "gru", "tcn")
+# Set before CUDA starts: PyTorch's deterministic mode refuses cuBLAS without a fixed workspace.
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
+
+def fit_device(architecture: str) -> str:
+    """
+    The device a network trains on.
+
+    Parameters
+    ----------
+    architecture : str
+        A key of ARCHITECTURES, or one of sequence_networks.SEQUENCE_ARCHITECTURES.
+
+    Returns
+    -------
+    str
+        "cuda" for a GPU_ARCHITECTURES network when PyTorch finds a CUDA device, "cpu"
+        otherwise.
+
+    Notes
+    -----
+    A GPU adds up floating-point numbers in another order than a CPU, so a network fitted on
+    one reproduces exactly on another GPU run, not bit for bit on a CPU.
+    """
+    import torch
+
+    return "cuda" if architecture in GPU_ARCHITECTURES and torch.cuda.is_available() else "cpu"
 
 
 def torch_optimizer(
@@ -257,13 +292,14 @@ class TorchNetwork(RegressorMixin, BaseEstimator):
         Returns
         -------
         TorchNetwork
-            Itself, with the fitted module (model_) holding the best holdout weights.
+            Itself, with the fitted module (model_) holding the best holdout weights, on the
+            device it trained on (device_).
 
         Notes
         -----
         Processing:
         1. Use deterministic algorithms on one thread, and seed the weights (torch.manual_seed)
-           and the shuffles (a generator) with RANDOM_SEED.
+           and the shuffles (a generator) with RANDOM_SEED; put the rows on fit_device().
         2. Hold out the last validation_share of the rows (at least one), in time order.
         3. Build the network: for A1 / A2, Linear -> activation (-> dropout) per hidden layer,
            then a one-unit Linear, all with or without biases; otherwise the sequence network
@@ -282,8 +318,9 @@ class TorchNetwork(RegressorMixin, BaseEstimator):
         # every rerun identical to the last bit.
         torch.set_num_threads(1)
         torch.manual_seed(RANDOM_SEED)
-        rows = torch.as_tensor(np.asarray(features, dtype="float32"))
-        values = torch.as_tensor(np.asarray(target, dtype="float32").reshape(-1, 1))
+        device = fit_device(self.architecture)
+        rows = torch.as_tensor(np.asarray(features, dtype="float32")).to(device)
+        values = torch.as_tensor(np.asarray(target, dtype="float32").reshape(-1, 1)).to(device)
         split = len(rows) - max(1, round(len(rows) * self.validation_share))
         train_x, train_y, hold_x, hold_y = (
             rows[:split],
@@ -291,7 +328,7 @@ class TorchNetwork(RegressorMixin, BaseEstimator):
             rows[split:],
             values[split:],
         )
-        model = self.build(rows.shape[1])
+        model = self.build(rows.shape[1]).to(device)
         optimizer = torch_optimizer(
             self.optimizer, list(model.parameters()), self.learning_rate, self.weight_decay
         )
@@ -300,7 +337,8 @@ class TorchNetwork(RegressorMixin, BaseEstimator):
         best_loss, best_state, waited = math.inf, None, 0
         for epoch in range(1, self.epochs + 1):
             model.train()
-            order = torch.randperm(len(train_x), generator=generator)
+            # Drawn on the CPU, so the shuffle is the same on every device.
+            order = torch.randperm(len(train_x), generator=generator).to(device)
             batch_losses = []
             for start in range(0, len(train_x), self.batch_size):
                 batch = order[start : start + self.batch_size]
@@ -325,6 +363,7 @@ class TorchNetwork(RegressorMixin, BaseEstimator):
             model.load_state_dict(best_state)
         model.eval()
         self.model_ = model
+        self.device_ = device
         return self
 
     def predict(self, features: np.ndarray) -> np.ndarray:
@@ -344,5 +383,6 @@ class TorchNetwork(RegressorMixin, BaseEstimator):
         import torch
 
         with torch.no_grad():
-            output = self.model_(torch.as_tensor(np.asarray(features, dtype="float32")))
-        return output.numpy().astype(float).ravel()
+            rows = torch.as_tensor(np.asarray(features, dtype="float32")).to(self.device_)
+            output = self.model_(rows)
+        return output.cpu().numpy().astype(float).ravel()

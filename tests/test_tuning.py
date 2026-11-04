@@ -163,6 +163,40 @@ def test_unusable_scores_rank_last_and_the_lowest_score_is_champion_with_its_tie
     assert set(champions[0]["neural network"]["tied_with"]) == set(networks) - {"GRU"}
 
 
+def test_a_family_without_a_usable_score_has_no_champion() -> None:
+    """When every machine-learning model's score is NaN (all its fits failed), the family is
+    left out instead of crowning a model with no score; the other families are unaffected."""
+    by_model = {model: np.nan for model in ("Ridge", "Lasso", "random forest", "XGBoost", "KNN")}
+    by_model |= {"SARIMA": 0.9, "MLP": 0.8}
+    for model in (
+        "SARIMAX",
+        "SARIMA + naive average",
+        "VAR",
+        "VECM",
+        "SMA",
+        "exponential smoothing",
+        "Prophet",
+        "NumPy A1",
+        "NumPy A2",
+        "TensorFlow MLP",
+        "PyTorch MLP",
+        "LSTM",
+        "GRU",
+        "TCN",
+        "N-BEATS",
+        "DLinear",
+    ):
+        by_model[model] = 2.0
+    errors = {model: 0.0 for model in by_model}
+
+    champions = choose_champions({0: by_model}, {0: errors})
+
+    assert {f: r["model"] for f, r in champions[0].items()} == {
+        "econometric": "SARIMA",
+        "neural network": "MLP",
+    }
+
+
 def test_origin_paths_ignore_later_months_and_match_one_fit() -> None:
     """Forecasts run in parallel from each origin equal a direct fit on the months up to it, and
     changing the months after an origin leaves its forecasts unchanged."""

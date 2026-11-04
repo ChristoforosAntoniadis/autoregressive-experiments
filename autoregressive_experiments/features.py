@@ -125,7 +125,7 @@ def treasury_levels(raw: pd.DataFrame) -> pd.DataFrame:
     construction and positive from the first day, so every model, benchmark and transform of the
     project applies unchanged.
     """
-    account, kind, amount = FLOW_COLUMNS
+    _account, kind, amount = FLOW_COLUMNS
     # fill_value: a day with deposits but no withdrawal row (or the reverse) had no such flow.
     flows = raw.pivot_table(
         index=DATE_COLUMN, columns=kind, values=amount, aggfunc="sum", fill_value=0.0

@@ -45,7 +45,10 @@ from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.configs.configurables import RANDOM_SEED
 from autoregressive_experiments.modeling.utilities.network import NumpyNetwork
 from autoregressive_experiments.modeling.utilities.tensorflow_network import KerasNetwork
-from autoregressive_experiments.modeling.utilities.torch_network import TorchNetwork
+from autoregressive_experiments.modeling.utilities.torch_network import (
+    GPU_ARCHITECTURES,
+    TorchNetwork,
+)
 
 # Settings; each value's reasoning is in the dataset's config file (configs/<dataset>.json).
 SETTINGS = HYPERPARAMETERS.nn
@@ -54,6 +57,8 @@ TENSORFLOW_MLP, PYTORCH_MLP = "TensorFlow MLP", "PyTorch MLP"
 LSTM, GRU, TCN, NBEATS, DLINEAR = "LSTM", "GRU", "TCN", "N-BEATS", "DLinear"
 # The PyTorch sequence networks: model name -> TorchNetwork's architecture.
 SEQUENCE_MODELS = {LSTM: "lstm", GRU: "gru", TCN: "tcn", NBEATS: "nbeats", DLINEAR: "dlinear"}
+# The networks that train on a GPU when there is one (torch_network.fit_device).
+GPU_MODELS = tuple(m for m, a in SEQUENCE_MODELS.items() if a in GPU_ARCHITECTURES)
 NN_MODELS = (MLP, NUMPY_A1, NUMPY_A2, TENSORFLOW_MLP, PYTORCH_MLP, *SEQUENCE_MODELS)
 # Model -> its search space: setting name -> the values tried.
 NN_SPACES: dict[str, Mapping[str, Any]] = {

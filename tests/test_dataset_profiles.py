@@ -167,3 +167,13 @@ def test_overlapping_origins_by_hand(monkeypatch: pytest.MonkeyPatch) -> None:
     assert forecast_evaluation.overlapping_origins(5) == 1
     monkeypatch.setattr(forecast_evaluation, "TEST_STEP", 1)
     assert forecast_evaluation.overlapping_origins(12) == 12
+
+
+def test_test_origins_include_the_last_validation_period(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Origins every 20 periods with a 33-period validation split (train ends at 100, validation
+    at 133, data at 160): 33 mod 20 = 13, so the grid starts at 113 and passes 133; from
+    train_end it would be 100, 120, 140 and never 133. Every period: 100 to 159, as before."""
+    monkeypatch.setattr(forecast_evaluation, "TEST_STEP", 20)
+    assert forecast_evaluation.test_origins(100, 133, 160) == [113, 133, 153]
+    monkeypatch.setattr(forecast_evaluation, "TEST_STEP", 1)
+    assert forecast_evaluation.test_origins(100, 133, 160) == list(range(100, 160))

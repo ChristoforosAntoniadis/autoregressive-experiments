@@ -36,6 +36,11 @@ requirements:
 	$(PYTHON_INTERPRETER) -m pip install -r requirements.txt
 	$(PYTHON_INTERPRETER) -m pip install -e ".[dev]"
 
+## As requirements, then the CUDA build of PyTorch (NVIDIA GPU: the LSTM, GRU and TCN train on it)
+.PHONY: requirements-gpu
+requirements-gpu: requirements
+	$(PYTHON_INTERPRETER) -m pip install --force-reinstall --no-deps torch==2.15.0 --index-url https://download.pytorch.org/whl/cu132
+
 ## Download the profile's Kaggle dataset into data/raw/$(DATASET)/ (replaces what is there)
 .PHONY: data
 data:

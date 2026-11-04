@@ -33,6 +33,7 @@ The project follows the [Cookiecutter Data Science](https://cookiecutter-data-sc
 ```bash
 make create_environment           # python -m venv .venv
 make requirements                 # pinned dependencies + the package + dev tools (pytest, ruff, jupyter)
+make requirements-gpu             # the same, with the CUDA build of PyTorch: the LSTM, GRU and TCN then train on an NVIDIA GPU
 
 make data                         # download the profile's Kaggle dataset into data/raw/<dataset>/ (already committed)
 make features                     # build the levels -> data/interim/<dataset>/, first-difference -> data/processed/<dataset>/

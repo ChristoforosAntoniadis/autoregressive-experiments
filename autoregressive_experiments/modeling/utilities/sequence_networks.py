@@ -301,7 +301,7 @@ class Beats(nn.Module):
         torch.Tensor
             Shape (batch, 1).
         """
-        residual, forecast = rows, torch.zeros(len(rows), 1)
+        residual, forecast = rows, torch.zeros(len(rows), 1, device=rows.device)
         for block in self.blocks:
             backcast, step = block(residual)
             residual, forecast = residual - backcast, forecast + step

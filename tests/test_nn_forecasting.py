@@ -246,6 +246,19 @@ def test_the_sequence_networks_learn_the_rule_and_are_reproducible(
     assert 1 - np.var(target - first) / np.var(target) > 0.8
 
 
+def test_only_the_recurrent_and_convolutional_networks_train_on_the_gpu() -> None:
+    """fit_device sends the LSTM, GRU and TCN to the GPU when PyTorch finds one, and the
+    perceptrons, N-BEATS and DLinear to the CPU whatever the machine has."""
+    import torch
+
+    from autoregressive_experiments.modeling.utilities.torch_network import fit_device
+
+    expected = "cuda" if torch.cuda.is_available() else "cpu"
+
+    assert [fit_device(a) for a in ("lstm", "gru", "tcn")] == [expected] * 3
+    assert [fit_device(a) for a in ("A1", "A2", "nbeats", "dlinear")] == ["cpu"] * 4
+
+
 def test_the_mlp_is_reproducible_through_the_lag_feature_pipeline() -> None:
     """Built by the shared pipeline (scaling included), two fits of the MLP on the same data
     give identical predictions (fixed seed)."""

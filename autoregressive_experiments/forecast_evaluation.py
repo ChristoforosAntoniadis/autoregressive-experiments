@@ -446,6 +446,38 @@ def overlapping_origins(horizon: int) -> int:
     return (horizon - 1) // TEST_STEP + 1
 
 
+def test_origins(train_end: int, validation_end: int, last: int) -> list[int]:
+    """
+    The forecast origins: every TEST_STEP periods, anchored so the last validation period is one.
+
+    Parameters
+    ----------
+    train_end : int
+        Position of the last training period.
+    validation_end : int
+        Position of the last validation period, the first origin whose targets are all test
+        periods.
+    last : int
+        Position of the last period.
+
+    Returns
+    -------
+    list of int
+        Positions from the first origin at or after `train_end` on the grid through
+        `validation_end`, up to but excluding `last`. The origins before `validation_end`
+        supply the first bands' error history (add_bands); from `validation_end` on they are
+        scored.
+
+    Notes
+    -----
+    Anchoring on `validation_end` rather than `train_end` keeps the scored origins the same
+    whatever the validation split's length: a grid from `train_end` lands on `validation_end`
+    only when that length is a multiple of TEST_STEP, otherwise the first test periods are
+    never forecast and the number of scored origins drifts with the split.
+    """
+    return list(range(train_end + (validation_end - train_end) % TEST_STEP, last, TEST_STEP))
+
+
 def listed(names: Sequence[str]) -> str:
     """
     Names as English prose: "naive and drift", "naive, drift and seasonal naive".
@@ -755,7 +787,7 @@ def main(levels_path: Path = LEVELS_PATH) -> None:
     last = len(data) - 1
     levels = data[list(VALUE_COLUMNS)].to_numpy(dtype=float)
     dates = data[DATE_COLUMN].to_numpy()
-    origins = list(range(train_end, last, TEST_STEP))
+    origins = test_origins(train_end, validation_end, last)
     scales = {
         column: mase_scale(splits["train"][column].to_numpy(dtype=float), MASE_LAG)
         for column in VALUE_COLUMNS

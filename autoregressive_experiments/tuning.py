@@ -53,7 +53,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from joblib import Parallel, delayed
+from joblib import Parallel, cpu_count, delayed
 from joblib.externals.loky import get_reusable_executor
 from loguru import logger
 from matplotlib.figure import Figure
@@ -111,7 +111,8 @@ from autoregressive_experiments.model_forecasts import (
     joint_paths,
     series_path,
 )
-from autoregressive_experiments.nn_forecasting import NN_SPACES
+from autoregressive_experiments.modeling.utilities.torch_network import fit_device
+from autoregressive_experiments.nn_forecasting import GPU_MODELS, NN_SPACES, SEQUENCE_MODELS
 from autoregressive_experiments.prophet_forecasting import PROPHET, READY_MADE_SPACES
 from autoregressive_experiments.residual_checks import (
     MUTED_INK,
@@ -153,6 +154,15 @@ LINKED: dict[str, tuple[str, ...]] = {
 }
 # The univariate models, in tuning order: SARIMA first, since SARIMAX and the average use it.
 UNIVARIATE = (SARIMA, SARIMAX, COMBINATION, SMA, EXPONENTIAL, PROPHET)
+# Processes fitting a GPU model's origins at once. The fits share one card, so beyond a few
+# processes they only queue on it, and Windows refuses a CUDA context to each of many
+# processes. Measured on the heaviest LSTM setting (60-day window, 32 units, 2 layers) over 23
+# origins and both series on an RTX 3080 Ti: 2 workers 330 s, 4 workers 313 s, 8 workers 361 s,
+# 16 workers refused ("device busy or unavailable"); 20 CPU workers 863 s.
+GPU_JOBS = 4
+# A model whose first settings all fail to fit is broken (a missing library, a GPU error), not
+# unlucky: the run stops instead of logging sixty warnings and crowning a champion with no score.
+FAILED_TRIALS_LIMIT = 3
 
 TUNED_PATH = MODELS_DIR / "tuned_hyperparameters.json"
 CHAMPIONS_PATH = MODELS_DIR / "champions.json"
@@ -309,6 +319,31 @@ def grid_size(space: Mapping[str, Any]) -> int | None:
     return int(np.prod([len(choices) for choices in space.values()]))
 
 
+def workers(model: str) -> int:
+    """
+    How many processes fit a model's origins at once.
+
+    Parameters
+    ----------
+    model : str
+        One of BENCHMARKS, or any model of model_forecasts.FAMILIES.
+
+    Returns
+    -------
+    int
+        GPU_JOBS for a GPU model when a GPU is present; otherwise one process per physical
+        core.
+
+    Notes
+    -----
+    Physical cores, not logical ones: each fit runs on one thread, so a second process per core
+    gains little, while every process holds its own copy of the libraries (with 20 processes on
+    16 GB, free memory fell to 0.05 GB when the pool was re-created after a GPU model).
+    """
+    on_gpu = model in GPU_MODELS and fit_device(SEQUENCE_MODELS[model]) == "cuda"
+    return GPU_JOBS if on_gpu else cpu_count(only_physical_cores=True)
+
+
 def origin_paths(
     model: str,
     settings: Mapping[str, Any],
@@ -351,17 +386,17 @@ def origin_paths(
     Notes
     -----
     A joint model forecasts both series in one fit per origin; a univariate one is fitted per
-    series. The fits are independent, so they run in parallel processes.
+    series. The fits are independent, so they run in parallel processes (workers()).
     """
     steps = [min(MAX_HORIZON, last_target - origin) for origin in origins]
     if model in JOINT_MODELS:
-        paths = Parallel(n_jobs=-1)(
+        paths = Parallel(n_jobs=workers(model))(
             delayed(joint_paths)(model, settings, levels[: origin + 1], count)
             for origin, count in zip(origins, steps)
         )
         return {column: [path[:, column] for path in paths] for column in columns}
     jobs = [(column, origin, count) for column in columns for origin, count in zip(origins, steps)]
-    paths = Parallel(n_jobs=-1)(
+    paths = Parallel(n_jobs=workers(model))(
         delayed(series_path)(
             model, settings, levels[: origin + 1], dates[: origin + 1], column, count, sarima
         )
@@ -535,10 +570,15 @@ def tune_model(
     Returns
     -------
     dict of str to Any
-        "settings" (the best), "score" (its validation score), "error" (the score's bootstrap
-        standard error), "metrics" (column -> its per-horizon metrics), "trials" (every trial's
-        settings, score and per-series score) and "size" (settings in the space; None with a
-        continuous range).
+        "settings" (the best), "score" (its validation score), "error" (column -> the
+        bootstrap standard error of that series' own score), "metrics" (column -> its
+        per-horizon metrics), "trials" (every trial's settings, score and per-series score) and
+        "size" (settings in the space; None with a continuous range).
+
+    Raises
+    ------
+    RuntimeError
+        If the first FAILED_TRIALS_LIMIT settings all fail to fit.
 
     Notes
     -----
@@ -547,9 +587,11 @@ def tune_model(
        CANDIDATES settings and no ranges, otherwise the TPE sampler seeded with RANDOM_SEED.
     2. Each trial forecasts from every origin and scores MAE relative to naive, averaged over
        the horizons and then over the series tuned on; an unusable score, or a fit that raises,
-       counts as infinity, so one broken setting cannot stop a run of many hours.
-    3. Keep the trial with the lowest score (the first one on a tie) and bootstrap its standard
-       error.
+       counts as infinity, so one broken setting cannot stop a run of many hours. When the
+       first FAILED_TRIALS_LIMIT settings all raise, the model itself is broken and the run
+       stops.
+    3. Keep the trial with the lowest score (the first one on a tie) and bootstrap each
+       series' standard error from its own score, since the tie rule is applied per series.
     """
     import optuna
 
@@ -593,6 +635,7 @@ def tune_model(
             for name, choices in space.items()
         }
         settings = decode(params)
+        failed = False
         try:
             paths = origin_paths(
                 model, settings, levels, dates, origins, last_target, columns, sarima
@@ -603,7 +646,7 @@ def tune_model(
             }
         except Exception as error:  # noqa: BLE001  one failed setting must not end the run
             logger.warning(f"{model} {settings} failed and ranks last: {error!r}")
-            paths, metrics = {}, {column: failed_metrics() for column in columns}
+            paths, metrics, failed = {}, {column: failed_metrics() for column in columns}, True
         per_series = {column: score(metrics[column], naive_metrics[column]) for column in columns}
         value = usable(float(np.mean(list(per_series.values()))))
         results.append(
@@ -613,8 +656,13 @@ def tune_model(
                 "per_series": per_series,
                 "metrics": metrics,
                 "paths": paths,
+                "failed": failed,
             }
         )
+        if len(results) >= FAILED_TRIALS_LIMIT and all(row["failed"] for row in results):
+            raise RuntimeError(
+                f"{model}: the first {len(results)} settings all failed to fit; stopping the run"
+            )
         return value
 
     def report(study: Any, trial: Any) -> None:
@@ -637,15 +685,16 @@ def tune_model(
     study = optuna.create_study(direction="minimize", sampler=sampler)
     study.optimize(objective, n_trials=trials, callbacks=[report])
     best = min(results, key=lambda row: row["score"])
-    error = (
-        score_error(best["paths"], reference, origins, levels, scales, columns)
+    errors = {
+        column: score_error(best["paths"], reference, origins, levels, scales, [column])
         if np.isfinite(best["score"])
         else np.nan
-    )
+        for column in columns
+    }
     return {
         "settings": best["settings"],
         "score": best["score"],
-        "error": error,
+        "error": errors,
         "metrics": best["metrics"],
         "trials": [
             {key: row[key] for key in ("settings", "score", "per_series")} for row in results
@@ -672,7 +721,8 @@ def choose_champions(
     dict of int to dict of str to dict
         Column -> family -> {"model": the lowest score, "tied_with": the family's other
         models whose score is within TIE_STANDARD_ERRORS of the champion's standard error of
-        it, in score order}.
+        it, in score order}. A family none of whose models has a finite score is left out,
+        with a warning: a champion without a score would be fitted on test for nothing.
 
     Notes
     -----
@@ -684,7 +734,12 @@ def choose_champions(
     for column, by_model in scores.items():
         champions[column] = {}
         for family, models in FAMILIES.items():
-            ranked = sorted(models, key=lambda model: usable(by_model[model]))
+            ranked = sorted(
+                (m for m in models if np.isfinite(by_model[m])), key=lambda m: by_model[m]
+            )
+            if not ranked:
+                logger.warning(f"{VALUE_COLUMNS[column]}: no {family} model has a usable score")
+                continue
             best = ranked[0]
             limit = by_model[best] + TIE_STANDARD_ERRORS * errors[column][best]
             tied = [m for m in ranked[1:] if usable(by_model[m]) <= limit]
@@ -789,7 +844,9 @@ def tuning_report(
             "on both series. Champion per family and series: the lowest score; models within "
             f"{TIE_STANDARD_ERRORS:g} standard error of it are tied with it, not beaten. "
             "Search spaces and their reasoning: "
-            f"autoregressive_experiments/configs/{DATASET}.json."
+            f"autoregressive_experiments/configs/{DATASET}.json. The {', '.join(GPU_MODELS)} "
+            f"were fitted on the {fit_device(SEQUENCE_MODELS[GPU_MODELS[0]])} (a GPU's results "
+            "reproduce on a GPU, not bit for bit on a CPU)."
         ),
         "",
     ]
@@ -810,7 +867,11 @@ def tuning_report(
             lines.append(
                 f" {mark}{row.model:<26}{row.family:<18}{row.score:7.3f}{se}{cells}   {settings}"
             )
-        for family, record in champions[index].items():
+        for family in FAMILIES:
+            record = champions[index].get(family)
+            if record is None:
+                lines.append(f"  {family} champion: none (no model gave a usable score)")
+                continue
             tied = ", ".join(record["tied_with"]) or "none"
             lines.append(f"  {family} champion {record['model']}; tied with: {tied}")
         lines.append("")
@@ -1031,7 +1092,7 @@ def main(levels_path: Path = LEVELS_PATH) -> None:
             tuned[VALUE_COLUMNS[column]][model] = result["settings"]
             metrics[column][model] = result["metrics"][column]
             scores[column][model] = score(result["metrics"][column], metrics[column][REFERENCE])
-            errors[column][model] = result["error"]
+            errors[column][model] = result["error"][column]
         trials.setdefault(model, []).extend(result["trials"])
 
     begin_phase("Tune the univariate models per series")
@@ -1043,6 +1104,10 @@ def main(levels_path: Path = LEVELS_PATH) -> None:
             )
             store(model, result, [column])
     begin_phase("Tune the joint models on both series")
+    logger.info(
+        f"{', '.join(GPU_MODELS)} fit on the {fit_device(SEQUENCE_MODELS[GPU_MODELS[0]])}, "
+        f"{workers(GPU_MODELS[0])} origins at a time"
+    )
     for model in JOINT_MODELS:
         result = tune_model(
             model, columns, levels, dates, origins, validation_end, scales, reference
