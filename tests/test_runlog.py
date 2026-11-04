@@ -87,3 +87,24 @@ def test_the_run_log_lets_the_process_exit_while_a_child_still_holds_its_pipe(
 
     text = next(tmp_path.glob("run_*_child.log")).read_text(encoding="utf-8")
     assert "parent done" in text
+
+
+def test_the_run_log_keeps_a_crash_traceback_and_unicode(tmp_path: Path) -> None:
+    """Python's streams are reopened on the redirected descriptors (on a Windows console the
+    originals fail with OSError 22 once those point at the pipe): a non-ASCII line written to
+    sys.stderr and an uncaught exception's traceback both reach the log file."""
+    script = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from autoregressive_experiments.runlog import start_run_log\n"
+        f"start_run_log('crash', Path(r'{tmp_path}'))\n"
+        "print('Δ first differences €', file=sys.stderr)\n"
+        "raise FileNotFoundError('no such dataset')\n"
+    )
+    result = subprocess.run([sys.executable, "-c", script], check=False, capture_output=True)
+
+    assert result.returncode != 0
+    text = next(tmp_path.glob("run_*_crash.log")).read_text(encoding="utf-8")
+    assert "Δ first differences €" in text
+    assert "Traceback (most recent call last)" in text
+    assert "FileNotFoundError: no such dataset" in text

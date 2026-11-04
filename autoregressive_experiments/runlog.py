@@ -76,13 +76,56 @@ class Tee:
         self.path = path
         # Open for the whole run and closed in close(), so no with block.
         self.file = open(path, "a", buffering=1, encoding="utf-8")  # noqa: SIM115
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.flush()
+            except (AttributeError, OSError, ValueError):
+                pass
         self.original_out = os.dup(1)
         self.original_err = os.dup(2)
+        # The terminal side of the tee. open() picks the right raw writer for the descriptor:
+        # on a Windows console that is the console writer (Unicode shown correctly), elsewhere
+        # a plain file. Written only by the pump thread.
+        self.terminal = open(  # noqa: SIM115
+            self.original_out, "w", encoding="utf-8", errors="replace", buffering=1, closefd=False
+        )
         self.read_end, self.write_end = os.pipe()
         os.dup2(self.write_end, 1)
         os.dup2(self.write_end, 2)
+        # On Windows, a sys.stdout/sys.stderr created for a console writes with the console API
+        # to whatever descriptor 1/2 is. Once they point at the pipe, every write fails with
+        # OSError 22 "Incorrect function" (loguru's handler, print, the crash traceback). So the
+        # Python streams are reopened on the redirected descriptors as plain pipe writers.
+        self.saved_streams = (sys.stdout, sys.stderr)
+        sys.stdout = self.reopen(sys.stdout, 1)
+        sys.stderr = self.reopen(sys.stderr, 2)
         self.thread = threading.Thread(target=self.pump, name="runlog-tee", daemon=True)
         self.thread.start()
+
+    @staticmethod
+    def reopen(stream: Any, fd: int) -> Any:
+        """
+        A line-buffered UTF-8 text stream on `fd`, replacing `stream` if it writes to `fd`.
+
+        Parameters
+        ----------
+        stream : TextIO
+            The current sys.stdout or sys.stderr.
+        fd : int
+            Its descriptor, 1 or 2, now redirected to the pipe.
+
+        Returns
+        -------
+        TextIO
+            The new stream, or `stream` itself when it doesn't write to `fd` (e.g. replaced
+            by pytest or an IDE), so such replacements are left alone.
+        """
+        try:
+            if stream is None or stream.fileno() != fd:
+                return stream
+        except (AttributeError, OSError, ValueError):
+            return stream
+        return open(fd, "w", encoding="utf-8", errors="replace", buffering=1, closefd=False)
 
     def pump(self) -> None:
         """Read the pipe and emit each complete line, until the write end closes."""
@@ -110,7 +153,12 @@ class Tee:
         """
         text = raw.decode("utf-8", errors="replace").rstrip("\r")
         line = f"{time.strftime(STAMP)} | {text}\n"
-        os.write(self.original_out, line.encode("utf-8"))
+        # A terminal that refuses a write must not kill the pump: the pipe would stop draining
+        # and the log file would lose the rest of the run (including a crash's traceback).
+        try:
+            self.terminal.write(line)
+        except (OSError, ValueError):
+            pass
         self.file.write(line)
 
     def close(self) -> None:
@@ -122,6 +170,8 @@ class Tee:
                 pass
         os.dup2(self.original_out, 1)
         os.dup2(self.original_err, 2)
+        # Descriptors 1 and 2 are the terminal again, so the original streams work again.
+        sys.stdout, sys.stderr = self.saved_streams
         os.close(self.write_end)
         # Bounded, so shutdown never hangs on a worker that still holds the write end.
         self.thread.join(timeout=5)
@@ -133,6 +183,7 @@ class Tee:
             # daemon thread and doesn't keep the process alive.
             self.file.flush()
             return
+        self.terminal.flush()
         os.close(self.read_end)
         os.close(self.original_out)
         os.close(self.original_err)
