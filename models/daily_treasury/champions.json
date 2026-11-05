@@ -9,7 +9,7 @@
         "deterministic": "lo"
       },
       "validation_score": 0.46440881919917876,
-      "validation_score_se": 0.06593448748175124,
+      "validation_score_se": 0.07106421582340347,
       "tied_with": [
         "SARIMA",
         "SARIMA + naive average",
@@ -42,8 +42,10 @@
         "reg_lambda": 10.0
       },
       "validation_score": 0.35121957816614846,
-      "validation_score_se": 0.06282351703164381,
-      "tied_with": [],
+      "validation_score_se": 0.08351908901481857,
+      "tied_with": [
+        "random forest"
+      ],
       "validation_MASE": {
         "1": 0.33373300296377845,
         "5": 0.894272967917043,
@@ -71,10 +73,9 @@
         "validation_share": 0.25
       },
       "validation_score": 0.3471388710308449,
-      "validation_score_se": 0.05642284707210285,
+      "validation_score_se": 0.06757653311749674,
       "tied_with": [
         "N-BEATS",
-        "PyTorch MLP",
         "MLP"
       ],
       "validation_MASE": {
@@ -95,10 +96,13 @@
         "deterministic": "lo"
       },
       "validation_score": 0.5615219094358961,
-      "validation_score_se": 0.06593448748175124,
+      "validation_score_se": 0.07402026467490892,
       "tied_with": [
         "SARIMAX",
-        "exponential smoothing"
+        "exponential smoothing",
+        "SARIMA",
+        "SARIMA + naive average",
+        "VAR"
       ],
       "validation_MASE": {
         "1": 0.7802887131542711,
@@ -125,7 +129,7 @@
         "reg_lambda": 10.0
       },
       "validation_score": 0.45332022449590076,
-      "validation_score_se": 0.06282351703164381,
+      "validation_score_se": 0.0548055573870235,
       "tied_with": [
         "Ridge",
         "Lasso",
@@ -158,7 +162,7 @@
         "validation_share": 0.25
       },
       "validation_score": 0.39718989275873995,
-      "validation_score_se": 0.05642284707210285,
+      "validation_score_se": 0.06015838365668479,
       "tied_with": [
         "N-BEATS"
       ],
