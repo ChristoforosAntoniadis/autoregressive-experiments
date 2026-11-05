@@ -11,7 +11,13 @@ import pandas as pd
 import pytest
 
 from autoregressive_experiments.features import lagged_exog
-from autoregressive_experiments.forecast_evaluation import add_bands, forecast_rows, score_model
+from autoregressive_experiments.forecast_evaluation import (
+    QUANTILE_COLUMNS,
+    add_bands,
+    forecast_rows,
+    score_model,
+    shown_values,
+)
 from autoregressive_experiments.metrics import (
     accuracy,
     diebold_mariano,
@@ -266,6 +272,25 @@ def test_forecast_rows_by_hand() -> None:
 
     assert rows["target_index"].tolist() == [2, 3, 3]
     assert rows["error"].tolist() == [0.5, -0.5, 1.0]
+    assert rows["origin_level"].tolist() == [1.0, 1.0, 2.0]
+
+
+def test_a_cumulative_series_is_shown_as_the_flow_since_the_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Origin level 100, actual 130, forecast 125, band 110..140: shown as 30, 25 and 10..40
+    when the series is cumulative, unchanged otherwise."""
+    import autoregressive_experiments.forecast_evaluation as evaluation
+
+    rows = pd.DataFrame(
+        {"origin_level": [100.0], "actual": [130.0], "forecast": [125.0]}
+        | {column: [value] for column, value in zip(QUANTILE_COLUMNS, [110, 115, 125, 135, 140])}
+    )
+    monkeypatch.setattr(evaluation, "CUMULATIVE", True)
+    shown = shown_values(rows)
+    assert shown[["actual", "forecast", "q2.5", "q97.5"]].iloc[0].tolist() == [30, 25, 10, 40]
+    monkeypatch.setattr(evaluation, "CUMULATIVE", False)
+    assert shown_values(rows) is rows
 
 
 def test_bands_use_only_errors_already_known_at_the_origin() -> None:

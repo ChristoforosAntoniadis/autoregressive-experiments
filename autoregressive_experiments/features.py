@@ -45,6 +45,8 @@ DATE_COLUMN = "date"
 VALUE_COLUMNS = list(HYPERPARAMETERS.dataset.value_columns)
 UNIT = HYPERPARAMETERS.dataset.unit
 UNIT_SUFFIX = HYPERPARAMETERS.dataset.unit_suffix
+# Running totals: the test figure shows each forecast as the flow since its origin.
+CUMULATIVE = HYPERPARAMETERS.dataset.cumulative
 TITLE = HYPERPARAMETERS.dataset.title
 RAW_FILE = HYPERPARAMETERS.dataset.raw_file
 # Whole percentages rather than fractions, so split_boundaries can use exact integer

@@ -11,8 +11,8 @@ and Koehler 2006), by MAE relative to naive's, by their bias (the mean error and
 forecasts above the actual: a model that keeps forecasting a trend that has ended shows up here,
 not in MAE), and against naive by the Diebold-Mariano test with the Harvey-Leybourne-Newbold
 correction. The one-step errors also get a Ljung-Box test: autocorrelated errors mean the model
-leaves structure a better one could use. Two benchmarks run beside the champions, naive and
-drift (the random walk with drift, the fair benchmark for a trending series), and so does the
+leaves structure a better one could use. The config's benchmarks run beside the champions
+(naive, drift, the seasonal naive, the moving average; see model_forecasts), and so does the
 equal-weight mean of the three champions, the combination that is hard to beat out of sample
 (Clemen 1989).
 
@@ -33,7 +33,7 @@ Input: the cleaned levels (features.LEVELS_PATH), ``models/<dataset>/champions.j
 
 Output, in ``reports/``:
 
-- ``test_metrics.csv``: per series, model (champions, their mean, naive and drift) and horizon:
+- ``test_metrics.csv``: per series, model (champions, their mean and the benchmarks) and horizon:
   MAE, MAPE, MASE, MSE, RMSE, MAE relative to naive, the mean error, the share of forecasts
   above the actual, the Diebold-Mariano test against naive and the Ljung-Box p-value of the
   one-step errors
@@ -72,6 +72,7 @@ from autoregressive_experiments.diagnostics import (
     repo_path,
 )
 from autoregressive_experiments.features import (
+    CUMULATIVE,
     DATE_COLUMN,
     DATE_FORMAT,
     LEVELS_PATH,
@@ -207,6 +208,7 @@ def forecast_rows(
     -------
     pd.DataFrame
         Columns "origin_index", "target_index", "origin", "target" (dates), "horizon",
+        "origin_level" (the level at the origin, for the figure of a cumulative series),
         "actual", "forecast" and "error" (actual - forecast), trillions.
     """
     rows = [
@@ -216,6 +218,7 @@ def forecast_rows(
             "origin": dates[origin],
             "target": dates[origin + step],
             "horizon": step,
+            "origin_level": actual[origin],
             "actual": actual[origin + step],
             "forecast": path[step - 1],
         }
@@ -641,6 +644,33 @@ def evaluation_report(
     return "\n".join(lines)
 
 
+def shown_values(rows: pd.DataFrame) -> pd.DataFrame:
+    """
+    The values the test figure plots: the levels, or the flows since the origin.
+
+    Parameters
+    ----------
+    rows : pd.DataFrame
+        Forecasts with "origin_level", "actual", "forecast" and the QUANTILE_COLUMNS.
+
+    Returns
+    -------
+    pd.DataFrame
+        The rows unchanged, or, when CUMULATIVE, with the origin level subtracted from the
+        actual, the forecast and every quantile: the forecast's flow over its horizon.
+
+    Notes
+    -----
+    A running total climbs by far more over the test split than any forecast misses by, so on
+    the level axis the actual, the forecast and the bands coincide; the flow since the origin
+    is on the scale of the errors.
+    """
+    if not CUMULATIVE:
+        return rows
+    columns = ["actual", "forecast", *QUANTILE_COLUMNS]
+    return rows.assign(**{c: rows[c] - rows["origin_level"] for c in columns})
+
+
 def test_figure(forecasts: pd.DataFrame, metrics: pd.DataFrame, column: str) -> Figure:
     """
     One series' test: the actual levels against each champion's forecasts, per horizon.
@@ -649,7 +679,7 @@ def test_figure(forecasts: pd.DataFrame, metrics: pd.DataFrame, column: str) -> 
     ----------
     forecasts : pd.DataFrame
         Every test forecast with its band ("series", "family", "model", "target", "horizon",
-        "actual", "forecast" and the QUANTILE_COLUMNS).
+        "origin_level", "actual", "forecast" and the QUANTILE_COLUMNS).
     metrics : pd.DataFrame
         The test metrics, for the panel titles.
     column : str
@@ -661,7 +691,8 @@ def test_figure(forecasts: pd.DataFrame, metrics: pd.DataFrame, column: str) -> 
         One row per family's champion and one for their mean, one column per horizon. Each
         panel: the actual levels (ink), the model's forecasts placed on the period they forecast
         (its family's colour) inside their 80% (darker) and 95% (lighter) bands, and naive's
-        forecasts (dashed grey); the title gives both MASE values.
+        forecasts (dashed grey); the title gives both MASE values. A cumulative series shows
+        every value as the flow since the forecast's origin (shown_values()).
     """
     apply_chart_style()
     series = forecasts[forecasts["series"] == column]
@@ -687,9 +718,9 @@ def test_figure(forecasts: pd.DataFrame, metrics: pd.DataFrame, column: str) -> 
         for col, horizon in enumerate(HORIZONS):
             axis = axes[row][col]
             axis.set_facecolor(SURFACE)
-            at = rows[rows["horizon"] == horizon].sort_values("target")
+            at = shown_values(rows[rows["horizon"] == horizon].sort_values("target"))
             reference = series[(series["model"] == REFERENCE) & (series["horizon"] == horizon)]
-            reference = reference.sort_values("target")
+            reference = shown_values(reference.sort_values("target"))
             axis.fill_between(at["target"], at["q2.5"], at["q97.5"], color=color, alpha=0.12, lw=0)
             axis.fill_between(at["target"], at["q10"], at["q90"], color=color, alpha=0.28, lw=0)
             axis.plot(at["target"], at["actual"], color=PRIMARY_INK, linewidth=1.6)
@@ -712,7 +743,8 @@ def test_figure(forecasts: pd.DataFrame, metrics: pd.DataFrame, column: str) -> 
             axis.xaxis.set_major_locator(locator)
             axis.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
             if col == 0:
-                axis.set_ylabel(f"{family}\n{UNIT}", color=SECONDARY_INK)
+                quantity = f"flow since the origin, {UNIT}" if CUMULATIVE else UNIT
+                axis.set_ylabel(f"{family}\n{quantity}", color=SECONDARY_INK)
     handles = [
         plt.Line2D([], [], color=PRIMARY_INK, linewidth=1.6, label="actual"),
         *(
@@ -723,8 +755,9 @@ def test_figure(forecasts: pd.DataFrame, metrics: pd.DataFrame, column: str) -> 
         plt.Rectangle((0, 0), 1, 1, color=MUTED_INK, alpha=0.28, label="80% band"),
         plt.Rectangle((0, 0), 1, 1, color=MUTED_INK, alpha=0.12, label="95% band"),
     ]
+    shown = "flow since each forecast's origin" if CUMULATIVE else "actual"
     figure.suptitle(
-        f"{series_title(column)}, test: actual vs each family champion's forecasts, by horizon "
+        f"{series_title(column)}, test: {shown} vs each family champion's forecasts, by horizon "
         f"(each forecast shown on the {PERIOD} it forecasts)",
         x=0.01,
         ha="left",

@@ -23,6 +23,10 @@
     "title": {
       "value": "U.S. Treasury operating cash: cumulative deposits and withdrawals",
       "reasoning": "The series plot's title: what the two series describe."
+    },
+    "cumulative": {
+      "value": true,
+      "reasoning": "The series are running totals, so the test figure plots each forecast as the flow since its origin (level minus the origin level): the totals climb by about 85,000 billion over the test split while the errors and bands are a few hundred billion, which on the level axis is a line width."
     }
   },
   "split": {
@@ -225,8 +229,12 @@
       "reasoning": "The median and the ends of the 80% and 95% central intervals, the two interval levels most used in forecast evaluation. Every model's bands are the empirical quantiles of its own past h-day errors (Williams and Goodman 1971; Lee and Scholtes 2014; split conformal prediction, Vovk et al. 2005), scored by coverage, width and pinball loss, as in the M5 uncertainty competition."
     },
     "benchmarks": {
-      "value": ["naive", "drift", "seasonal naive"],
-      "reasoning": "Naive (no further flow) and drift (the mean daily flow) are the random-walk benchmarks of the cumulated series; the seasonal naive repeats last week's flows and is the benchmark a weekly rhythm makes hard to beat (Hyndman and Athanasopoulos 2021, section 5.2)."
+      "value": ["naive", "drift", "seasonal naive", "moving average"],
+      "reasoning": "Naive (no further flow) and drift (the mean daily flow) are the random-walk benchmarks of the cumulated series; the seasonal naive repeats last week's flows and is the benchmark a weekly rhythm makes hard to beat (Hyndman and Athanasopoulos 2021, section 5.2); the moving average continues the mean flow of the last moving_average_window days, the benchmark a treasury would use by hand."
+    },
+    "moving_average_window": {
+      "value": 20,
+      "reasoning": "Four full weeks of business days: each weekday appears four times, so the weekly rhythm cancels in the mean, and 28 calendar days hold each monthly flow (the month-end and the mid-month tax date, the two largest recurring flows) at most once, and exactly once unless the origin falls in the last days of a month, so the mean daily flow is close to a month's flow spread evenly; a shorter window would hold or miss those flows depending on the origin, a longer one would lag the level's trend (its flows triple over the sample)."
     },
     "test_step": {
       "value": 20,

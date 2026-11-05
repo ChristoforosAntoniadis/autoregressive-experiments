@@ -23,6 +23,10 @@
     "title": {
       "value": "Federal Reserve Balance Sheet",
       "reasoning": "The series plot's title: what the two series describe."
+    },
+    "cumulative": {
+      "value": false,
+      "reasoning": "The levels are stocks, not running totals, and their test errors are a visible share of the range they move in, so the test figure shows the levels themselves."
     }
   },
   "split": {
@@ -226,7 +230,11 @@
     },
     "benchmarks": {
       "value": ["naive", "drift"],
-      "reasoning": "The random walk (the last level repeated) is the benchmark policy-driven series rarely beat (Meese and Rogoff 1983), and the random walk with drift adds the history's mean change, the usual second benchmark for a trending series. The seasonal naive is left out: the changes have no significant seasonal autocorrelation at lag 12, so repeating last year's changes is not a credible forecast here; daily data with a weekly rhythm adds it."
+      "reasoning": "The random walk (the last level repeated) is the benchmark policy-driven series rarely beat (Meese and Rogoff 1983), and the random walk with drift adds the history's mean change, the usual second benchmark for a trending series. The seasonal naive is left out: the changes have no significant seasonal autocorrelation at lag 12, so repeating last year's changes is not a credible forecast here; daily data with a weekly rhythm adds it. The moving average is left out too: the changes are regime-driven and the test period is a steady decline, so a moving average could only sit between naive and drift, neither of which competes here."
+    },
+    "moving_average_window": {
+      "value": 12,
+      "reasoning": "One year of monthly changes, the mean rate of the last twelve months, the usual window for a moving average of monthly data; unused unless the moving average is listed among the benchmarks."
     },
     "test_step": {
       "value": 1,

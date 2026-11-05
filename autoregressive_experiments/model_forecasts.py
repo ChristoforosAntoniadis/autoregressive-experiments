@@ -24,8 +24,9 @@ SARIMAX, with a pulse regressor per flagged change). The transform is applied fi
 outliers are judged on the transformed changes. The average inherits its SARIMA's settings.
 
 The benchmarks (BENCHMARKS, chosen in the config) are naive (the last level repeated), drift
-(the last level plus the mean change of the history per step, the random walk with drift) and
-the seasonal naive (the last season's changes repeated); none has a setting. One of them, the
+(the last level plus the mean change of the history per step, the random walk with drift), the
+seasonal naive (the last season's changes repeated) and the moving average (the last level plus
+the mean of the last MOVING_AVERAGE_WINDOW changes per step); none is tuned. One of them, the
 reference (REFERENCE), is what the validation score and MASE compare against.
 
 Input: levels and dates handed over by tuning and forecast_evaluation.
@@ -56,10 +57,13 @@ from autoregressive_experiments.prophet_forecasting import PROPHET, prophet_fore
 from autoregressive_experiments.var_models import VECM_RANK
 
 NAIVE, DRIFT, SEASONAL_NAIVE = "naive", "drift", "seasonal naive"
+MOVING_AVERAGE = "moving average"
 # Settings; each value's reasoning is in the dataset's config file (configs/<dataset>.json).
 # The benchmarks run beside the champions, and the one the scores are relative to.
 BENCHMARKS = tuple(HYPERPARAMETERS.forecast_evaluation.benchmarks)
 REFERENCE = HYPERPARAMETERS.tuning.score_reference
+# Changes the moving average benchmark averages.
+MOVING_AVERAGE_WINDOW = HYPERPARAMETERS.forecast_evaluation.moving_average_window
 # The MASE scale is the reference's in-sample one-step MAE: the change itself for naive, the
 # change minus the same position's change a season earlier for the seasonal naive
 # (metrics.mase_scale).
@@ -452,14 +456,18 @@ def series_path(
     (the random walk with drift, the usual second benchmark for a trending series); the seasonal
     naive adds the changes of the last SEASONAL_PERIOD periods again, in order, so each forecast
     period moves as the same position of the last season did (Hyndman and Athanasopoulos 2021,
-    section 5.2, on the levels' changes). The SARIMA + naive average weighs the series' tuned
-    SARIMA by settings["weight"] and the naive forecast by the rest.
+    section 5.2, on the levels' changes); the moving average is the drift of the last
+    MOVING_AVERAGE_WINDOW changes only, so the level keeps moving at the recent mean rate. The
+    SARIMA + naive average weighs the series' tuned SARIMA by settings["weight"] and the naive
+    forecast by the rest.
     """
     levels = history[:, column]
     if model == NAIVE:
         return np.full(steps, levels[-1])
-    if model == DRIFT:
-        return np.asarray(levels[-1] + np.arange(1, steps + 1) * np.mean(np.diff(levels)))
+    if model in (DRIFT, MOVING_AVERAGE):
+        window = len(levels) if model == DRIFT else MOVING_AVERAGE_WINDOW
+        mean_change = np.mean(np.diff(levels)[-window:])
+        return np.asarray(levels[-1] + np.arange(1, steps + 1) * mean_change)
     if model == SEASONAL_NAIVE:
         season = np.diff(levels)[-SEASONAL_PERIOD:]
         return np.asarray(levels[-1] + np.cumsum(np.resize(season, steps)))

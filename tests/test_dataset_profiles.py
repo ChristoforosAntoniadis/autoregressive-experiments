@@ -21,7 +21,12 @@ from autoregressive_experiments.features import (
     treasury_levels,
 )
 from autoregressive_experiments.metrics import mase_scale
-from autoregressive_experiments.model_forecasts import SEASONAL_NAIVE, series_path
+from autoregressive_experiments.model_forecasts import (
+    DRIFT,
+    MOVING_AVERAGE,
+    SEASONAL_NAIVE,
+    series_path,
+)
 
 ACCOUNT, KIND, AMOUNT = FLOW_COLUMNS
 
@@ -104,6 +109,25 @@ def test_the_seasonal_naive_repeats_the_last_seasons_changes(
     path = series_path(SEASONAL_NAIVE, {}, history, np.array([]), 0, 5)
 
     assert path.tolist() == pytest.approx([12.0, 15.0, 19.0, 21.0, 24.0])
+
+
+def test_the_moving_average_continues_the_mean_of_the_last_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Levels 0, 1, 3, 6, 10 (changes 1, 2, 3, 4) with a window of 2: the mean of the last two
+    changes is 3.5, so the forecasts are 13.5, 17, 20.5; drift uses all four changes (mean 2.5):
+    12.5, 15, 17.5."""
+    import autoregressive_experiments.model_forecasts as forecasts
+
+    monkeypatch.setattr(forecasts, "MOVING_AVERAGE_WINDOW", 2)
+    history = np.column_stack([[0.0, 1.0, 3.0, 6.0, 10.0]] * 2)
+
+    assert series_path(MOVING_AVERAGE, {}, history, np.array([]), 0, 3).tolist() == pytest.approx(
+        [13.5, 17.0, 20.5]
+    )
+    assert series_path(DRIFT, {}, history, np.array([]), 0, 3).tolist() == pytest.approx(
+        [12.5, 15.0, 17.5]
+    )
 
 
 def test_the_mase_scale_with_a_seasonal_lag_by_hand() -> None:

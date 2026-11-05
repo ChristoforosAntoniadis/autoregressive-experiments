@@ -437,6 +437,9 @@ class DatasetSettings:
         The unit of the levels, as written in reports and axis labels.
     title : str
         The dataset's name for the series plot.
+    cumulative : bool
+        Whether the levels are running totals, so the test figure shows each forecast as the
+        flow since its origin instead of the level.
     """
 
     kaggle_handle: str = setting(lambda v: v.count("/") == 1, "owner/slug")
@@ -447,6 +450,7 @@ class DatasetSettings:
     unit_suffix: str = setting(lambda v: isinstance(v, str), "text (may be empty)")
     unit: str = setting(lambda v: v.strip() != "", "non-empty")
     title: str = setting(lambda v: v.strip() != "", "non-empty")
+    cumulative: bool = setting(lambda v: isinstance(v, bool), "true or false")
 
 
 @dataclass(frozen=True)
@@ -717,7 +721,10 @@ class ForecastEvaluationSettings:
     quantiles : tuple of float
         Forecast quantile levels: the 95% and 80% interval ends and the median.
     benchmarks : tuple of str
-        The benchmark forecasts run beside the champions: "naive", "drift", "seasonal naive".
+        The benchmark forecasts run beside the champions: "naive", "drift", "seasonal naive",
+        "moving average".
+    moving_average_window : int
+        Changes the moving average benchmark averages for its mean change per period.
     test_step : int
         Periods between consecutive test origins (1: a refit at every period).
     """
@@ -727,10 +734,11 @@ class ForecastEvaluationSettings:
         lambda v: (
             len(v) >= 1
             and len(set(v)) == len(v)
-            and set(v) <= {"naive", "drift", "seasonal naive"}
+            and set(v) <= {"naive", "drift", "seasonal naive", "moving average"}
         ),
-        "distinct names among naive, drift and seasonal naive",
+        "distinct names among naive, drift, seasonal naive and moving average",
     )
+    moving_average_window: int = setting(lambda v: v >= 1, "at least 1")
     test_step: int = setting(lambda v: v >= 1, "at least 1")
     quantiles: tuple[float, ...] = setting(
         lambda v: (
