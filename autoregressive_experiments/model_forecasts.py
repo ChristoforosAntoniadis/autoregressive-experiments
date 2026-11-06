@@ -65,9 +65,11 @@ REFERENCE = HYPERPARAMETERS.tuning.score_reference
 # Changes the moving average benchmark averages.
 MOVING_AVERAGE_WINDOW = HYPERPARAMETERS.forecast_evaluation.moving_average_window
 # The MASE scale is the reference's in-sample one-step MAE: the change itself for naive, the
-# change minus the same position's change a season earlier for the seasonal naive
+# change minus the same position's change a season earlier for the seasonal naive, the
+# change minus the mean of the window's changes before it for the moving average
 # (metrics.mase_scale).
 MASE_LAG = SEASONAL_PERIOD if REFERENCE == SEASONAL_NAIVE else 1
+MASE_WINDOW = MOVING_AVERAGE_WINDOW if REFERENCE == MOVING_AVERAGE else 0
 SARIMA, SARIMAX, COMBINATION = "SARIMA", "SARIMAX", "SARIMA + naive average"
 VAR_MODEL, VECM_MODEL = "VAR", "VECM"
 SMA, EXPONENTIAL = "SMA", "exponential smoothing"
@@ -321,14 +323,19 @@ def smoothing_path(
     -----
     The moving average forecasts the mean of the last `window` levels at every horizon. A
     seasonal exponential-smoothing model gets the project's season length, so it isn't
-    configured twice; its smoothing weights are re-estimated at every fit.
+    configured twice; its smoothing weights are re-estimated at every fit. A series below
+    zero throughout is fitted as its mirror image and the forecast mirrored back: the additive
+    forms give the same forecast either way, and the multiplicative and Box-Cox forms need
+    positive data.
     """
     if model == SMA:
         return np.full(steps, float(np.mean(levels[-settings["window"] :])))
     options = dict(settings)
     if options.get("seasonal"):
         options["seasonal_periods"] = SEASONAL_PERIOD
-    return np.asarray(ExponentialSmoothing(levels, **options).fit().forecast(steps))
+    sign = -1.0 if np.all(levels < 0) else 1.0
+    fitted = ExponentialSmoothing(sign * levels, **options).fit()
+    return np.asarray(sign * fitted.forecast(steps))
 
 
 def system_path(

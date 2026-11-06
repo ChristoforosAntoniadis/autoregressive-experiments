@@ -20,7 +20,7 @@ import tempfile
 import kagglehub
 import pandas as pd
 
-from autoregressive_experiments.config import DATASET, RAW_DATA_DIR
+from autoregressive_experiments.config import DATASET, LOCAL_PROFILE, RAW_DATA_DIR
 from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
 from autoregressive_experiments.features import DATE_COLUMN, FLOW_COLUMNS, RAW_FILE
 from autoregressive_experiments.runlog import begin_phase, finish_run, start_run_log
@@ -97,6 +97,9 @@ def download_dataset() -> Path:
 
     Raises
     ------
+    ValueError
+        If the profile's raw file is supplied locally (no Kaggle handle, or LOCAL_PROFILE):
+        there is nothing to download, and step 4 would empty that folder.
     RuntimeError
         If the download finishes but leaves no files. ``data/raw/`` is left untouched then.
 
@@ -114,6 +117,11 @@ def download_dataset() -> Path:
     so a failed download never leaves ``data/raw/`` empty. It is created inside ``data/``
     rather than the system temp folder so the final move stays on the same drive.
     """
+    if not DATASET_HANDLE or LOCAL_PROFILE:
+        raise ValueError(
+            "this profile's raw file is supplied locally: there is nothing to download, and a "
+            "download would empty the raw folder"
+        )
     RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(

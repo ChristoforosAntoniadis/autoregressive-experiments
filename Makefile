@@ -11,6 +11,11 @@ PACKAGE = autoregressive_experiments
 DATASET ?= fed_balance_sheet
 export DATASET
 
+# A raw-data folder outside the project, for a profile supplied locally: the folder holds the
+# profile's config (<DATASET>.json) and the raw file it names.
+# make DATASET=cash_flow RAW_DIR=D:/somewhere all
+export RAW_DIR
+
 # Use the project's virtual environment when it exists, otherwise the Python on PATH.
 ifeq ($(OS),Windows_NT)
 VENV_PYTHON = .venv/Scripts/python.exe

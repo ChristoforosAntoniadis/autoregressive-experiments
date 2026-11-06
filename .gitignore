@@ -19,5 +19,18 @@ data/processed/*
 !data/interim/.gitkeep
 !data/processed/.gitkeep
 
+# Only the committed profiles' raw data, tuned models and reports are tracked. A profile
+# supplied locally (make DATASET=<name> RAW_DIR=...) never is, whatever its name.
+/data/raw/*
+!/data/raw/.gitkeep
+!/data/raw/fed_balance_sheet/
+!/data/raw/daily_treasury/
+/models/*
+!/models/fed_balance_sheet/
+!/models/daily_treasury/
+/reports/*
+!/reports/fed_balance_sheet/
+!/reports/daily_treasury/
+
 # Run logs (runlog.py): one per run, they differ per computer and are never committed.
 logs/

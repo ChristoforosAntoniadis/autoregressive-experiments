@@ -96,6 +96,7 @@ from autoregressive_experiments.model_forecasts import (
     BENCHMARKS,
     FAMILIES,
     MASE_LAG,
+    MASE_WINDOW,
     REFERENCE,
     SARIMA,
 )
@@ -556,7 +557,10 @@ def evaluation_report(
         else f"at every {TEST_STEP}th test {PERIOD} (an origin every {TEST_STEP} {PERIOD}s)"
     )
     scale_text = (
-        f"{PERIOD}ly change"
+        f"change minus the mean of the {MASE_WINDOW} changes before it (the {REFERENCE}'s "
+        "one-step error)"
+        if MASE_WINDOW
+        else f"{PERIOD}ly change"
         if MASE_LAG == 1
         else f"change over {MASE_LAG} {PERIOD}s (the {REFERENCE}'s one-step error)"
     )
@@ -822,7 +826,7 @@ def main(levels_path: Path = LEVELS_PATH) -> None:
     dates = data[DATE_COLUMN].to_numpy()
     origins = test_origins(train_end, validation_end, last)
     scales = {
-        column: mase_scale(splits["train"][column].to_numpy(dtype=float), MASE_LAG)
+        column: mase_scale(splits["train"][column].to_numpy(dtype=float), MASE_LAG, MASE_WINDOW)
         for column in VALUE_COLUMNS
     }
     sarima = [tuned[column][SARIMA] for column in VALUE_COLUMNS]

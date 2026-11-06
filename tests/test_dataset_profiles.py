@@ -11,8 +11,9 @@ import pandas as pd
 import pytest
 
 from autoregressive_experiments import dataset, forecast_evaluation, outliers
+from autoregressive_experiments.config import DATA_DIR, raw_folder
 from autoregressive_experiments.configs.config_loader import ConfigLoader
-from autoregressive_experiments.configs.configurables import CONFIG_DIR
+from autoregressive_experiments.configs.configurables import CONFIG_DIR, profile_path
 from autoregressive_experiments.features import (
     DATE_COLUMN,
     FLOW_COLUMNS,
@@ -23,9 +24,11 @@ from autoregressive_experiments.features import (
 from autoregressive_experiments.metrics import mase_scale
 from autoregressive_experiments.model_forecasts import (
     DRIFT,
+    EXPONENTIAL,
     MOVING_AVERAGE,
     SEASONAL_NAIVE,
     series_path,
+    smoothing_path,
 )
 
 ACCOUNT, KIND, AMOUNT = FLOW_COLUMNS
@@ -201,3 +204,65 @@ def test_test_origins_include_the_last_validation_period(monkeypatch: pytest.Mon
     assert forecast_evaluation.test_origins(100, 133, 160) == [113, 133, 153]
     monkeypatch.setattr(forecast_evaluation, "TEST_STEP", 1)
     assert forecast_evaluation.test_origins(100, 133, 160) == list(range(100, 160))
+
+
+def test_a_profile_config_is_found_beside_the_package_or_in_the_raw_folder(
+    tmp_path: Path,
+) -> None:
+    """A committed profile's config sits beside the package, even when its raw folder holds a
+    file of the same name; a locally supplied profile's is the one in its raw folder; a name
+    with no config anywhere is reported against the package's folder."""
+    (tmp_path / "daily_treasury.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "supplied_locally.json").write_text("{}", encoding="utf-8")
+
+    assert profile_path("daily_treasury", tmp_path) == CONFIG_DIR / "daily_treasury.json"
+    assert profile_path("supplied_locally", tmp_path) == tmp_path / "supplied_locally.json"
+    assert profile_path("mistyped", tmp_path) == CONFIG_DIR / "mistyped.json"
+
+
+def test_only_a_locally_supplied_profile_reads_the_outside_folder(tmp_path: Path) -> None:
+    """RAW_DIR moves the raw folder of a profile without a packaged config; a committed profile
+    keeps its own raw folder whatever RAW_DIR says, and so does any profile without RAW_DIR."""
+    outside = str(tmp_path)
+
+    assert raw_folder("supplied_locally", outside) == tmp_path
+    assert raw_folder("daily_treasury", outside) == DATA_DIR / "raw" / "daily_treasury"
+    assert raw_folder("supplied_locally", None) == DATA_DIR / "raw" / "supplied_locally"
+
+
+def test_the_mase_scale_of_a_moving_average_reference_by_hand() -> None:
+    """Levels 0, 1, 5, 7, 14, changes 1, 4, 2, 7. With a window of 2 the third change is
+    forecast by the mean of the first two, 2.5 (error 2 - 2.5), the fourth by the mean of 4 and
+    2, 3 (error 7 - 3): mean absolute error (0.5 + 4) / 2 = 2.25."""
+    levels = np.array([0.0, 1.0, 5.0, 7.0, 14.0])
+
+    assert mase_scale(levels, window=2) == pytest.approx(2.25)
+
+
+def test_exponential_smoothing_fits_a_negative_series_as_its_mirror_image() -> None:
+    """A running total that is negative throughout gets exactly the mirrored forecast of its
+    positive twin, for an additive form and for a multiplicative one, which could not be
+    fitted on negative data at all."""
+    rng = np.random.default_rng(3)
+    levels = np.cumsum(rng.uniform(5.0, 15.0, size=60))
+    base = {"damped_trend": False, "seasonal": None, "use_boxcox": False}
+
+    for trend in ("add", "mul"):
+        settings = {**base, "trend": trend, "initialization_method": "estimated"}
+        positive = smoothing_path(EXPONENTIAL, settings, levels, 5)
+        negative = smoothing_path(EXPONENTIAL, settings, -levels, 5)
+        assert np.array_equal(negative, -positive)
+        assert np.all(negative < 0)
+
+
+def test_a_locally_supplied_profile_is_never_downloaded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no Kaggle handle, or with the raw folder outside the project, the download stops
+    before it touches the raw folder, which it would otherwise empty."""
+    monkeypatch.setattr(dataset, "DATASET_HANDLE", "")
+    with pytest.raises(ValueError, match="supplied locally"):
+        dataset.download_dataset()
+
+    monkeypatch.setattr(dataset, "DATASET_HANDLE", "owner/slug")
+    monkeypatch.setattr(dataset, "LOCAL_PROFILE", True)
+    with pytest.raises(ValueError, match="supplied locally"):
+        dataset.download_dataset()

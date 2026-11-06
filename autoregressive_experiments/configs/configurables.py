@@ -21,11 +21,37 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
-from autoregressive_experiments.config import DATASET
+from autoregressive_experiments.config import DATASET, RAW_DATA_DIR
 
 # This module's folder; the dataset profiles' config files sit beside it.
 CONFIG_DIR = Path(__file__).resolve().parent
-HYPERPARAMETERS_PATH = CONFIG_DIR / f"{DATASET}.json"
+
+
+def profile_path(dataset: str, raw_dir: Path) -> Path:
+    """
+    Where a dataset profile's config file is.
+
+    Parameters
+    ----------
+    dataset : str
+        The profile's name.
+    raw_dir : Path
+        The profile's raw-data folder.
+
+    Returns
+    -------
+    Path
+        ``<dataset>.json`` beside this module; or, when it is not there but `raw_dir` holds
+        one, that file: a locally supplied profile keeps its config next to its data, outside
+        the repository. With neither, the path beside this module, so a mistyped profile
+        name is reported against the package's folder.
+    """
+    packaged = CONFIG_DIR / f"{dataset}.json"
+    local = raw_dir / f"{dataset}.json"
+    return local if local.exists() and not packaged.exists() else packaged
+
+
+HYPERPARAMETERS_PATH = profile_path(DATASET, RAW_DATA_DIR)
 # The one seed of every random draw in the project: EGARCH's simulated variances, the
 # bootstrap, the tuning's draws, the random forest and XGBoost. Fixed so every rerun gives
 # identical numbers; the value itself carries no meaning.
@@ -426,7 +452,8 @@ class DatasetSettings:
     Attributes
     ----------
     kaggle_handle : str
-        The Kaggle dataset's "owner/slug" that make data downloads.
+        The Kaggle dataset's "owner/slug" that make data downloads; empty for a profile whose
+        raw file is supplied locally (the RAW_DIR folder).
     raw_file : str
         The CSV in the profile's raw folder that features.py reads.
     value_columns : tuple of str
@@ -442,7 +469,9 @@ class DatasetSettings:
         flow since its origin instead of the level.
     """
 
-    kaggle_handle: str = setting(lambda v: v.count("/") == 1, "owner/slug")
+    kaggle_handle: str = setting(
+        lambda v: v == "" or v.count("/") == 1, "owner/slug, or empty for a local file"
+    )
     raw_file: str = setting(lambda v: v.endswith(".csv"), "a .csv file name")
     value_columns: tuple[str, ...] = setting(
         lambda v: len(v) == 2 and len(set(v)) == 2, "exactly two distinct column names"
@@ -773,7 +802,8 @@ class TuningSettings:
 
     validation_step: int = setting(lambda v: v >= 1, "at least 1")
     score_reference: str = setting(
-        lambda v: v in ("naive", "seasonal naive"), "naive or seasonal naive"
+        lambda v: v in ("naive", "seasonal naive", "moving average"),
+        "naive, seasonal naive or moving average",
     )
     candidates: int = setting(lambda v: v >= 1, "at least 1")
     bootstrap_samples: int = setting(lambda v: v >= 1, "at least 1")

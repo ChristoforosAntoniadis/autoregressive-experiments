@@ -64,13 +64,13 @@ import pandas as pd
 import typer
 
 from autoregressive_experiments.config import (
-    DATASET,
     FIGURES_DIR,
+    LOCAL_PROFILE,
     MODELS_DIR,
     REPORTS_DIR,
 )
 from autoregressive_experiments.configs.config_loader import HYPERPARAMETERS
-from autoregressive_experiments.configs.configurables import RANDOM_SEED
+from autoregressive_experiments.configs.configurables import HYPERPARAMETERS_PATH, RANDOM_SEED
 from autoregressive_experiments.diagnostics import (
     DIFFERENCING_ORDER,
     MAX_ORDER_SUM,
@@ -101,6 +101,7 @@ from autoregressive_experiments.model_forecasts import (
     JOINT_MODELS,
     LOG,
     MASE_LAG,
+    MASE_WINDOW,
     REFERENCE,
     SARIMA,
     SARIMAX,
@@ -163,6 +164,12 @@ GPU_JOBS = 4
 # A model whose first settings all fail to fit is broken (a missing library, a GPU error), not
 # unlucky: the run stops instead of logging sixty warnings and crowning a champion with no score.
 FAILED_TRIALS_LIMIT = 3
+# Where the profile's settings file is, as the report names it.
+CONFIG_LOCATION = (
+    f"{HYPERPARAMETERS_PATH.name} in the profile's raw folder"
+    if LOCAL_PROFILE
+    else repo_path(HYPERPARAMETERS_PATH)
+)
 
 TUNED_PATH = MODELS_DIR / "tuned_hyperparameters.json"
 CHAMPIONS_PATH = MODELS_DIR / "champions.json"
@@ -844,7 +851,7 @@ def tuning_report(
             "on both series. Champion per family and series: the lowest score; models within "
             f"{TIE_STANDARD_ERRORS:g} standard error of it are tied with it, not beaten. "
             "Search spaces and their reasoning: "
-            f"autoregressive_experiments/configs/{DATASET}.json. The {', '.join(GPU_MODELS)} "
+            f"{CONFIG_LOCATION}. The {', '.join(GPU_MODELS)} "
             f"were fitted on the {fit_device(SEQUENCE_MODELS[GPU_MODELS[0]])} (a GPU's results "
             "reproduce on a GPU, not bit for bit on a CPU)."
         ),
@@ -1048,7 +1055,7 @@ def main(levels_path: Path = LEVELS_PATH) -> None:
             '"log" from every transform list in configs/<dataset>.json'
         )
     scales = [
-        mase_scale(splits["train"][column].to_numpy(dtype=float), MASE_LAG)
+        mase_scale(splits["train"][column].to_numpy(dtype=float), MASE_LAG, MASE_WINDOW)
         for column in VALUE_COLUMNS
     ]
     columns = list(range(len(VALUE_COLUMNS)))

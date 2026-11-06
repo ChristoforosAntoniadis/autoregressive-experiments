@@ -23,7 +23,7 @@ QUANTILES = HYPERPARAMETERS.forecast_evaluation.quantiles
 METRICS = ("MAE", "MSE", "RMSE", "MAPE", "MASE", "ME", "share_over")
 
 
-def mase_scale(train_levels: np.ndarray, lag: int = 1) -> float:
+def mase_scale(train_levels: np.ndarray, lag: int = 1, window: int = 0) -> float:
     """
     In-sample MAE of the reference benchmark's one-step forecast.
 
@@ -35,6 +35,10 @@ def mase_scale(train_levels: np.ndarray, lag: int = 1) -> float:
         1 for the naive forecast, whose one-step error is the change itself; the seasonal period
         for the seasonal naive of model_forecasts, which repeats the change of the same position
         a season earlier, so its one-step error is the change minus that earlier change.
+    window : int, default=0
+        The moving average benchmark's window when it is the reference, 0 otherwise: its
+        one-step forecast of a change is the mean of the `window` changes before it, so its
+        one-step error is the change minus that mean.
 
     Returns
     -------
@@ -49,7 +53,11 @@ def mase_scale(train_levels: np.ndarray, lag: int = 1) -> float:
     data). MASE 1 then means "as accurate as the reference was one step ahead in training".
     """
     changes = np.diff(train_levels)
-    if lag > 1:
+    if window:
+        # The mean of the `window` changes before a change is the level's rise over them.
+        means = (train_levels[window:-1] - train_levels[: -window - 1]) / window
+        changes = changes[window:] - means
+    elif lag > 1:
         changes = changes[lag:] - changes[:-lag]
     return float(np.mean(np.abs(changes)))
 

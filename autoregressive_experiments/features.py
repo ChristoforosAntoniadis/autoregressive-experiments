@@ -143,7 +143,11 @@ def treasury_levels(raw: pd.DataFrame) -> pd.DataFrame:
 # Dataset profile -> how its raw table becomes the two level series; a profile without an entry
 # is two level series already (as the Fed balance sheet), and diagnose_dataset keeps its
 # complete rows.
-BUILDERS: dict[str, Callable[[pd.DataFrame], pd.DataFrame]] = {"daily_treasury": treasury_levels}
+BUILDERS: dict[str, Callable[[pd.DataFrame], pd.DataFrame]] = {
+    "daily_treasury": treasury_levels,
+    # A locally supplied file in the same layout (config.RAW_DATA_DIR).
+    "cash_flow": treasury_levels,
+}
 
 
 def diagnose_dataset(name: str, dataframe: pd.DataFrame) -> pd.DataFrame:
